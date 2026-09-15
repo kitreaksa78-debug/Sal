@@ -1,0 +1,339 @@
+import fs from 'fs';
+import path from 'path';
+import { EventEmitter } from 'events';
+import { JobRecord, JobStatus, DialogueSegment } from '../types.js';
+import { getDatabase } from './db.js';
+import { getStorage } from './storage.js';
+import { FFmpegHelper } from '../utils/ffmpeg.js';
+import { getAudioSeparationProvider } from './audioSeparation.js';
+import { getTranscriptionProvider } from './transcription.js';
+import { SpeakerDetector } from './speakerDetection.js';
+import { getTranslationService } from './translation.js';
+import { getTTSProvider } from './tts.js';
+import { AudioMixingService } from './audioMixing.js';
+import { VideoRenderingService } from './videoRendering.js';
+import { logger } from '../utils/logger.js';
+
+export const jobEvents = new EventEmitter();
+
+// Khmer status messages matching pipeline steps
+export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
+  queued: 'កំពុងស្ថិតក្នុងជួររង់ចាំ...',
+  uploading: 'កំពុងផ្ទុកវីដេអូឡើង...',
+  extracting_audio: 'កំពុងស្រង់សំឡេងចេញពីវីដេអូ...',
+  separating_audio: 'កំពុងញែកសំឡេងមនុស្ស និងភ្លេងផ្ទៃខាងក្រោយ...',
+  transcribing: 'កំពុងស្តាប់ និងបំប្លែងពាក្យសន្ទនា...',
+  detecting_speakers: 'កំពុងកំណត់អត្តសញ្ញាណអ្នកនិយាយ...',
+  translating: 'កំពុងវិភាគបរិបទ និងបកប្រែជាភាសាខ្មែរនិយាយបែបធម្មជាតិ...',
+  generating_voice: 'កំពុងបង្កើតសំឡេងនិយាយខ្មែរតាមតួអង្គ...',
+  syncing: 'កំពុងតម្រឹមចង្វាក់សំឡេងឱ្យត្រូវតាមពេលវេលាដើម...',
+  mixing: 'កំពុងបញ្ចូលសំឡេងខ្មែរជាមួយភ្លេង និងសំឡេងផ្ទៃខាងក្រោយ...',
+  rendering: 'កំពុង Render វីដេអូ MP4 ចុងក្រោយ (H.264/AAC)...',
+  quality_check: 'កំពុងត្រួតពិនិត្យគុណភាពវីដេអូ...',
+  completed: 'វីដេអូបកប្រែ និងបញ្ចូលសំឡេងរួចរាល់ជាស្ថាពរ!',
+  failed: 'មានបញ្ហាក្នុងការដំណើរការ',
+};
+
+export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
+  queued: 'Job queued...',
+  uploading: 'Uploading video...',
+  extracting_audio: 'Extracting audio from video...',
+  separating_audio: 'Separating human speech from music & background...',
+  transcribing: 'Transcribing spoken dialogue...',
+  detecting_speakers: 'Identifying speakers and vocal characteristics...',
+  translating: 'Analyzing context & translating to natural spoken Khmer...',
+  generating_voice: 'Synthesizing character-matched Khmer speech...',
+  syncing: 'Synchronizing speech duration to original timestamps...',
+  mixing: 'Mixing Khmer speech with preserved background music...',
+  rendering: 'Rendering final H.264/AAC MP4 video...',
+  quality_check: 'Performing automated quality checks...',
+  completed: 'Khmer dubbed video completed successfully!',
+  failed: 'Processing failed',
+};
+
+// Progress percentage mapping
+const STATUS_PROGRESS: Record<JobStatus, number> = {
+  queued: 5,
+  uploading: 10,
+  extracting_audio: 18,
+  separating_audio: 28,
+  transcribing: 40,
+  detecting_speakers: 48,
+  translating: 58,
+  generating_voice: 70,
+  syncing: 80,
+  mixing: 88,
+  rendering: 94,
+  quality_check: 98,
+  completed: 100,
+  failed: 100,
+};
+
+export class JobProcessor {
+  private static activeJobs = new Set<string>();
+
+  /**
+   * Update job status in database and broadcast via SSE
+   */
+  public static async updateJobState(
+    jobId: string,
+    status: JobStatus,
+    customKhmerMsg?: string,
+    extraUpdates: Partial<JobRecord> = {}
+  ): Promise<JobRecord | null> {
+    const db = getDatabase();
+    const progress = STATUS_PROGRESS[status] ?? 50;
+    const khmerMessage = customKhmerMsg || KHMER_STEP_MESSAGES[status] || status;
+    const englishMessage = ENGLISH_STEP_MESSAGES[status] || status;
+
+    const updated = await db.updateJob(jobId, {
+      status,
+      progress,
+      message: englishMessage,
+      khmerMessage,
+      ...extraUpdates,
+    });
+
+    if (updated) {
+      jobEvents.emit(`job:${jobId}`, updated);
+      jobEvents.emit('job:updated', updated);
+    }
+
+    return updated;
+  }
+
+  /**
+   * Main asynchronous pipeline processor
+   */
+  public static async processJob(jobId: string): Promise<void> {
+    if (this.activeJobs.has(jobId)) {
+      logger.warn(`Job ${jobId} is already actively processing`);
+      return;
+    }
+
+    this.activeJobs.add(jobId);
+    const db = getDatabase();
+    const storage = getStorage();
+    const job = await db.getJob(jobId);
+
+    if (!job) {
+      logger.error(`Job ${jobId} not found in database`);
+      this.activeJobs.delete(jobId);
+      return;
+    }
+
+    const jobTempDir = path.join(process.cwd(), 'data', 'processing', jobId);
+    if (!fs.existsSync(jobTempDir)) {
+      fs.mkdirSync(jobTempDir, { recursive: true });
+    }
+
+    try {
+      logger.info(`Starting asynchronous processing for job ${jobId}`);
+
+      // STEP 1: VALIDATE VIDEO
+      await this.updateJobState(jobId, 'extracting_audio');
+
+      const videoFilePath = job.inputFile;
+      if (!fs.existsSync(videoFilePath)) {
+        throw new Error('Video source file not found on disk.');
+      }
+
+      // Probe video metadata
+      const meta = await FFmpegHelper.probeVideo(videoFilePath);
+      if (!meta.duration || meta.duration <= 0.1) {
+        throw new Error('Video file has invalid duration or cannot be decoded.');
+      }
+
+      await db.updateJob(jobId, { metadata: meta });
+
+      // STEP 2: EXTRACT AUDIO
+      const rawAudioPath = path.join(jobTempDir, 'extracted_audio.wav');
+      await FFmpegHelper.extractAudio(videoFilePath, rawAudioPath, 44100);
+
+      // STEP 3: VOICE / MUSIC SEPARATION
+      await this.updateJobState(jobId, 'separating_audio');
+      const separationProvider = getAudioSeparationProvider();
+      const separationResult = await separationProvider.separate(rawAudioPath, jobTempDir);
+
+      if (separationResult.warning) {
+        await db.updateJob(jobId, { warning: separationResult.warning });
+      }
+
+      const vocalsTrack = separationResult.vocalsPath;
+      const noVocalsTrack = separationResult.noVocalsPath; // music/background track
+
+      // STEP 4: SPEECH-TO-TEXT & DETECTION
+      await this.updateJobState(jobId, 'transcribing');
+      const transcriptionProvider = getTranscriptionProvider();
+
+      // Transcribe dialogue with timestamps
+      let dialogueSegments = await transcriptionProvider.transcribe(vocalsTrack, meta.duration);
+
+      // If no speech was detected, create fallback placeholder segment or notify
+      if (dialogueSegments.length === 0) {
+        logger.info(`No distinct speech detected in job ${jobId}. Checking full audio track...`);
+        // Retry transcription on raw audio in case vocals filter was too aggressive
+        try {
+          dialogueSegments = await transcriptionProvider.transcribe(rawAudioPath, meta.duration);
+        } catch {}
+      }
+
+      if (dialogueSegments.length === 0) {
+        logger.warn(`No linguistic dialogue detected in ${jobId}`);
+        // Create an informational segment
+        dialogueSegments = [
+          {
+            id: 'seg_1',
+            speaker: 'speaker_1',
+            start: 0.5,
+            end: Math.min(meta.duration, 3.5),
+            text: 'Audio track ready for natural Khmer dubbing',
+            khmer: 'វីដេអូរួចរាល់សម្រាប់ការបញ្ចូលសំឡេងខ្មែរ',
+          },
+        ];
+      }
+
+      // STEP 5: SPEAKER IDENTIFICATION
+      await this.updateJobState(jobId, 'detecting_speakers');
+      const speakerProfiles = SpeakerDetector.identifySpeakers(dialogueSegments);
+      await db.updateJob(jobId, { speakers: speakerProfiles });
+
+      // STEP 6: GEMINI CONTEXT ANALYSIS & KHMER TRANSLATION
+      await this.updateJobState(jobId, 'translating');
+      const translationService = getTranslationService();
+      dialogueSegments = await translationService.translateDialogue(dialogueSegments, job.settings);
+      await db.saveSegments(jobId, dialogueSegments);
+
+      // STEP 7: KHMER TTS SPEECH SYNTHESIS & TIMING MATCH
+      await this.updateJobState(jobId, 'generating_voice');
+      const ttsProvider = getTTSProvider();
+
+      const segmentsDir = path.join(jobTempDir, 'tts_segments');
+      if (!fs.existsSync(segmentsDir)) fs.mkdirSync(segmentsDir, { recursive: true });
+
+      for (let i = 0; i < dialogueSegments.length; i++) {
+        const seg = dialogueSegments[i];
+        const segOutPath = path.join(segmentsDir, `segment_${i + 1}.wav`);
+        const originalDuration = Math.max(0.5, seg.end - seg.start);
+
+        // Determine voice gender
+        let gender: 'male' | 'female' | 'neutral' = seg.speakerGender || 'male';
+        if (job.settings.voice === 'male') gender = 'male';
+        if (job.settings.voice === 'female') gender = 'female';
+
+        const khmerText = (seg.khmer || seg.text).trim();
+
+        try {
+          const ttsResult = await ttsProvider.synthesizeSpeech(khmerText, segOutPath, {
+            gender,
+            emotion: seg.emotion,
+            voiceStyle: job.settings.voiceStyle,
+            targetDuration: originalDuration,
+          });
+
+          seg.audioFile = ttsResult.audioPath;
+          seg.audioDuration = ttsResult.duration;
+        } catch (ttsErr) {
+          logger.warn(`TTS synthesis failed for segment ${seg.id}:`, ttsErr);
+        }
+      }
+
+      await db.saveSegments(jobId, dialogueSegments);
+
+      // STEP 8: SYNC & ASSEMBLE DIALOGUE TRACK
+      await this.updateJobState(jobId, 'syncing');
+      const masterSpeechTrack = path.join(jobTempDir, 'master_khmer_speech.wav');
+      await AudioMixingService.assembleDialogueTrack(
+        dialogueSegments,
+        meta.duration,
+        masterSpeechTrack,
+        jobTempDir
+      );
+
+      // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
+      await this.updateJobState(jobId, 'mixing');
+      const finalMixedAudioTrack = path.join(jobTempDir, 'final_mixed_audio.wav');
+      await AudioMixingService.mixDubbedWithBackground(
+        masterSpeechTrack,
+        noVocalsTrack,
+        finalMixedAudioTrack,
+        job.settings
+      );
+
+      // Save mixed audio file to outputs
+      const audioOutputFilename = `khmer-audio-${jobId}.wav`;
+      const savedAudioPath = await storage.saveFile('outputs', audioOutputFilename, finalMixedAudioTrack);
+
+      // STEP 10: RENDER FINAL MP4 VIDEO (H.264 / AAC)
+      await this.updateJobState(jobId, 'rendering');
+      const tempFinalMp4 = path.join(jobTempDir, `khmer-dubbed-${jobId}.mp4`);
+      await VideoRenderingService.renderMp4(
+        videoFilePath,
+        finalMixedAudioTrack,
+        tempFinalMp4,
+        job.settings
+      );
+
+      // Generate Subtitles (SRT & VTT)
+      const srtContent = VideoRenderingService.generateSrt(dialogueSegments);
+      const vttContent = VideoRenderingService.generateVtt(dialogueSegments);
+      const srtFilename = `subtitles-${jobId}.srt`;
+      const vttFilename = `subtitles-${jobId}.vtt`;
+
+      const savedSrtPath = await storage.saveFile('outputs', srtFilename, Buffer.from(srtContent, 'utf8'));
+      const savedVttPath = await storage.saveFile('outputs', vttFilename, Buffer.from(vttContent, 'utf8'));
+
+      // STEP 11: QUALITY CHECK
+      await this.updateJobState(jobId, 'quality_check');
+      const qualityResult = await FFmpegHelper.verifyOutputQuality(tempFinalMp4);
+      if (!qualityResult.valid) {
+        throw new Error(`Quality verification failed: ${qualityResult.reason}`);
+      }
+
+      // Save final video to outputs storage
+      const finalMp4Filename = `khmer-dubbed-${jobId}.mp4`;
+      const savedMp4Path = await storage.saveFile('outputs', finalMp4Filename, tempFinalMp4);
+
+      // STEP 12: COMPLETED
+      await this.updateJobState(jobId, 'completed', KHMER_STEP_MESSAGES.completed, {
+        outputFile: savedMp4Path,
+        outputAudioFile: savedAudioPath,
+        outputSubtitlesSrt: savedSrtPath,
+        outputSubtitlesVtt: savedVttPath,
+        completedAt: new Date().toISOString(),
+      });
+
+      logger.info(`Job ${jobId} successfully completed! Output: ${savedMp4Path}`);
+
+      // Clean up temporary processing folder
+      await storage.cleanProcessingDir(jobId);
+    } catch (err: any) {
+      logger.error(`Job ${jobId} processing failed with error:`, err);
+
+      // Friendly Khmer error messages
+      let friendlyKhmer = 'មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត។';
+      const errMsg = err?.message || '';
+
+      if (errMsg.includes('API key') || errMsg.includes('Gemini')) {
+        friendlyKhmer = 'សេវាកម្ម AI Gemini មិនទាន់បានកំណត់រចនាសម្ព័ន្ធ ឬមានបញ្ហាតភ្ជាប់ទេ។';
+      } else if (errMsg.includes('TTS') || errMsg.includes('synthesize')) {
+        friendlyKhmer = 'មិនអាចបង្កើតសំឡេងខ្មែរបានទេ សូមពិនិត្យការកំណត់សំឡេង។';
+      } else if (errMsg.includes('Quality verification')) {
+        friendlyKhmer = 'ការត្រួតពិនិត្យគុណភាពវីដេអូមិនបានសម្រេច។ សូមសាកល្បងជាមួយវីដេអូផ្សេងទៀត។';
+      }
+
+      await this.updateJobState(jobId, 'failed', friendlyKhmer, {
+        error: friendlyKhmer,
+        technicalError: errMsg,
+        completedAt: new Date().toISOString(),
+      });
+
+      // Cleanup
+      try {
+        await storage.cleanProcessingDir(jobId);
+      } catch {}
+    } finally {
+      this.activeJobs.delete(jobId);
+    }
+  }
+}
