@@ -1,10 +1,10 @@
 import React from 'react';
-import { Volume2, Sparkles, Sliders, History, Activity } from 'lucide-react';
+import { Volume2, Sparkles, Sliders, History, Activity, Crown } from 'lucide-react';
 import { SystemConfigStatus } from '../types';
 
 interface HeaderProps {
-  activeTab: 'studio' | 'history' | 'status';
-  setActiveTab: (tab: 'studio' | 'history' | 'status') => void;
+  activeTab: 'studio' | 'history' | 'status' | 'pricing';
+  setActiveTab: (tab: 'studio' | 'history' | 'status' | 'pricing') => void;
   configStatus?: SystemConfigStatus | null;
   onOpenConfig: () => void;
 }
@@ -76,6 +76,19 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <History className="w-4 h-4 text-slate-400" />
             <span className="hidden sm:inline">ប្រវត្តិ</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveTab('pricing')}
+            className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-medium transition-colors min-h-[42px] ${
+              activeTab === 'pricing'
+                ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                : 'text-slate-300 hover:bg-slate-800/60 hover:text-white'
+            }`}
+          >
+            <Crown className="w-4 h-4 text-amber-400" />
+            <span className="hidden sm:inline">Pro</span>
           </button>
 
           {/* System Status Pill / Button */}

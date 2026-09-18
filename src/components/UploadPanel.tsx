@@ -1,6 +1,7 @@
 import React, { useRef, useState } from 'react';
 import { Upload, FileVideo, CheckCircle2, AlertCircle, Sparkles, Music2, MicOff, ArrowRight } from 'lucide-react';
 import { JobSettings } from '../types';
+import { UsageIndicator } from './UsageIndicator';
 
 interface UploadPanelProps {
   onFileSelect: (file: File) => void;
@@ -117,6 +118,9 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
           </div>
         </div>
       </div>
+
+      {/* Usage Indicator */}
+      <UsageIndicator />
 
       {/* Selected Video Metadata Preview Card */}
       {selectedFile && (

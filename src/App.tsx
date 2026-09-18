@@ -6,11 +6,15 @@ import { ProcessingProgress } from './components/ProcessingProgress';
 import { ResultPanel } from './components/ResultPanel';
 import { JobHistory } from './components/JobHistory';
 import { ConfigModal } from './components/ConfigModal';
+import { PricingPage } from './components/PricingPage';
+import { UsageBanner } from './components/UsageBanner';
 import { JobRecord, JobSettings, SystemConfigStatus } from './types';
 import { uploadVideoJob, getJob, getSystemConfigStatus, subscribeToJobUpdates } from './lib/api';
+import { canUseFreePlan, canProcessVideo, recordUsage, getUsageStats } from './lib/usage';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'studio' | 'history' | 'status'>('studio');
+  const [activeTab, setActiveTab] = useState<'studio' | 'history' | 'status' | 'pricing'>('studio');
+  const [usageStats, setUsageStats] = useState(getUsageStats());
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
@@ -127,6 +131,24 @@ export function App() {
   const handleStartDubbing = async () => {
     if (!selectedFile) return;
 
+    // Check free plan limits
+    const freeCheck = canUseFreePlan();
+    if (!freeCheck.allowed) {
+      alert(freeCheck.reason);
+      setActiveTab('pricing');
+      return;
+    }
+
+    // Check video duration
+    if (videoDuration) {
+      const durationCheck = canProcessVideo(videoDuration);
+      if (!durationCheck.allowed) {
+        alert(durationCheck.reason);
+        setActiveTab('pricing');
+        return;
+      }
+    }
+
     try {
       setIsUploading(true);
       setUploadProgress(0);
@@ -134,6 +156,12 @@ export function App() {
       const result = await uploadVideoJob(selectedFile, settings, (pct) => {
         setUploadProgress(pct);
       });
+
+      // Record usage
+      if (videoDuration) {
+        recordUsage(videoDuration);
+        setUsageStats(getUsageStats());
+      }
 
       setCurrentJob(result.job);
       setActiveTab('studio');
@@ -232,6 +260,18 @@ export function App() {
         {activeTab === 'history' && (
           <div className="max-w-4xl mx-auto animate-in fade-in duration-300">
             <JobHistory onSelectJob={handleSelectJobFromHistory} />
+          </div>
+        )}
+
+        {/* Pricing Tab */}
+        {activeTab === 'pricing' && (
+          <div className="animate-in fade-in duration-300">
+            <PricingPage onSelectPlan={(plan) => {
+              if (plan === 'free') {
+                setActiveTab('studio');
+              }
+              // Pro plan opens LemonSqueezy checkout
+            }} />
           </div>
         )}
       </main>
