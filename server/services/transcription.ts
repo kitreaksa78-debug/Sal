@@ -4,6 +4,9 @@ import { GoogleGenAI, Type } from '@google/genai';
 import { DialogueSegment } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { withRetry } from '../utils/retry.js';
+import { getGeminiApiKey } from '../utils/aiKeys.js';
+import { groqFetch, isGroqConfigured } from '../utils/groq.js';
+import { FFmpegHelper } from '../utils/ffmpeg.js';
 
 export interface TranscriptionProvider {
   name: string;
@@ -31,7 +34,7 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
 
   constructor() {
     this.modelName = process.env.STT_MODEL || process.env.GEMINI_MODEL || 'gemini-3.5-transcribe';
-    const apiKey = process.env.STT_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = process.env.STT_API_KEY || getGeminiApiKey();
     if (apiKey) {
       this.client = new GoogleGenAI({
         apiKey,
@@ -45,7 +48,7 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
   }
 
   isConfigured(): boolean {
-    return Boolean(process.env.STT_API_KEY || process.env.GEMINI_API_KEY);
+    return Boolean(process.env.STT_API_KEY || getGeminiApiKey());
   }
 
   async transcribe(audioFilePath: string, durationSeconds: number): Promise<DialogueSegment[]> {
@@ -141,6 +144,90 @@ CRITICAL RULES:
 
     logger.info(`Transcribed ${segments.length} spoken dialogue segments.`);
     return segments;
+  }
+}
+
+/**
+ * Groq Whisper transcription — fast speech-to-text with per-segment timestamps.
+ * The audio is transcoded to 16 kHz mono first, which keeps long videos well
+ * inside Groq's upload limit and avoids sending data Whisper does not need.
+ */
+export class GroqTranscriptionProvider implements TranscriptionProvider {
+  name = 'groq';
+  private modelName: string;
+
+  constructor() {
+    this.modelName = process.env.GROQ_STT_MODEL || 'whisper-large-v3';
+  }
+
+  isConfigured(): boolean {
+    return isGroqConfigured();
+  }
+
+  async transcribe(audioFilePath: string, durationSeconds: number): Promise<DialogueSegment[]> {
+    const uploadPath = path.join(path.dirname(audioFilePath), `groq_stt_${Date.now()}.mp3`);
+
+    try {
+      await FFmpegHelper.execute([
+        '-y',
+        '-i', audioFilePath,
+        '-vn',
+        '-ac', '1',
+        '-ar', '16000',
+        '-b:a', '48k',
+        uploadPath,
+      ]);
+
+      const audioBuffer = fs.readFileSync(uploadPath);
+      const formData = new FormData();
+      formData.append('file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/mpeg' }), 'audio.mp3');
+      formData.append('model', this.modelName);
+      formData.append('response_format', 'verbose_json');
+      formData.append('temperature', '0');
+      if (process.env.STT_LANGUAGE) {
+        formData.append('language', process.env.STT_LANGUAGE);
+      }
+
+      const response = await groqFetch(
+        '/audio/transcriptions',
+        { method: 'POST', body: formData },
+        'Whisper transcription'
+      );
+
+      const data = (await response.json()) as { segments?: any[] };
+      const rawSegments = Array.isArray(data.segments) ? data.segments : [];
+      const noSpeechThreshold = Number(process.env.STT_NO_SPEECH_THRESHOLD || '0.6');
+      const segments: DialogueSegment[] = [];
+
+      for (const raw of rawSegments) {
+        // Whisper flags music/silence per segment; drop those before translation.
+        const noSpeechProb = typeof raw.no_speech_prob === 'number' ? raw.no_speech_prob : 0;
+        if (noSpeechProb > noSpeechThreshold) continue;
+
+        const cleaned = cleanNonVerbalSounds(raw.text || '');
+        // Require at least one real letter so punctuation-only output is dropped.
+        if (!/\p{L}/u.test(cleaned)) continue;
+
+        const start = Math.max(0, Number(raw.start) || 0);
+        const rawEnd = Math.max(start + 0.5, Number(raw.end) || start + 1);
+        const end = durationSeconds > 0 ? Math.min(durationSeconds, rawEnd) : rawEnd;
+
+        segments.push({
+          id: `seg_${segments.length + 1}`,
+          speaker: 'speaker_1',
+          start: Number(start.toFixed(2)),
+          end: Number(end.toFixed(2)),
+          text: cleaned,
+        });
+      }
+
+      logger.info(`Groq Whisper transcribed ${segments.length} spoken dialogue segments.`);
+      return segments;
+    } finally {
+      if (fs.existsSync(uploadPath)) {
+        try { fs.unlinkSync(uploadPath); } catch {}
+      }
+    }
   }
 }
 
@@ -275,11 +362,20 @@ export function getTranscriptionProvider(): TranscriptionProvider {
     process.env.ASSEMBLYAI_API_KEY ||
     process.env.AUDIO_SEPARATION_API_KEY;
 
-  if (provider === 'assemblyai' || (assemblyKey && !process.env.STT_PROVIDER)) {
+  if (provider === 'groq' && isGroqConfigured()) {
+    return new GroqTranscriptionProvider();
+  }
+
+  if (provider === 'assemblyai' || (assemblyKey && !provider)) {
     const assembly = new AssemblyAITranscriptionProvider();
     if (assembly.isConfigured()) {
       return assembly;
     }
+  }
+
+  // With no explicit provider, prefer Groq Whisper when a key is present.
+  if (!provider && isGroqConfigured()) {
+    return new GroqTranscriptionProvider();
   }
 
   // Default to high-performance Gemini Transcription

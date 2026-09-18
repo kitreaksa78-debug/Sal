@@ -1,10 +1,13 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { GoogleGenAI, Modality } from '@google/genai';
+import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { withRetry } from '../utils/retry.js';
+import { getGeminiApiKey } from '../utils/aiKeys.js';
 
 export interface TTSOptions {
   gender?: 'male' | 'female' | 'neutral';
@@ -22,11 +25,22 @@ export interface TTSResult {
 export interface TTSProvider {
   name: string;
   isConfigured(): boolean;
+  getModelName(): string;
   synthesizeSpeech(
     text: string,
     outputPath: string,
     options: TTSOptions
   ): Promise<TTSResult>;
+}
+
+/** Escape text before it is embedded into the SSML request body. */
+function escapeSsml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;');
 }
 
 /**
@@ -40,7 +54,7 @@ export class GeminiTTSProvider implements TTSProvider {
 
   constructor() {
     this.modelName = process.env.TTS_MODEL || 'gemini-3.1-flash-tts-preview';
-    const apiKey = process.env.TTS_API_KEY || process.env.GEMINI_API_KEY;
+    const apiKey = process.env.TTS_API_KEY || getGeminiApiKey();
     if (apiKey) {
       this.client = new GoogleGenAI({
         apiKey,
@@ -54,7 +68,11 @@ export class GeminiTTSProvider implements TTSProvider {
   }
 
   isConfigured(): boolean {
-    return Boolean(process.env.TTS_API_KEY || process.env.GEMINI_API_KEY);
+    return Boolean(process.env.TTS_API_KEY || getGeminiApiKey());
+  }
+
+  getModelName(): string {
+    return this.modelName;
   }
 
   async synthesizeSpeech(
@@ -172,11 +190,123 @@ export class GeminiTTSProvider implements TTSProvider {
 /**
  * Custom Khmer TTS Provider (e.g. ElevenLabs or dedicated Cambodian TTS API)
  */
+/**
+ * Microsoft Edge "Read Aloud" neural voices — the free, keyless route to Khmer speech.
+ *
+ * Edge exposes the same km-KH neural voices as Azure Speech (Piseth for male,
+ * Sreymom for female) with no subscription and no quota. It is Microsoft's public
+ * read-aloud endpoint rather than a contracted API, so each line is retried and the
+ * pipeline falls back to the original audio if the service is unreachable.
+ */
+export class EdgeTTSProvider implements TTSProvider {
+  name = 'edge';
+
+  isConfigured(): boolean {
+    // No key required — this is the always-available Khmer voice engine.
+    return process.env.EDGE_TTS_ENABLED !== 'false';
+  }
+
+  private getFemaleVoice(): string {
+    return process.env.EDGE_TTS_VOICE_FEMALE || 'km-KH-SreymomNeural';
+  }
+
+  private getMaleVoice(): string {
+    return process.env.EDGE_TTS_VOICE_MALE || 'km-KH-PisethNeural';
+  }
+
+  getModelName(): string {
+    return `${this.getFemaleVoice()} / ${this.getMaleVoice()}`;
+  }
+
+  private resolveVoice(gender?: 'male' | 'female' | 'neutral'): string {
+    if (gender === 'male') return this.getMaleVoice();
+    return this.getFemaleVoice();
+  }
+
+  async synthesizeSpeech(
+    text: string,
+    outputPath: string,
+    options: TTSOptions
+  ): Promise<TTSResult> {
+    const cleanText = text.trim();
+    if (!cleanText) {
+      throw new Error('Cannot synthesize empty speech text.');
+    }
+
+    const voiceName = this.resolveVoice(options.gender);
+    const rawMp3Path = outputPath.replace(/\.wav$/, '_edge.mp3');
+    const rawWavPath = outputPath.replace(/\.wav$/, '_edge_raw.wav');
+    const synthDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-tts-'));
+
+    try {
+      await withRetry(
+        async () => {
+          const tts = new MsEdgeTTS();
+          try {
+            await tts.setMetadata(voiceName, OUTPUT_FORMAT.AUDIO_24KHZ_48KBITRATE_MONO_MP3);
+            const result = await tts.toFile(synthDir, escapeSsml(cleanText));
+            if (!result.audioFilePath || !fs.existsSync(result.audioFilePath)) {
+              throw new Error('Edge TTS returned no audio file.');
+            }
+            fs.copyFileSync(result.audioFilePath, rawMp3Path);
+          } finally {
+            tts.close();
+          }
+        },
+        { operationName: `Edge TTS (${voiceName})`, maxAttempts: 3 }
+      );
+    } finally {
+      fs.rmSync(synthDir, { recursive: true, force: true });
+    }
+
+    // Edge returns 24 kHz mono MP3; the mixing stage works in 44.1 kHz stereo WAV.
+    await FFmpegHelper.execute([
+      '-y',
+      '-i', rawMp3Path,
+      '-ar', '44100',
+      '-ac', '2',
+      rawWavPath,
+    ]);
+
+    const generatedDuration = await FFmpegHelper.getAudioDuration(rawWavPath);
+    const targetDuration = options.targetDuration;
+
+    // Same timing policy as the Gemini voice path: never let a line overrun its slot.
+    if (targetDuration && targetDuration > 0.3 && generatedDuration > targetDuration * 1.08) {
+      const speedFactor = Math.min(1.4, generatedDuration / targetDuration);
+      logger.info(
+        `Edge TTS line (${generatedDuration.toFixed(2)}s) exceeds slot (${targetDuration.toFixed(2)}s); speeding up ${speedFactor.toFixed(2)}x`
+      );
+      await FFmpegHelper.adjustTempo(rawWavPath, outputPath, speedFactor);
+    } else {
+      fs.copyFileSync(rawWavPath, outputPath);
+    }
+
+    for (const tempPath of [rawMp3Path, rawWavPath]) {
+      if (fs.existsSync(tempPath)) {
+        try { fs.unlinkSync(tempPath); } catch {}
+      }
+    }
+
+    return {
+      audioPath: outputPath,
+      duration: await FFmpegHelper.getAudioDuration(outputPath),
+    };
+  }
+}
+
+/**
+ * Custom Khmer TTS Provider (e.g. ElevenLabs or dedicated Cambodian TTS API)
+ */
 export class ExternalKhmerTTSProvider implements TTSProvider {
   name = 'custom_khmer';
 
   isConfigured(): boolean {
     return Boolean(process.env.TTS_API_KEY && process.env.TTS_PROVIDER === 'custom_khmer');
+  }
+
+  getModelName(): string {
+    return process.env.TTS_MODEL || 'custom_khmer';
   }
 
   async synthesizeSpeech(
@@ -194,9 +324,21 @@ export class ExternalKhmerTTSProvider implements TTSProvider {
 }
 
 export function getTTSProvider(): TTSProvider {
-  const provider = (process.env.TTS_PROVIDER || 'gemini').toLowerCase();
+  const provider = (process.env.TTS_PROVIDER || '').toLowerCase();
+
   if (provider === 'custom_khmer') {
     return new ExternalKhmerTTSProvider();
   }
-  return new GeminiTTSProvider();
+  if (provider === 'gemini') {
+    return new GeminiTTSProvider();
+  }
+  if (provider === 'edge') {
+    return new EdgeTTSProvider();
+  }
+
+  // No explicit choice: use Gemini when a key is present, otherwise fall back to
+  // the keyless Edge voices so Khmer voice-over works out of the box.
+  const gemini = new GeminiTTSProvider();
+  if (gemini.isConfigured()) return gemini;
+  return new EdgeTTSProvider();
 }

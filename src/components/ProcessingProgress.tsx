@@ -42,7 +42,7 @@ const PIPELINE_STAGES: StepItem[] = [
   {
     id: 'translating',
     khmer: 'បកប្រែជាខ្មែរនិយាយបែបធម្មជាតិ',
-    english: 'Gemini context translation',
+    english: 'AI context translation',
     associatedStatuses: ['translating'],
   },
   {

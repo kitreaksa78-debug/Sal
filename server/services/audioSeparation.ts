@@ -8,6 +8,12 @@ export interface SeparationResult {
   vocalsPath: string;
   noVocalsPath: string;
   warning?: string;
+  /**
+   * True when the background track still contains the original voices, which
+   * happens when phase cancellation is impossible (effectively mono audio).
+   * The mixer uses it to decide how hard to mute the background under dialogue.
+   */
+  backgroundHasOriginalVoice?: boolean;
 }
 
 export interface AudioSeparationProvider {
@@ -32,11 +38,10 @@ export class DspAudioSeparationProvider implements AudioSeparationProvider {
     const noVocalsPath = path.join(outputDir, 'no_vocals.wav');
 
     try {
-      await FFmpegHelper.separateCenterVocalDsp(inputWavPath, vocalsPath, noVocalsPath);
+      const separation = await FFmpegHelper.separateCenterVocalDsp(inputWavPath, vocalsPath, noVocalsPath);
 
       // Verify files were generated
       const noVocalsExists = fs.existsSync(noVocalsPath) && fs.statSync(noVocalsPath).size > 1024;
-      const vocalsExists = fs.existsSync(vocalsPath) && fs.statSync(vocalsPath).size > 1024;
 
       if (!noVocalsExists) {
         logger.warn('no_vocals.wav was not generated cleanly, falling back to original audio copy');
@@ -44,11 +49,22 @@ export class DspAudioSeparationProvider implements AudioSeparationProvider {
         return {
           vocalsPath,
           noVocalsPath,
+          backgroundHasOriginalVoice: true,
           warning: 'ការញែកសំឡេងមិនទាន់ពេញលេញ។ សំឡេងដើមត្រូវបានរក្សាទុកជាផ្ទៃខាងក្រោយ។ (Audio separation partial; original audio preserved as background.)',
         };
       }
 
-      return { vocalsPath, noVocalsPath };
+      logger.info(
+        separation.backgroundHasOriginalVoice
+          ? 'Background keeps the original mix; the original voices will be muted inside each dialogue window.'
+          : 'Centre-channel cancellation used for the background; only a light dip is needed under dialogue.'
+      );
+
+      return {
+        vocalsPath,
+        noVocalsPath,
+        backgroundHasOriginalVoice: separation.backgroundHasOriginalVoice,
+      };
     } catch (err: any) {
       logger.warn('DSP audio separation encountered an issue, continuing gracefully with fallback:', err);
       // Graceful fallback: use original audio as background so job continues smoothly
@@ -58,6 +74,7 @@ export class DspAudioSeparationProvider implements AudioSeparationProvider {
       return {
         vocalsPath,
         noVocalsPath,
+        backgroundHasOriginalVoice: true,
         warning: 'ការញែកសំឡេងមិនបានល្អឥតខ្ចោះទេ ប៉ុន្តែវីដេអូនឹងនៅតែដំណើរការបន្ត។ (Audio separation warning; continuing with graceful fallback.)',
       };
     }

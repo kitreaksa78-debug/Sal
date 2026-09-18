@@ -13,6 +13,7 @@ import { getTTSProvider } from './tts.js';
 import { AudioMixingService } from './audioMixing.js';
 import { VideoRenderingService } from './videoRendering.js';
 import { logger } from '../utils/logger.js';
+import { mapWithConcurrency } from '../utils/concurrency.js';
 
 export const jobEvents = new EventEmitter();
 
@@ -127,6 +128,13 @@ export class JobProcessor {
       fs.mkdirSync(jobTempDir, { recursive: true });
     }
 
+    // Degraded-but-usable runs collect their reasons here instead of failing.
+    const warnings: string[] = [];
+    const addWarning = async (message: string) => {
+      if (!warnings.includes(message)) warnings.push(message);
+      await db.updateJob(jobId, { warning: warnings.join('\n\n') });
+    };
+
     try {
       logger.info(`Starting asynchronous processing for job ${jobId}`);
 
@@ -198,67 +206,157 @@ export class JobProcessor {
       const speakerProfiles = SpeakerDetector.identifySpeakers(dialogueSegments);
       await db.updateJob(jobId, { speakers: speakerProfiles });
 
-      // STEP 6: GEMINI CONTEXT ANALYSIS & KHMER TRANSLATION
+      // STEP 6: CONTEXT ANALYSIS & KHMER TRANSLATION
       await this.updateJobState(jobId, 'translating');
       const translationService = getTranslationService();
-      dialogueSegments = await translationService.translateDialogue(dialogueSegments, job.settings);
+
+      try {
+        // The translator reports progress block by block so a long transcript
+        // shows movement instead of sitting on one percentage.
+        const outcome = await translationService.translateDialogue(
+          dialogueSegments,
+          job.settings,
+          async (completedLines, totalLines) => {
+            const pct = 58 + Math.round((completedLines / Math.max(1, totalLines)) * 10);
+            await this.updateJobState(
+              jobId,
+              'translating',
+              `កំពុងបកប្រែជាភាសាខ្មែរ ${completedLines}/${totalLines} បន្ទាត់...`,
+              { progress: Math.min(pct, 68) }
+            );
+          }
+        );
+
+        dialogueSegments = outcome.segments;
+        for (const warning of outcome.warnings) {
+          await addWarning(warning);
+        }
+      } catch (translationErr: any) {
+        // A translator hiccup should not discard a good transcription: keep the
+        // original lines and tell the user the subtitles stay in the source language.
+        logger.warn(`Translation failed for job ${jobId}, keeping original dialogue:`, translationErr);
+        await addWarning(
+          `ការបកប្រែជាខ្មែរមិនបានសម្រេចទេ ដូច្នេះអក្សររត់នឹងនៅជាភាសាដើម។ (Translation failed: ${translationErr?.message ?? 'unknown error'}. Subtitles keep the original language.)`
+        );
+      }
+
       await db.saveSegments(jobId, dialogueSegments);
 
       // STEP 7: KHMER TTS SPEECH SYNTHESIS & TIMING MATCH
       await this.updateJobState(jobId, 'generating_voice');
       const ttsProvider = getTTSProvider();
 
+      // Voice-over needs a Khmer-capable TTS engine. When none is configured we
+      // still deliver the Khmer translation as subtitles instead of failing the
+      // whole job, and we keep the original audio so nobody ends up muted.
+      const ttsAvailable = ttsProvider.isConfigured();
+
       const segmentsDir = path.join(jobTempDir, 'tts_segments');
       if (!fs.existsSync(segmentsDir)) fs.mkdirSync(segmentsDir, { recursive: true });
 
-      for (let i = 0; i < dialogueSegments.length; i++) {
-        const seg = dialogueSegments[i];
-        const segOutPath = path.join(segmentsDir, `segment_${i + 1}.wav`);
-        const originalDuration = Math.max(0.5, seg.end - seg.start);
+      if (ttsAvailable) {
+        // Lines are independent, so synthesize several at once instead of the
+        // old one-at-a-time loop; a 60-line video used to spend a full minute here.
+        const ttsConcurrency = Math.max(1, Number(process.env.TTS_CONCURRENCY || '3'));
+        let voicedSoFar = 0;
 
-        // Determine voice gender
-        let gender: 'male' | 'female' | 'neutral' = seg.speakerGender || 'male';
-        if (job.settings.voice === 'male') gender = 'male';
-        if (job.settings.voice === 'female') gender = 'female';
+        await mapWithConcurrency(dialogueSegments, ttsConcurrency, async (seg, i) => {
+          const segOutPath = path.join(segmentsDir, `segment_${i + 1}.wav`);
+          const originalDuration = Math.max(0.5, seg.end - seg.start);
 
-        const khmerText = (seg.khmer || seg.text).trim();
+          // Determine voice gender
+          let gender: 'male' | 'female' | 'neutral' = seg.speakerGender || 'male';
+          if (job.settings.voice === 'male') gender = 'male';
+          if (job.settings.voice === 'female') gender = 'female';
 
-        try {
-          const ttsResult = await ttsProvider.synthesizeSpeech(khmerText, segOutPath, {
-            gender,
-            emotion: seg.emotion,
-            voiceStyle: job.settings.voiceStyle,
-            targetDuration: originalDuration,
-          });
+          const khmerText = (seg.khmer || seg.text).trim();
 
-          seg.audioFile = ttsResult.audioPath;
-          seg.audioDuration = ttsResult.duration;
-        } catch (ttsErr) {
-          logger.warn(`TTS synthesis failed for segment ${seg.id}:`, ttsErr);
-        }
+          try {
+            const ttsResult = await ttsProvider.synthesizeSpeech(khmerText, segOutPath, {
+              gender,
+              emotion: seg.emotion,
+              voiceStyle: job.settings.voiceStyle,
+              targetDuration: originalDuration,
+            });
+
+            seg.audioFile = ttsResult.audioPath;
+            seg.audioDuration = ttsResult.duration;
+          } catch (ttsErr) {
+            logger.warn(`TTS synthesis failed for segment ${seg.id}:`, ttsErr);
+          }
+
+          voicedSoFar++;
+          const pct = 70 + Math.round((voicedSoFar / dialogueSegments.length) * 9);
+          await this.updateJobState(
+            jobId,
+            'generating_voice',
+            `កំពុងបង្កើតសំឡេងខ្មែរ ${voicedSoFar}/${dialogueSegments.length} បន្ទាត់...`,
+            { progress: Math.min(pct, 79) }
+          );
+        });
       }
 
       await db.saveSegments(jobId, dialogueSegments);
 
-      // STEP 8: SYNC & ASSEMBLE DIALOGUE TRACK
-      await this.updateJobState(jobId, 'syncing');
-      const masterSpeechTrack = path.join(jobTempDir, 'master_khmer_speech.wav');
-      await AudioMixingService.assembleDialogueTrack(
-        dialogueSegments,
-        meta.duration,
-        masterSpeechTrack,
-        jobTempDir
-      );
+      // Voice-over only counts as usable when at least one line produced audio.
+      // Otherwise the mix would strip the dialogue out and ship a silent cast.
+      const voicedSegments = dialogueSegments.filter((seg) => seg.audioFile);
+      const canDub = ttsAvailable && voicedSegments.length > 0;
 
-      // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
-      await this.updateJobState(jobId, 'mixing');
+      if (!ttsAvailable) {
+        logger.warn(
+          `No Khmer TTS provider configured for job ${jobId}; producing a Khmer-subtitled release.`
+        );
+        await addWarning(
+          'សំឡេងខ្មែរ (Khmer voice-over) មិនទាន់អាចបង្កើតបានទេ។ វីដេអូនឹងរក្សាសំឡេងដើម ហើយអក្សររត់ខ្មែរត្រូវបានបង្កើតរួចរាល់។ (Khmer voice-over unavailable: original audio kept, Khmer subtitles still generated.)'
+        );
+      } else if (!canDub) {
+        logger.warn(
+          `Khmer voice generation failed for every line in job ${jobId}; keeping original audio.`
+        );
+        await addWarning(
+          'ការបង្កើតសំឡេងខ្មែរបរាជ័យសម្រាប់គ្រប់បន្ទាត់។ វីដេអូនឹងរក្សាសំឡេងដើម និងអក្សររត់ខ្មែរ។ (Khmer voice generation failed for every line; original audio kept, Khmer subtitles still generated.)'
+        );
+      } else if (voicedSegments.length < dialogueSegments.length) {
+        logger.warn(
+          `${dialogueSegments.length - voicedSegments.length} of ${dialogueSegments.length} lines could not be voiced in job ${jobId}.`
+        );
+        await addWarning(
+          `សំឡេងខ្មែរបង្កើតបានតែ ${voicedSegments.length}/${dialogueSegments.length} បន្ទាត់។ បន្ទាត់ដែលនៅសល់រក្សាសំឡេងដើម។ (Khmer voice generated for ${voicedSegments.length}/${dialogueSegments.length} lines; the rest keep the original audio.)`
+        );
+      }
+
       const finalMixedAudioTrack = path.join(jobTempDir, 'final_mixed_audio.wav');
-      await AudioMixingService.mixDubbedWithBackground(
-        masterSpeechTrack,
-        noVocalsTrack,
-        finalMixedAudioTrack,
-        job.settings
-      );
+
+      if (canDub) {
+        // STEP 8: SYNC & ASSEMBLE DIALOGUE TRACK
+        await this.updateJobState(jobId, 'syncing');
+        const masterSpeechTrack = path.join(jobTempDir, 'master_khmer_speech.wav');
+        await AudioMixingService.assembleDialogueTrack(
+          dialogueSegments,
+          meta.duration,
+          masterSpeechTrack,
+          jobTempDir
+        );
+
+        // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
+        await this.updateJobState(jobId, 'mixing');
+        await AudioMixingService.mixDubbedWithBackground(
+          masterSpeechTrack,
+          noVocalsTrack,
+          finalMixedAudioTrack,
+          job.settings,
+          {
+            segments: dialogueSegments,
+            backgroundHasOriginalVoice: separationResult.backgroundHasOriginalVoice,
+          }
+        );
+      } else {
+        // No usable Khmer voice track: carry the untouched original audio through
+        // so the released video keeps its dialogue and only adds Khmer subtitles.
+        await this.updateJobState(jobId, 'mixing', 'កំពុងរក្សាសំឡេងដើម និងបន្ថែមអក្សររត់ខ្មែរ...');
+        fs.copyFileSync(rawAudioPath, finalMixedAudioTrack);
+      }
 
       // Save mixed audio file to outputs
       const audioOutputFilename = `khmer-audio-${jobId}.wav`;
@@ -314,7 +412,19 @@ export class JobProcessor {
       let friendlyKhmer = 'មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត។';
       const errMsg = err?.message || '';
 
-      if (errMsg.includes('API key') || errMsg.includes('Gemini')) {
+      if (/\(429\)|rate limit|too many requests/i.test(errMsg)) {
+        friendlyKhmer =
+          'អត្រាប្រើប្រាស់ AI ពេញ (rate limit)។ សូមរង់ចាំបន្តិច រួចសាកល្បងម្តងទៀត ឬបន្ថែម Groq key ផ្សេងទៀត។ (AI rate limit reached: wait a moment or add another Groq key.)';
+      } else if (errMsg.includes('is not configured') || errMsg.includes('No translation provider')) {
+        friendlyKhmer =
+          'មិនទាន់បានកំណត់ API key សម្រាប់ AI ទេ។ សូមបញ្ចូល GROQ_API_KEY ក្នុង Settings → Environment។ (No AI API key configured.)';
+      } else if (/\(401\)|invalid api key/i.test(errMsg)) {
+        friendlyKhmer =
+          'API key មិនត្រឹមត្រូវ ឬត្រូវបានលុបចោល។ សូមពិនិត្យ GROQ_API_KEY ម្តងទៀត។ (Invalid or revoked API key.)';
+      } else if (/\(402\)|\(403\)|quota|billing/i.test(errMsg)) {
+        friendlyKhmer =
+          'គណនី AI គ្មានសិទ្ធិ ឬអស់កូតា។ សូមពិនិត្យគណនី Groq របស់អ្នក។ (AI account permission or quota problem.)';
+      } else if (errMsg.includes('API key') || errMsg.includes('Gemini')) {
         friendlyKhmer = 'សេវាកម្ម AI Gemini មិនទាន់បានកំណត់រចនាសម្ព័ន្ធ ឬមានបញ្ហាតភ្ជាប់ទេ។';
       } else if (errMsg.includes('TTS') || errMsg.includes('synthesize')) {
         friendlyKhmer = 'មិនអាចបង្កើតសំឡេងខ្មែរបានទេ សូមពិនិត្យការកំណត់សំឡេង។';

@@ -1,6 +1,7 @@
+// Must stay first: loads .env / .env.local before other modules read process.env.
+import './server/env.js';
 import express from 'express';
 import path from 'path';
-import dotenv from 'dotenv';
 import { createServer as createViteServer } from 'vite';
 import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
@@ -8,10 +9,9 @@ import configRouter from './server/routes/config.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
 
-dotenv.config();
-
 const app = express();
-const PORT = 3000;
+// Honour the port injected by the host, falling back to 3000 for local runs.
+const PORT = Number(process.env.PORT) || 3000;
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));

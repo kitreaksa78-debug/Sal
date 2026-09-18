@@ -54,23 +54,25 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, confi
               </div>
 
               <div className="divide-y divide-slate-800/80 border border-slate-800 rounded-xl overflow-hidden bg-slate-950/40">
-                {/* Gemini AI */}
+                {/* AI Translation */}
                 <div className="p-3.5 flex items-center justify-between">
                   <div className="flex items-center gap-3">
                     <Sparkles className="w-4 h-4 text-emerald-400" />
                     <div>
-                      <div className="text-xs font-semibold text-white">Gemini API (Translation & Context)</div>
-                      <div className="text-[10px] text-slate-400">Model: {config.gemini.model}</div>
+                      <div className="text-xs font-semibold text-white">AI Translation → Khmer</div>
+                      <div className="text-[10px] text-slate-400">
+                        Provider: {config.translation.provider} ({config.translation.model})
+                      </div>
                     </div>
                   </div>
                   <span
                     className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                      config.gemini.configured
+                      config.translation.configured
                         ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
                         : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
                     }`}
                   >
-                    {config.gemini.configured ? (
+                    {config.translation.configured ? (
                       <>
                         <CheckCircle2 className="w-3.5 h-3.5" />
                         <span>Connected</span>
@@ -115,33 +117,42 @@ export const ConfigModal: React.FC<ConfigModalProps> = ({ isOpen, onClose, confi
                 </div>
 
                 {/* TTS */}
-                <div className="p-3.5 flex items-center justify-between">
-                  <div className="flex items-center gap-3">
-                    <Volume2 className="w-4 h-4 text-cyan-400" />
-                    <div>
-                      <div className="text-xs font-semibold text-white">Khmer Text-to-Speech (TTS)</div>
-                      <div className="text-[10px] text-slate-400">Provider: {config.tts.provider} ({config.tts.model})</div>
+                <div className="p-3.5 flex flex-col gap-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-3">
+                      <Volume2 className="w-4 h-4 text-cyan-400" />
+                      <div>
+                        <div className="text-xs font-semibold text-white">Khmer Text-to-Speech (TTS)</div>
+                        <div className="text-[10px] text-slate-400">Provider: {config.tts.provider} ({config.tts.model})</div>
+                      </div>
                     </div>
+                    <span
+                      className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
+                        config.tts.configured
+                          ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
+                          : 'bg-amber-500/15 text-amber-300 border border-amber-500/30'
+                      }`}
+                    >
+                      {config.tts.configured ? (
+                        <>
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>Configured</span>
+                        </>
+                      ) : (
+                        <>
+                          <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
+                          <span>Subtitles only</span>
+                        </>
+                      )}
+                    </span>
                   </div>
-                  <span
-                    className={`inline-flex items-center gap-1 text-xs font-semibold px-2 py-0.5 rounded-full ${
-                      config.tts.configured
-                        ? 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30'
-                        : 'bg-rose-500/15 text-rose-300 border border-rose-500/30'
-                    }`}
-                  >
-                    {config.tts.configured ? (
-                      <>
-                        <CheckCircle2 className="w-3.5 h-3.5" />
-                        <span>Configured</span>
-                      </>
-                    ) : (
-                      <>
-                        <XCircle className="w-3.5 h-3.5" />
-                        <span>Not configured</span>
-                      </>
-                    )}
-                  </span>
+
+                  {!config.tts.configured && (
+                    <div className="text-[10.5px] text-amber-400/90 leading-relaxed">
+                      💡 បញ្ចូល key សម្រាប់ TTS ខ្មែរ (ឧ.{' '}
+                      <code className="text-slate-200 font-mono bg-slate-800 px-1 py-0.5 rounded">GEMINI_API_KEY</code>) ដើម្បីបង្កើតសំឡេងខ្មែរ។ បើគ្មាន វេទិកានឹងបង្កើតវីដេអូជាមួយអក្សររត់ខ្មែរ និងរក្សាសំឡេងដើម។
+                    </div>
+                  )}
                 </div>
 
                 {/* Audio Separation */}

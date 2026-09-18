@@ -81,13 +81,25 @@ export class AudioMixingService {
 
   /**
    * Intelligently mix dubbed Khmer dialogue track with background music/ambient audio (no_vocals.wav)
+   *
+   * `segments` supplies the dialogue windows: the background is muted inside them so
+   * the original voices cannot be heard under the Khmer dub, while the music is kept
+   * at full quality everywhere else.
    */
   public static async mixDubbedWithBackground(
     speechTrackPath: string,
     backgroundTrackPath: string,
     outputMixedTrackPath: string,
-    settings: JobSettings
+    settings: JobSettings,
+    options: {
+      segments?: DialogueSegment[];
+      backgroundHasOriginalVoice?: boolean;
+    } = {}
   ): Promise<string> {
+    const dialogueWindows = (options.segments || [])
+      .filter((segment) => Number.isFinite(segment.start) && Number.isFinite(segment.end))
+      .map((segment) => ({ start: segment.start, end: segment.end }));
+
     return await FFmpegHelper.mixDubbedAudio(
       speechTrackPath,
       backgroundTrackPath,
@@ -96,6 +108,8 @@ export class AudioMixingService {
         backgroundMusic: settings.backgroundMusic,
         speechVolume: 1.3,
         musicVolume: settings.backgroundMusic === 'reduce' ? 0.35 : 0.65,
+        dialogueWindows,
+        backgroundHasOriginalVoice: options.backgroundHasOriginalVoice ?? false,
       }
     );
   }

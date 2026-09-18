@@ -15,7 +15,13 @@ export const Header: React.FC<HeaderProps> = ({
   configStatus,
   onOpenConfig,
 }) => {
-  const isHealthy = configStatus?.gemini.configured && configStatus?.ffmpeg.configured;
+  // Fully "ready" only when every stage of the dubbing pipeline has a provider,
+  // so a missing Khmer voice-over shows up here instead of silently degrading.
+  const isHealthy =
+    Boolean(configStatus?.translation.configured) &&
+    Boolean(configStatus?.stt.configured) &&
+    Boolean(configStatus?.tts.configured) &&
+    Boolean(configStatus?.ffmpeg.configured);
 
   return (
     <header className="sticky top-0 z-40 bg-[#0b0f17]/90 backdrop-blur-md border-b border-slate-800/80 px-4 sm:px-6 py-3.5">
@@ -69,7 +75,7 @@ export const Header: React.FC<HeaderProps> = ({
             }`}
           >
             <History className="w-4 h-4 text-slate-400" />
-            <span className="hidden xs:inline">ប្រវត្តិ</span>
+            <span className="hidden sm:inline">ប្រវត្តិ</span>
           </button>
 
           {/* System Status Pill / Button */}

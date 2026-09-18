@@ -1,12 +1,16 @@
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import ffmpegStaticPath from 'ffmpeg-static';
+import ffprobeStatic from 'ffprobe-static';
 import { logger } from './logger.js';
 import { VideoMetadata } from '../types.js';
 
 export class FFmpegHelper {
-  private static ffmpegPath = 'ffmpeg';
-  private static ffprobePath = 'ffprobe';
+  // Binary resolution order: explicit env override -> bundled static binary -> system PATH.
+  // The bundled binaries keep media processing working on hosts without a system FFmpeg.
+  private static ffmpegPath = process.env.FFMPEG_PATH || ffmpegStaticPath || 'ffmpeg';
+  private static ffprobePath = process.env.FFPROBE_PATH || ffprobeStatic.path || 'ffprobe';
 
   /**
    * Run ffmpeg with given arguments and return stdout/stderr
@@ -180,37 +184,58 @@ export class FFmpegHelper {
     inputAudioPath: string,
     outputVocalsPath: string,
     outputNoVocalsPath: string
-  ): Promise<{ vocals: string; noVocals: string }> {
-    // Step 1: Create no_vocals (background/music) by subtracting center channel and retaining stereo ambient/music
-    // Filter graph:
-    // Left minus Right (L-R) cancels out center vocal components, leaving stereo music/reverb/instruments.
-    // We add slight low-frequency bass recovery (under 200Hz) and high-frequency brilliance (over 6000Hz) to keep music rich.
-    const noVocalsFilter = [
-      '[0:a]asplit=2[orig][tocancel]',
-      '[tocancel]pan=stereo|c0=c0-c1|c1=c1-c0[karaoke]',
-      '[orig]lowpass=f=180[bass]',
-      '[karaoke][bass]amix=inputs=2:weights=1.0 0.8:dropout_transition=0[out]',
-    ].join(';');
+  ): Promise<{ vocals: string; noVocals: string; backgroundHasOriginalVoice: boolean }> {
+    // How much genuinely stereo content does this file have?
+    // Phase cancellation (L-R) deletes anything identical in both channels, which is
+    // exactly where centred dialogue lives. The metric below is how far the L-R
+    // difference channel sits *below* the full mix: a large drop means the two
+    // channels are nearly identical (mono content), so cancelling would wipe out the
+    // music as well and leave only artefacts. Measure before trusting it.
+    const cancelDropDb = await this.measureStereoWidthDb(inputAudioPath);
+    const cancelThresholdDb = Number(process.env.AUDIO_MONO_CANCEL_DB || '18');
+    const effectivelyMono = cancelDropDb === null || cancelDropDb >= cancelThresholdDb;
 
-    try {
-      await this.execute([
-        '-y',
-        '-i', inputAudioPath,
-        '-filter_complex', noVocalsFilter,
-        '-map', '[out]',
-        '-ac', '2',
-        outputNoVocalsPath,
-      ]);
-    } catch (err) {
-      logger.warn('Advanced no_vocals filter failed, falling back to simple phase inversion:', err);
-      // Fallback simple stereo phase cancellation
-      await this.execute([
-        '-y',
-        '-i', inputAudioPath,
-        '-af', 'pan=stereo|c0=c0-c1|c1=c1-c0',
-        '-ac', '2',
-        outputNoVocalsPath,
-      ]);
+    if (effectivelyMono) {
+      // Nothing to cancel. Keep the untouched original mix as the background so the
+      // music survives at full quality, and let the mixer mute it inside the speech
+      // windows — that is what removes the original voices in this case.
+      fs.copyFileSync(inputAudioPath, outputNoVocalsPath);
+      logger.info(
+        cancelDropDb === null
+          ? 'Could not measure stereo width; keeping the full original mix as background and muting it under dialogue.'
+          : `Audio is effectively mono (L-R sits ${cancelDropDb.toFixed(1)} dB below the mix); keeping the full original mix as background and muting it under dialogue instead of phase cancelling.`
+      );
+    } else {
+      // Real stereo: cancel the centre for the background. Bass is recovered from the
+      // difference channel itself — never from the original mix, because feeding the
+      // original back in re-injects the dialogue's own low frequencies (its vocal
+      // fundamentals) into the "music" track.
+      const noVocalsFilter = [
+        '[0:a]pan=stereo|c0=c0-c1|c1=c1-c0,asplit=2[karaoke][bassfeed]',
+        '[bassfeed]lowpass=f=150,bass=g=5:f=110[bass]',
+        '[karaoke][bass]amix=inputs=2:weights=1.0 0.6:dropout_transition=0[out]',
+      ].join(';');
+
+      try {
+        await this.execute([
+          '-y',
+          '-i', inputAudioPath,
+          '-filter_complex', noVocalsFilter,
+          '-map', '[out]',
+          '-ac', '2',
+          outputNoVocalsPath,
+        ]);
+      } catch (err) {
+        logger.warn('Advanced no_vocals filter failed, falling back to simple phase inversion:', err);
+        // Fallback simple stereo phase cancellation
+        await this.execute([
+          '-y',
+          '-i', inputAudioPath,
+          '-af', 'pan=stereo|c0=c0-c1|c1=c1-c0',
+          '-ac', '2',
+          outputNoVocalsPath,
+        ]);
+      }
     }
 
     // Step 2: Create vocals (human speech) by bandpassing vocal range (250Hz - 3800Hz) + high-center isolation
@@ -232,7 +257,112 @@ export class FFmpegHelper {
       fs.copyFileSync(inputAudioPath, outputVocalsPath);
     }
 
-    return { vocals: outputVocalsPath, noVocals: outputNoVocalsPath };
+    return {
+      vocals: outputVocalsPath,
+      noVocals: outputNoVocalsPath,
+      backgroundHasOriginalVoice: effectivelyMono,
+    };
+  }
+
+  /**
+   * Mean level (dBFS) of an audio file, optionally only its first `limitSeconds`.
+   * Returns null when the level cannot be read.
+   */
+  public static async measureMeanVolumeDb(
+    audioPath: string,
+    limitSeconds?: number
+  ): Promise<number | null> {
+    const args = ['-hide_banner'];
+    if (limitSeconds && limitSeconds > 0) args.push('-t', String(limitSeconds));
+    args.push('-i', audioPath, '-af', 'volumedetect', '-f', 'null', '-');
+
+    try {
+      const { stderr } = await this.execute(args);
+      const match = stderr.match(/mean_volume:\s*(-?[\d.]+|-inf)\s*dB/);
+      if (!match) return null;
+      if (match[1] === '-inf') return -100;
+      const value = Number(match[1]);
+      return Number.isFinite(value) ? value : null;
+    } catch (err) {
+      logger.warn(`Could not measure mean volume for ${path.basename(audioPath)}:`, err);
+      return null;
+    }
+  }
+
+  /**
+   * How far below the full mix the L-R difference channel sits, in dB.
+   * A large value means the channels are nearly identical, i.e. mono content.
+   */
+  private static async measureStereoWidthDb(audioPath: string): Promise<number | null> {
+    // Returns (mix level - difference-channel level). Large means effectively mono.
+    const probeSeconds = Number(process.env.AUDIO_WIDTH_PROBE_SECONDS || '90');
+    const probePath = path.join(
+      path.dirname(audioPath),
+      `stereo_width_probe_${Date.now()}.wav`
+    );
+
+    try {
+      const fullDb = await this.measureMeanVolumeDb(audioPath, probeSeconds);
+
+      await this.execute([
+        '-y',
+        '-hide_banner',
+        '-t', String(probeSeconds),
+        '-i', audioPath,
+        '-af', 'pan=stereo|c0=c0-c1|c1=c1-c0',
+        '-ac', '2',
+        probePath,
+      ]);
+
+      const sideDb = await this.measureMeanVolumeDb(probePath);
+      if (fullDb === null || sideDb === null) return null;
+      return fullDb - sideDb;
+    } catch (err) {
+      logger.warn('Stereo width probe failed; treating the background as if it still holds the original voices:', err);
+      return null;
+    } finally {
+      if (fs.existsSync(probePath)) {
+        try { fs.unlinkSync(probePath); } catch {}
+      }
+    }
+  }
+
+  /**
+   * Build a frame-by-frame gain expression that drops the background to
+   * `gateDepthDb` inside every dialogue window and returns to full level
+   * between them, with a short ramp so the transitions do not click.
+   */
+  private static buildDialogueGateExpression(
+    windows: { start: number; end: number }[],
+    musicVolume: number,
+    gateDepthDb: number,
+    padMs: number
+  ): string | null {
+    const valid = windows.filter(
+      (w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.end > w.start
+    );
+    if (valid.length === 0) return null;
+
+    const pad = Math.max(0, padMs) / 1000;
+    const rampSeconds = 0.05;
+
+    const terms = valid.map((w) => {
+      const start = Math.max(0, w.start - pad).toFixed(3);
+      const end = (w.end + pad).toFixed(3);
+      return (
+        `clip((t-${start})/${rampSeconds},0,1)*` +
+        `clip((${end}-t)/${rampSeconds},0,1)`
+      );
+    });
+
+    const gate = `min(1,${terms.map((t) => `(${t})`).join('+')})`;
+    const floor = Math.pow(10, gateDepthDb / 20);
+    const expression = `${musicVolume}-(${musicVolume - floor})*${gate}`;
+
+    logger.info(
+      `Background gate: ${valid.length} dialogue window(s), depth ${gateDepthDb} dB, pad ${padMs} ms.`
+    );
+    return expression;
   }
 
   /**
@@ -247,6 +377,10 @@ export class FFmpegHelper {
       backgroundMusic: 'keep' | 'reduce' | 'remove';
       speechVolume?: number; // default 1.2
       musicVolume?: number;  // default 0.6
+      /** Dialogue windows whose original voices must not be audible. */
+      dialogueWindows?: { start: number; end: number }[];
+      /** True when the background still carries the original voices (mono source). */
+      backgroundHasOriginalVoice?: boolean;
     }
   ): Promise<string> {
     if (options.backgroundMusic === 'remove') {
@@ -263,13 +397,38 @@ export class FFmpegHelper {
     const musicVol = options.backgroundMusic === 'reduce' ? 0.35 : (options.musicVolume ?? 0.65);
     const speechVol = options.speechVolume ?? 1.35;
 
-    // Filter: duck background music when speech is active (sidechain compression)
-    // [0:a] is background, [1:a] is speech
+    // Mute the background inside each dialogue window. When phase cancellation
+    // could not run (mono source) the background still holds the original voices,
+    // so it has to be pushed far down; when the centre was cancelled a shallower
+    // dip is enough to mask whatever bleed remains.
+    // A mono background still holds the original voices in full, so it has to go far
+    // down. When the centre was cancelled only bleed remains, so a gentle dip masks it
+    // without gutting the music underneath the dub.
+    const gateDepthDb = options.backgroundHasOriginalVoice
+      ? Number(process.env.BACKGROUND_GATE_DB_MONO || '-30')
+      : Number(process.env.BACKGROUND_GATE_DB_STEREO || '-12');
+    const gatePadMs = Number(process.env.BACKGROUND_GATE_PAD_MS || '150');
+
+    const gateExpression = this.buildDialogueGateExpression(
+      options.dialogueWindows || [],
+      musicVol,
+      gateDepthDb,
+      gatePadMs
+    );
+
+    const backgroundStage = gateExpression
+      ? `[0:a]volume=volume='${gateExpression}':eval=frame[bg]`
+      : `[0:a]volume=${musicVol}[bg]`;
+
+    // Filter: duck the background music under the speech (sidechain compression).
+    // [0:a] is background, [1:a] is speech. The speech has to be split because a
+    // filter output can only be consumed once, and it feeds both the sidechain key
+    // and the mix. normalize=0 keeps the per-input volumes as set above.
     const filter = [
-      `[0:a]volume=${musicVol}[bg]`,
-      `[1:a]volume=${speechVol}[voice]`,
-      `[bg][voice]sidechaincompress=threshold=0.1:ratio=3:attack=20:release=300[duckedbg]`,
-      `[duckedbg][voice]amix=inputs=2:weights=1.0 1.0:duration=longest:dropout_transition=2[mixed]`,
+      backgroundStage,
+      `[1:a]volume=${speechVol},asplit=2[voiceKey][voiceMix]`,
+      `[bg][voiceKey]sidechaincompress=threshold=0.1:ratio=3:attack=20:release=300[duckedbg]`,
+      `[duckedbg][voiceMix]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[mixed]`,
       `[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[out]`,
     ].join(';');
 
@@ -290,7 +449,7 @@ export class FFmpegHelper {
         '-y',
         '-i', backgroundTrack,
         '-i', dubbedSpeechTrack,
-        '-filter_complex', `[0:a]volume=${musicVol}[bg];[1:a]volume=${speechVol}[voice];[bg][voice]amix=inputs=2:duration=longest[out]`,
+        '-filter_complex', `${backgroundStage};[1:a]volume=${speechVol}[voice];[bg][voice]amix=inputs=2:duration=longest[out]`,
         '-map', '[out]',
         '-ac', '2',
         '-ar', '44100',

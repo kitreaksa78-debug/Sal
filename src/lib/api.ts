@@ -1,6 +1,14 @@
 import { JobRecord, JobSettings, SystemConfigStatus } from '../types';
 
-export const API_BASE = '/api';
+// The API normally lives on the same origin (dev + Freebuff preview).
+// A static host such as Cloudflare Pages can either be given a remote API at
+// build time via VITE_API_BASE_URL, or reach it through the Pages Function
+// proxy in functions/api/[[path]].js (API_BACKEND_URL).
+const BUILD_ENV =
+  (import.meta as unknown as { env?: Record<string, string | undefined> }).env ?? {};
+const RAW_API_BASE = (BUILD_ENV.VITE_API_BASE_URL || '').trim().replace(/\/+$/, '');
+
+export const API_BASE = RAW_API_BASE ? `${RAW_API_BASE}/api` : '/api';
 
 export async function uploadVideoJob(
   file: File,

@@ -1,0 +1,21 @@
+# Keep the Space build context small and reproducible.
+node_modules
+dist
+dist-pages
+isolate
+data
+server/data
+
+# Never ship local secrets into the image; use Space secrets instead.
+.env
+.env.*
+!.env.example
+
+.git
+.gitignore
+*.log
+*.tsbuildinfo
+
+# Local scratch files
+tmp-*
+/tmp

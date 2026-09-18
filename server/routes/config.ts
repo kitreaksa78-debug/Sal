@@ -2,7 +2,10 @@ import express, { Request, Response } from 'express';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { getStorage } from '../services/storage.js';
 import { getTranscriptionProvider } from '../services/transcription.js';
+import { getTranslationService } from '../services/translation.js';
+import { getTTSProvider } from '../services/tts.js';
 import { SystemConfigStatus } from '../types.js';
+import { getGeminiApiKey } from '../utils/aiKeys.js';
 
 const router = express.Router();
 
@@ -11,7 +14,7 @@ router.get('/status', async (req: Request, res: Response) => {
   const storage = getStorage();
   const storageInfo = storage.getInfo();
 
-  const geminiConfigured = Boolean(process.env.GEMINI_API_KEY);
+  const geminiConfigured = Boolean(getGeminiApiKey());
   const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
 
   const sttInstance = getTranscriptionProvider();
@@ -20,11 +23,20 @@ router.get('/status', async (req: Request, res: Response) => {
   const sttModel =
     sttProvider === 'assemblyai'
       ? 'AssemblyAI Conformer-2 + Diarization'
-      : (process.env.STT_MODEL || 'gemini-3.5-transcribe');
+      : sttProvider === 'groq'
+      ? process.env.GROQ_STT_MODEL || 'whisper-large-v3'
+      : process.env.STT_MODEL || 'gemini-3.5-transcribe';
 
-  const ttsConfigured = Boolean(process.env.TTS_API_KEY || process.env.GEMINI_API_KEY);
-  const ttsProvider = process.env.TTS_PROVIDER || 'gemini';
-  const ttsModel = process.env.TTS_MODEL || 'gemini-3.1-flash-tts-preview';
+  const translationService = getTranslationService();
+  const translationFallbackModels = (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || 'openai/gpt-oss-20b,qwen/qwen3.8-27b')
+    .split(',')
+    .map(m => m.trim())
+    .filter(m => m && m !== translationService.getModelName());
+
+  const ttsInstance = getTTSProvider();
+  const ttsConfigured = ttsInstance.isConfigured();
+  const ttsProvider = ttsInstance.name;
+  const ttsModel = ttsInstance.getModelName();
 
   const audioSeparationConfigured = true; // Local DSP separation is always ready with FFmpeg
   const audioSeparationProvider = process.env.AUDIO_SEPARATION_PROVIDER || 'local_dsp';
@@ -36,6 +48,12 @@ router.get('/status', async (req: Request, res: Response) => {
     gemini: {
       configured: geminiConfigured,
       model: geminiModel,
+    },
+    translation: {
+      configured: translationService.isConfigured(),
+      provider: translationService.getProviderName(),
+      model: translationService.getModelName(),
+      fallbackModels: translationFallbackModels,
     },
     stt: {
       configured: sttConfigured,

@@ -387,10 +387,11 @@ let storageInstance: StorageProvider | null = null;
 export function getStorage(): StorageProvider {
   const s3Config = parseS3Config();
 
-  // If user designated an S3/R2 endpoint or bucket, prefer S3StorageProvider
-  // which manages both R2 cloud persistence and local cache
+  // S3/R2 is optional replication on top of the local buffer. Only switch to the
+  // cloud provider once real credentials exist, so the app works with zero config
+  // and the system status reports local storage instead of "waiting for keys".
   if (!storageInstance) {
-    storageInstance = new S3StorageProvider();
+    storageInstance = s3Config.hasCredentials ? new S3StorageProvider() : new LocalStorageProvider();
   } else if (storageInstance.name === 'local' && s3Config.hasCredentials) {
     storageInstance = new S3StorageProvider();
   }

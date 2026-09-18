@@ -1,0 +1,47 @@
+# Render Blueprint — free web service, no credit card required.
+#
+# 1. Push this repository to GitHub.
+# 2. Render Dashboard -> New -> Blueprint -> pick this repo.
+# 3. Render reads this file and creates the service; fill in the secret values
+#    it asks for (they are marked sync: false, so they are never in git).
+#
+# The service builds with the repository's own scripts, then runs the bundled
+# Express server (dist/server.cjs) which serves both the web UI and the API.
+services:
+  - type: web
+    name: khmerdub-ai
+    runtime: node
+    plan: free
+    region: singapore
+    branch: main
+    # --include=dev keeps vite/esbuild available: the build step needs them.
+    buildCommand: npm install --include=dev --no-audit --no-fund && npm run build
+    startCommand: npm start
+    healthCheckPath: /api/health
+    autoDeploy: true
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: STT_PROVIDER
+        value: groq
+      - key: TRANSLATION_PROVIDER
+        value: groq
+
+      # Secrets — set these in the Render dashboard, not in git.
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_API_KEY2
+        sync: false
+      - key: GROQ_API_KEY3
+        sync: false
+
+      # Optional: persist uploads and results in Cloudflare R2. A free Render
+      # instance has an ephemeral disk, so files are lost whenever it restarts.
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
