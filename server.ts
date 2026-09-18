@@ -8,6 +8,7 @@ import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
+import { getDatabase } from './server/services/db.js';
 
 const app = express();
 // Honour the port injected by the host, falling back to 3000 for local runs.
@@ -31,6 +32,10 @@ app.use('/api/files', filesRouter);
 app.use('/api/config', configRouter);
 
 async function startServer() {
+  // Recover job history from object storage: hosts like Render free wipe the local
+  // disk on every restart, but uploads and results live on in Cloudflare R2.
+  await getDatabase().hydrateFromRemote();
+
   // Check system dependencies on start
   const ffmpegInfo = await FFmpegHelper.checkAvailability();
   if (ffmpegInfo.available) {

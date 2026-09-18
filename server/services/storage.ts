@@ -23,6 +23,12 @@ export interface StorageProvider {
   getFileStream(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<Readable>;
   deleteFile(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<void>;
   cleanProcessingDir(jobId: string): Promise<void>;
+  /**
+   * Small text state (e.g. the job database snapshot) kept next to the media so
+   * it survives an ephemeral-disk restart too. Returns null when absent.
+   */
+  getState(key: string): Promise<string | null>;
+  setState(key: string, value: string): Promise<void>;
 }
 
 export interface S3ParsedConfig {
@@ -173,6 +179,24 @@ export class LocalStorageProvider implements StorageProvider {
         logger.warn(`Failed to clean processing dir for job ${jobId}:`, err);
       }
     }
+  }
+
+  private statePath(key: string): string {
+    return path.join(this.baseDir, 'state', path.basename(key));
+  }
+
+  async getState(key: string): Promise<string | null> {
+    const target = this.statePath(key);
+    return fs.existsSync(target) ? fs.readFileSync(target, 'utf8') : null;
+  }
+
+  async setState(key: string, value: string): Promise<void> {
+    const target = this.statePath(key);
+    const parent = path.dirname(target);
+    if (!fs.existsSync(parent)) {
+      fs.mkdirSync(parent, { recursive: true });
+    }
+    fs.writeFileSync(target, value, 'utf8');
   }
 }
 
@@ -379,6 +403,49 @@ export class S3StorageProvider implements StorageProvider {
 
   async cleanProcessingDir(jobId: string): Promise<void> {
     await this.localFallback.cleanProcessingDir(jobId);
+  }
+
+  async getState(key: string): Promise<string | null> {
+    const cached = await this.localFallback.getState(key);
+    if (cached !== null) return cached;
+
+    if (this.s3 && this.config.bucket) {
+      try {
+        const res = await this.s3.send(new GetObjectCommand({
+          Bucket: this.config.bucket,
+          Key: `state/${path.basename(key)}`,
+        }));
+        const chunks: Buffer[] = [];
+        for await (const chunk of res.Body as Readable) {
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as string));
+        }
+        const text = Buffer.concat(chunks).toString('utf8');
+        await this.localFallback.setState(key, text);
+        logger.info(`Restored ${key} state from Cloudflare R2 bucket ${this.config.bucket}`);
+        return text;
+      } catch (err) {
+        logger.warn(`No ${key} state in S3/R2 (or it could not be read):`, err);
+      }
+    }
+
+    return null;
+  }
+
+  async setState(key: string, value: string): Promise<void> {
+    await this.localFallback.setState(key, value);
+
+    if (this.s3 && this.config.bucket) {
+      try {
+        await this.s3.send(new PutObjectCommand({
+          Bucket: this.config.bucket,
+          Key: `state/${path.basename(key)}`,
+          Body: value,
+          ContentType: 'application/json',
+        }));
+      } catch (err) {
+        logger.warn(`Failed to upload ${key} state to S3/R2:`, err);
+      }
+    }
   }
 }
 
