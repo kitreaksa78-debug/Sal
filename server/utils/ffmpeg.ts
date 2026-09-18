@@ -401,11 +401,12 @@ export class FFmpegHelper {
     // could not run (mono source) the background still holds the original voices,
     // so it has to be pushed far down; when the centre was cancelled a shallower
     // dip is enough to mask whatever bleed remains.
-    // A mono background still holds the original voices in full, so it has to go far
-    // down. When the centre was cancelled only bleed remains, so a gentle dip masks it
-    // without gutting the music underneath the dub.
+    // A mono background still holds the original voices in full, so it must go
+    // essentially to silence during dialogue windows to ensure only the Khmer
+    // dub is heard. When the centre was cancelled only bleed remains, so a
+    // gentle dip masks it without gutting the music underneath the dub.
     const gateDepthDb = options.backgroundHasOriginalVoice
-      ? Number(process.env.BACKGROUND_GATE_DB_MONO || '-30')
+      ? Number(process.env.BACKGROUND_GATE_DB_MONO || '-60')
       : Number(process.env.BACKGROUND_GATE_DB_STEREO || '-12');
     const gatePadMs = Number(process.env.BACKGROUND_GATE_PAD_MS || '150');
 
