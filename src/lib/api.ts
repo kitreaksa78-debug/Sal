@@ -179,6 +179,62 @@ export async function getEntitlement(email: string): Promise<Entitlement> {
   return (await res.json()) as Entitlement;
 }
 
+// ------------------------------------------------------------------ contact
+
+export interface ContactPayload {
+  name: string;
+  email: string;
+  message?: string;
+  plan?: Plan;
+  source?: string;
+  deviceId?: string;
+}
+
+export interface ContactRecord {
+  id: string;
+  name: string;
+  email: string;
+  message: string;
+  plan: Plan;
+  source: string;
+  deviceId: string;
+  times: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * Store the user before Gmail opens, so the visitor is saved on the server as
+ * well as in their inbox draft.
+ */
+export async function saveContact(
+  payload: ContactPayload
+): Promise<{ ok: boolean; contact: ContactRecord; total: number }> {
+  const res = await fetch(`${API_BASE}/contact`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data = (await res.json()) as {
+    ok?: boolean;
+    contact?: ContactRecord;
+    total?: number;
+    error?: string;
+  };
+  if (!res.ok || !data.contact) {
+    throw new Error(data.error || 'Failed to save contact');
+  }
+  return { ok: true, contact: data.contact, total: data.total ?? 0 };
+}
+
+/** Every saved user, newest first. */
+export async function listContacts(limit = 200): Promise<ContactRecord[]> {
+  const res = await fetch(`${API_BASE}/contact?limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch contacts');
+  const data = (await res.json()) as { contacts?: ContactRecord[] };
+  return data.contacts || [];
+}
+
 /** Verify a purchase by the buyer's email (also used to restore access). */
 export async function activatePurchase(email: string): Promise<Entitlement> {
   const res = await fetch(`${API_BASE}/billing/activate`, {

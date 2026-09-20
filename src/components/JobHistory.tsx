@@ -43,10 +43,10 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between border-b border-slate-800 pb-4">
-        <div>
-          <h2 className="text-xl font-bold text-white flex items-center gap-2">
-            <History className="w-5 h-5 text-emerald-400" />
+      <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-3 border-b border-slate-800 pb-4">
+        <div className="min-w-0">
+          <h2 className="text-base sm:text-xl font-bold text-white flex items-start gap-2">
+            <History className="w-5 h-5 text-emerald-400 shrink-0 mt-0.5" />
             <span>ប្រវត្តិការងារបញ្ចូលសំឡេង (Dubbing History)</span>
           </h2>
           <p className="text-xs text-slate-300 mt-1">
@@ -57,18 +57,18 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
         <button
           type="button"
           onClick={fetchJobs}
-          className="px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition-colors"
+          className="self-start sm:self-auto px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition-colors shrink-0"
         >
           ផ្ទុកឡើងវិញ (Refresh)
         </button>
       </div>
 
       {loading ? (
-        <div className="text-center py-16 text-slate-300 text-sm">
+        <div className="text-center py-12 sm:py-16 text-slate-300 text-sm">
           កំពុងផ្ទុកប្រវត្តិការងារ...
         </div>
       ) : jobs.length === 0 ? (
-        <div className="text-center py-16 bg-[#111827]/40 rounded-2xl border border-slate-800 space-y-3">
+        <div className="text-center py-12 sm:py-16 px-4 bg-[#111827]/40 rounded-2xl border border-slate-800 space-y-3">
           <History className="w-10 h-10 text-slate-400 mx-auto" />
           <h4 className="text-base font-semibold text-slate-300">មិនទាន់មានប្រវត្តិការងារនៅឡើយទេ</h4>
           <p className="text-xs text-slate-400 max-w-sm mx-auto">
@@ -102,7 +102,7 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
                   </div>
 
                   <div className="min-w-0">
-                    <h4 className="text-sm font-semibold text-white truncate max-w-xs sm:max-w-md">
+                    <h4 className="text-sm font-semibold text-white truncate max-w-[70vw] sm:max-w-md">
                       {job.originalFilename || `Video-${job.id}`}
                     </h4>
                     <div className="flex flex-wrap items-center gap-2 text-xs text-slate-300 mt-0.5">
@@ -119,12 +119,12 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
                   </div>
                 </div>
 
-                <div className="flex items-center gap-2 shrink-0">
+                <div className="flex items-center gap-2 shrink-0 w-full sm:w-auto">
                   {isCompleted && (
                     <a
                       href={getDownloadUrl(job.id)}
                       download
-                      className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors"
+                      className="p-2.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors shrink-0"
                       title="ទាញយក MP4"
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -135,7 +135,7 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
                   <button
                     type="button"
                     onClick={() => onSelectJob(job)}
-                    className="flex items-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all min-h-[40px]"
+                    className="flex-1 sm:flex-none flex items-center justify-center gap-1.5 px-4 py-2 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 border border-emerald-500/30 text-xs font-semibold transition-all min-h-[44px]"
                   >
                     <span>{isCompleted ? 'មើលលទ្ធផល' : 'មើលវឌ្ឍនភាព'}</span>
                     <ArrowRight className="w-3.5 h-3.5" />

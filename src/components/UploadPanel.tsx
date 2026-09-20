@@ -73,7 +73,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
         onDragOver={handleDragOver}
         onDragLeave={handleDragLeave}
         onClick={() => !isUploading && fileInputRef.current?.click()}
-        className={`relative overflow-hidden rounded-2xl border-2 border-dashed p-6 sm:p-10 text-center transition-all cursor-pointer select-none ${
+        className={`relative overflow-hidden rounded-2xl border-2 border-dashed p-5 sm:p-10 text-center transition-all cursor-pointer select-none ${
           isDragOver
             ? 'border-emerald-400 bg-emerald-500/10 scale-[1.01]'
             : 'border-slate-700/80 bg-[#111827]/60 hover:border-emerald-500/50 hover:bg-[#111827]/90'
@@ -89,7 +89,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
         />
 
         <div className="max-w-md mx-auto space-y-4">
-          <div className="w-16 h-16 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-emerald-600/30 to-teal-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center mx-auto shadow-inner">
+          <div className="w-14 h-14 sm:w-20 sm:h-20 rounded-2xl bg-gradient-to-tr from-emerald-600/30 to-teal-500/20 text-emerald-400 border border-emerald-500/30 flex items-center justify-center mx-auto shadow-inner">
             <Upload className="w-8 h-8 sm:w-10 sm:h-10 animate-bounce" />
           </div>
 
@@ -194,38 +194,38 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
       )}
 
       {/* Target Processing Architecture Visualizer */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Audio Separation Target */}
         <div className="p-4 rounded-xl bg-[#111827]/60 border border-slate-800 space-y-2.5">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300">
-            <MicOff className="w-4 h-4 text-emerald-400" />
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+            <MicOff className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>ការបំបែកសំឡេងឆ្លាតវៃ (Intelligent Separation)</span>
           </div>
           <div className="text-xs text-slate-300 space-y-1.5 font-mono bg-slate-950/60 p-3 rounded-lg border border-slate-800/60">
             <div className="text-slate-400 font-sans font-semibold">ORIGINAL AUDIO:</div>
-            <div className="flex items-center gap-2 text-rose-400">
-              <span>├── សំឡេងមនុស្ស (Human Speech)</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-rose-500/20 text-rose-300">REMOVE</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-rose-400">
+              <span className="min-w-0">├── សំឡេងមនុស្ស (Human Speech)</span>
+              <span className="text-[10px] leading-5 px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300 whitespace-nowrap">REMOVE</span>
             </div>
-            <div className="flex items-center gap-2 text-emerald-400">
-              <span>├── ភ្លេងប្រគុំ (Music Track)</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-emerald-500/20 text-emerald-300">KEEP 100%</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-emerald-400">
+              <span className="min-w-0">├── ភ្លេងប្រគុំ (Music Track)</span>
+              <span className="text-[10px] leading-5 px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 whitespace-nowrap">KEEP 100%</span>
             </div>
-            <div className="flex items-center gap-2 text-teal-400">
-              <span>├── សំឡេងបរិយាកាស (Ambience)</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-teal-500/20 text-teal-300">KEEP</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-teal-400">
+              <span className="min-w-0">├── សំឡេងបរិយាកាស (Ambience)</span>
+              <span className="text-[10px] leading-5 px-1.5 py-0.5 rounded bg-teal-500/20 text-teal-300 whitespace-nowrap">KEEP</span>
             </div>
-            <div className="flex items-center gap-2 text-cyan-400">
-              <span>└── សំឡេង Effect (SFX)</span>
-              <span className="text-[10px] px-1.5 py-0.2 rounded bg-cyan-500/20 text-cyan-300">KEEP</span>
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-cyan-400">
+              <span className="min-w-0">└── សំឡេង Effect (SFX)</span>
+              <span className="text-[10px] leading-5 px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 whitespace-nowrap">KEEP</span>
             </div>
           </div>
         </div>
 
         {/* Translation & Voice Target */}
         <div className="p-4 rounded-xl bg-[#111827]/60 border border-slate-800 space-y-2.5">
-          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-300">
-            <Sparkles className="w-4 h-4 text-emerald-400" />
+          <div className="flex items-center gap-2 text-xs font-bold text-slate-200">
+            <Sparkles className="w-4 h-4 text-emerald-400 shrink-0" />
             <span>សំឡេងខ្មែរ AI ធម្មជាតិ (Natural Spoken Khmer)</span>
           </div>
           <div className="text-xs text-slate-300 space-y-2 bg-slate-950/60 p-3 rounded-lg border border-slate-800/60">

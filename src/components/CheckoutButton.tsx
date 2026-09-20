@@ -72,11 +72,11 @@ export const CheckoutButton: React.FC<CheckoutButtonProps> = ({
           type="button"
           onClick={openCheckout}
           disabled={loading}
-          className="inline-flex items-center gap-2 px-6 py-3 rounded-xl border border-emerald-500/30 text-emerald-400 font-semibold hover:bg-emerald-500/10 transition-all disabled:opacity-60 disabled:cursor-wait"
+          className="inline-flex items-center justify-center gap-2 px-5 py-3 min-h-[44px] rounded-xl border border-emerald-500/30 text-emerald-400 font-semibold text-sm hover:bg-emerald-500/10 transition-all disabled:opacity-60 disabled:cursor-wait"
         >
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4" />}
-          Upgrade to Pro
-          <ExternalLink className="w-3 h-3 opacity-50" />
+          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Zap className="w-4 h-4 shrink-0" />}
+          <span className="whitespace-nowrap">Upgrade to Pro</span>
+          <ExternalLink className="w-3 h-3 opacity-50 shrink-0" />
         </button>
         {note}
       </div>
@@ -89,11 +89,11 @@ export const CheckoutButton: React.FC<CheckoutButtonProps> = ({
         type="button"
         onClick={openCheckout}
         disabled={loading}
-        className="w-full inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-bold text-lg hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg shadow-emerald-500/25 disabled:opacity-60 disabled:cursor-wait"
+        className="w-full min-h-[52px] inline-flex flex-wrap items-center justify-center gap-2 px-5 sm:px-8 py-3.5 sm:py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-bold text-base sm:text-lg hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg shadow-emerald-500/25 disabled:opacity-60 disabled:cursor-wait"
       >
-        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5" />}
-        Upgrade to Pro — ${PRO_PRICE_USD}/ខែ
-        <ExternalLink className="w-4 h-4 opacity-75" />
+        {loading ? <Loader2 className="w-5 h-5 animate-spin" /> : <Zap className="w-5 h-5 shrink-0" />}
+        <span>Upgrade to Pro — ${PRO_PRICE_USD}/ខែ</span>
+        <ExternalLink className="w-4 h-4 opacity-75 shrink-0" />
       </button>
       {note}
     </div>

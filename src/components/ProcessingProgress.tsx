@@ -97,10 +97,10 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
   };
 
   return (
-    <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-5 sm:p-7 shadow-2xl backdrop-blur-md space-y-6">
+    <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-7 shadow-2xl backdrop-blur-md space-y-5 sm:space-y-6">
       {/* Header & Current Status Banner */}
       <div className="text-center space-y-2">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-xs font-semibold">
+        <div className="inline-flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] sm:text-xs font-semibold text-center">
           {!isFailed && !isCompleted && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
           {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
           {isFailed && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
@@ -113,10 +113,10 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
           </span>
         </div>
 
-        <h2 className="text-xl sm:text-2xl font-bold text-white tracking-tight">
+        <h2 className="text-lg sm:text-2xl font-bold text-white tracking-tight">
           {job.khmerMessage || job.message}
         </h2>
-        <p className="text-xs sm:text-sm text-slate-300 font-mono">
+        <p className="text-[11px] sm:text-sm text-slate-300 font-mono break-all">
           {renderAsciiBar(job.progress)} <span className="font-bold text-emerald-400 ml-1">{job.progress}%</span>
         </p>
       </div>
@@ -173,7 +173,7 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
       )}
 
       {/* Pipeline Stage Checklist */}
-      <div className="space-y-2 border-t border-slate-800 pt-5">
+      <div className="space-y-2 border-t border-slate-800 pt-4 sm:pt-5">
         <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
           ដំណាក់កាលដំណើរការ (Processing Stages)
         </h4>
@@ -204,8 +204,8 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
                   )}
                 </div>
 
-                <div className="min-w-0">
-                  <div className="text-xs font-semibold truncate">{stage.khmer}</div>
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs font-semibold leading-snug">{stage.khmer}</div>
                   <div className="text-[10px] text-slate-400 truncate">{stage.english}</div>
                 </div>
               </div>

@@ -78,14 +78,14 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   return (
     <div className="space-y-6">
       {/* Top Banner */}
-      <div className="bg-gradient-to-r from-emerald-950/40 via-teal-950/30 to-slate-900 p-5 rounded-2xl border border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div className="flex items-center gap-3.5">
+      <div className="bg-gradient-to-r from-emerald-950/40 via-teal-950/30 to-slate-900 p-4 sm:p-5 rounded-2xl border border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <div className="flex items-start sm:items-center gap-3.5 min-w-0">
           <div className="w-12 h-12 rounded-xl bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30 shadow-md">
             <CheckCircle2 className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-lg sm:text-xl font-bold text-white flex items-center gap-2">
-              <span>វីដេអូបកប្រែ និងបញ្ចូលសំឡេងរួចរាល់!</span>
+            <h2 className="text-base sm:text-xl font-bold text-white">
+              វីដេអូបកប្រែ និងបញ្ចូលសំឡេងរួចរាល់!
             </h2>
             <p className="text-xs text-slate-300 mt-0.5">
               Khmer dubbed video rendered successfully in standard H.264/AAC MP4.
@@ -93,12 +93,12 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
           </div>
         </div>
 
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto shrink-0">
           {/* View mode toggle */}
           <button
             type="button"
             onClick={() => setViewMode(viewMode === 'comparison' ? 'dubbed_only' : 'comparison')}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-200 border border-slate-700 transition-colors min-h-[42px]"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-200 border border-slate-700 transition-colors min-h-[44px]"
           >
             <SplitSquareVertical className="w-4 h-4 text-emerald-400" />
             <span>{viewMode === 'comparison' ? 'មើលតែវីដេអូខ្មែរ' : 'ប្រៀបធៀបដើម & ខ្មែរ'}</span>
@@ -107,7 +107,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
           <button
             type="button"
             onClick={onReset}
-            className="flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors min-h-[42px]"
+            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors min-h-[44px]"
           >
             <RefreshCw className="w-4 h-4" />
             <span>វីដេអូថ្មី</span>
@@ -119,12 +119,12 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
       <div className={`grid gap-5 ${viewMode === 'comparison' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
         {/* Dubbed Khmer Video Player (Track 1) */}
         <div className="bg-[#111827]/90 rounded-2xl border border-emerald-500/40 p-4 shadow-xl space-y-3">
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2">
-              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" />
-              <h3 className="text-sm font-bold text-white flex items-center gap-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
+              <h3 className="text-xs sm:text-sm font-bold text-white flex flex-wrap items-center gap-1.5">
                 <span>វីដេអូសំឡេងខ្មែរ (Khmer Dubbed Video)</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono">H.264/AAC</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono whitespace-nowrap">H.264/AAC</span>
               </h3>
             </div>
 
@@ -166,12 +166,12 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
         {/* Original Video Player (for side-by-side comparison) */}
         {viewMode === 'comparison' && (
           <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 shadow-xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-slate-500" />
-                <h3 className="text-sm font-bold text-slate-300 flex items-center gap-1.5">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-2.5 h-2.5 rounded-full bg-slate-500 shrink-0" />
+                <h3 className="text-xs sm:text-sm font-bold text-slate-300 flex flex-wrap items-center gap-1.5">
                   <span>វីដេអូដើម (Original Video)</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono">BEFORE</span>
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono whitespace-nowrap">BEFORE</span>
                 </h3>
               </div>
             </div>
@@ -193,7 +193,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
       </div>
 
       {/* Action Download Buttons */}
-      <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-5 shadow-xl">
+      <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-5 shadow-xl">
         <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider mb-3">
           ទាញយកលទ្ធផល (Download Outputs)
         </h3>
@@ -243,12 +243,12 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
 
       {/* Interactive Dialogue Transcript & Timing Explorer */}
       {job.segments && job.segments.length > 0 && (
-        <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-5 shadow-xl space-y-4">
+        <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-5 shadow-xl space-y-4">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
-            <div>
-              <h3 className="text-sm font-bold text-white flex items-center gap-2">
+            <div className="min-w-0">
+              <h3 className="text-xs sm:text-sm font-bold text-white flex flex-wrap items-center gap-2">
                 <span>អត្ថបទសន្ទនា & ការបកប្រែ (Dialogue & Translation Transcript)</span>
-                <span className="text-xs px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
                   {job.segments.length} បន្ទាត់
                 </span>
               </h3>
@@ -258,15 +258,15 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
             </div>
           </div>
 
-          <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto pr-1">
+          <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto scroll-slim pr-1">
             {job.segments.map((seg, idx) => (
               <div
                 key={seg.id || idx}
                 onClick={() => seekToTime(seg.start)}
                 className="py-3 px-3 rounded-xl hover:bg-slate-800/50 cursor-pointer transition-colors space-y-1.5 group"
               >
-                <div className="flex items-center justify-between text-xs">
-                  <div className="flex items-center gap-2">
+                <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
+                  <div className="flex flex-wrap items-center gap-2 min-w-0">
                     <span className="inline-flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
                       <User className="w-3 h-3" />
                       <span>{seg.speaker}</span>
@@ -276,13 +276,13 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
                     </span>
 
                     {seg.emotion && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 capitalize">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 capitalize whitespace-nowrap">
                         {seg.emotion}
                       </span>
                     )}
                   </div>
 
-                  <div className="flex items-center gap-1 text-slate-300 font-mono group-hover:text-emerald-300">
+                  <div className="flex items-center gap-1 text-slate-300 font-mono group-hover:text-emerald-300 shrink-0">
                     <Clock className="w-3 h-3" />
                     <span>{formatTime(seg.start)} - {formatTime(seg.end)}</span>
                     <Play className="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-400" />

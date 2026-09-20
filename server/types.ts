@@ -77,6 +77,38 @@ export interface JobRecord {
   completedAt?: string;
 }
 
+export type ContactPlan = 'free' | 'pro';
+
+/**
+ * A visitor who contacted us from the welcome screen. Stored next to the job
+ * history so the list survives the ephemeral restarts of free hosts.
+ */
+export interface ContactRecord {
+  id: string;
+  name: string;
+  email: string;
+  message: string;
+  plan: ContactPlan;
+  /** Where the record came from, e.g. "welcome". */
+  source: string;
+  /** Random id kept in the visitor's browser so repeat visits are recognisable. */
+  deviceId: string;
+  /** How many times this email has written to us. */
+  times: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** What the client sends; the server fills in the id and the timestamps. */
+export interface NewContact {
+  name: string;
+  email: string;
+  message?: string;
+  plan?: ContactPlan;
+  source?: string;
+  deviceId?: string;
+}
+
 export interface SystemConfigStatus {
   gemini: { configured: boolean; model: string };
   translation: { configured: boolean; provider: string; model: string; fallbackModels?: string[] };

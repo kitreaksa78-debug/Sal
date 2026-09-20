@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
+import contactRouter from './server/routes/contact.js';
 import billingRouter, { handleLemonSqueezyWebhook } from './server/routes/billing.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
@@ -36,6 +37,7 @@ app.get('/api/health', (req, res) => {
 app.use('/api/jobs', jobsRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/config', configRouter);
+app.use('/api/contact', contactRouter);
 app.use('/api/billing', billingRouter);
 
 async function startServer() {

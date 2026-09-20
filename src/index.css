@@ -1,1 +1,94 @@
 @import "tailwindcss";
+
+@theme {
+  /* Kantumruy Pro covers Khmer; the Latin families handle the fallback. */
+  --font-sans: "Kantumruy Pro", "Noto Sans Khmer", "Plus Jakarta Sans", ui-sans-serif, system-ui,
+    -apple-system, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+}
+
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+    color-scheme: dark;
+    scroll-behavior: smooth;
+  }
+
+  body {
+    font-family: var(--font-sans);
+    /* Khmer vowels and subscripts sit far above/below the baseline, so text
+       needs more vertical room than the Latin defaults give it. */
+    line-height: 1.7;
+    overflow-x: hidden;
+    -webkit-tap-highlight-color: transparent;
+    text-rendering: optimizeLegibility;
+  }
+
+  /* Long English words and unbroken Khmer phrases must never widen a card. */
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  p,
+  li,
+  a,
+  span,
+  button,
+  label,
+  td,
+  th {
+    overflow-wrap: break-word;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    line-height: 1.5;
+  }
+
+  button,
+  a {
+    touch-action: manipulation;
+  }
+
+  :focus-visible {
+    outline: 2px solid rgb(16 185 129 / 0.7);
+    outline-offset: 2px;
+  }
+
+  /* Keep embedded players and previews inside their rounded cards. */
+  video,
+  img {
+    max-width: 100%;
+  }
+
+  ::selection {
+    background-color: rgb(16 185 129 / 0.3);
+    color: #fff;
+  }
+}
+
+@layer utilities {
+  /* Slim scrollbars that match the dark shell (used by modals and transcripts). */
+  .scroll-slim {
+    scrollbar-width: thin;
+    scrollbar-color: rgb(51 65 85) transparent;
+  }
+
+  .scroll-slim::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  .scroll-slim::-webkit-scrollbar-thumb {
+    background-color: rgb(51 65 85);
+    border-radius: 9999px;
+  }
+
+  .scroll-slim::-webkit-scrollbar-track {
+    background-color: transparent;
+  }
+}

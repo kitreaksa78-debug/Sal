@@ -21,9 +21,9 @@ export const ProActivate: React.FC<ProActivateProps> = ({ onPlanChange }) => {
   // Already unlocked on this device — nothing to verify.
   if (getPlan() === 'pro' && state !== 'checking') {
     return (
-      <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-2xl p-6 flex items-start gap-3">
+      <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-2xl p-4 sm:p-6 flex items-start gap-3">
         <CheckCircle2 className="w-5 h-5 text-emerald-400 mt-0.5 flex-shrink-0" />
-        <div>
+        <div className="min-w-0">
           <h4 className="text-emerald-300 font-semibold flex items-center gap-2">
             <Crown className="w-4 h-4" /> Pro plan សកម្ម
           </h4>
@@ -76,7 +76,7 @@ export const ProActivate: React.FC<ProActivateProps> = ({ onPlanChange }) => {
   return (
     <form
       onSubmit={handleSubmit}
-      className="bg-[#0d1320] rounded-2xl border border-slate-800 p-6"
+      className="bg-[#0d1320] rounded-2xl border border-slate-800 p-4 sm:p-6"
     >
       <div className="flex items-start gap-3 mb-4">
         <div className="w-10 h-10 rounded-lg bg-emerald-500/15 flex items-center justify-center flex-shrink-0">
@@ -102,7 +102,7 @@ export const ProActivate: React.FC<ProActivateProps> = ({ onPlanChange }) => {
         <button
           type="submit"
           disabled={state === 'checking'}
-          className="px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-60 disabled:cursor-wait inline-flex items-center justify-center gap-2"
+          className="px-6 py-3 min-h-[48px] rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg shadow-emerald-500/20 disabled:opacity-60 disabled:cursor-wait inline-flex items-center justify-center gap-2"
         >
           {state === 'checking' ? (
             <>

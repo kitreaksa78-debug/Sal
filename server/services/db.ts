@@ -1,6 +1,6 @@
 import fs from 'fs';
 import path from 'path';
-import { JobRecord, DialogueSegment } from '../types.js';
+import { JobRecord, DialogueSegment, ContactRecord, NewContact } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { getStorage } from './storage.js';
 
@@ -12,6 +12,12 @@ export interface DatabaseProvider {
   deleteJob(id: string): Promise<boolean>;
   saveSegments(jobId: string, segments: DialogueSegment[]): Promise<void>;
   getSegments(jobId: string): Promise<DialogueSegment[]>;
+  /**
+   * Store a user who contacted us. Repeats from the same email update the
+   * existing record instead of piling up duplicates.
+   */
+  saveContact(input: NewContact): Promise<ContactRecord>;
+  listContacts(limit?: number): Promise<ContactRecord[]>;
   /**
    * Merge in the snapshot kept in remote storage. The server calls this on boot
    * so job history survives hosts with an ephemeral disk (e.g. Render free).
@@ -25,6 +31,7 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
   private dbPath: string;
   private jobs: Map<string, JobRecord> = new Map();
   private segments: Map<string, DialogueSegment[]> = new Map();
+  private contacts: Map<string, ContactRecord> = new Map();
 
   private stateKey: string;
   private remoteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -56,7 +63,12 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
             this.segments.set(id, segs as DialogueSegment[]);
           });
         }
-        logger.info(`Loaded ${this.jobs.size} jobs from database store`);
+        if (parsed.contacts && Array.isArray(parsed.contacts)) {
+          parsed.contacts.forEach((c: ContactRecord) => this.contacts.set(c.id, c));
+        }
+        logger.info(
+          `Loaded ${this.jobs.size} jobs and ${this.contacts.size} user contact(s) from database store`
+        );
       } catch (err) {
         logger.warn('Failed to parse database file, initializing empty store:', err);
       }
@@ -68,6 +80,7 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
       {
         jobs: Array.from(this.jobs.values()),
         segments: Object.fromEntries(this.segments.entries()),
+        contacts: Array.from(this.contacts.values()),
       },
       null,
       2
@@ -136,6 +149,17 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
       for (const [id, segs] of Object.entries(parsed.segments || {})) {
         if (!this.segments.has(id)) this.segments.set(id, segs as DialogueSegment[]);
       }
+      for (const contact of (parsed.contacts || []) as ContactRecord[]) {
+        const local = this.contacts.get(contact.id);
+        const isNewer =
+          !local ||
+          new Date(contact.updatedAt || contact.createdAt).getTime() >
+            new Date(local.updatedAt || local.createdAt).getTime();
+        if (isNewer) {
+          this.contacts.set(contact.id, contact);
+          added++;
+        }
+      }
       if (added > 0) {
         logger.info(`Recovered ${added} job(s) from remote storage`);
         fs.writeFileSync(this.dbPath, this.snapshot(), 'utf8');
@@ -193,6 +217,51 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
 
   async getSegments(jobId: string): Promise<DialogueSegment[]> {
     return this.segments.get(jobId) || [];
+  }
+
+  async saveContact(input: NewContact): Promise<ContactRecord> {
+    const email = input.email.trim().toLowerCase();
+    const name = input.name.trim();
+    const now = new Date().toISOString();
+    const existing = Array.from(this.contacts.values()).find((c) => c.email === email);
+
+    const record: ContactRecord = existing
+      ? {
+          ...existing,
+          name: name || existing.name,
+          message: input.message?.trim() ? input.message.trim() : existing.message,
+          plan: input.plan || existing.plan,
+          deviceId: input.deviceId || existing.deviceId,
+          times: (existing.times || 1) + 1,
+          updatedAt: now,
+        }
+      : {
+          id: `ct_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 6)}`,
+          name,
+          email,
+          message: input.message?.trim() || '',
+          plan: input.plan || 'free',
+          source: input.source || 'welcome',
+          deviceId: input.deviceId || '',
+          times: 1,
+          createdAt: now,
+          updatedAt: now,
+        };
+
+    this.contacts.set(record.id, record);
+    this.persist();
+    logger.info(`Saved user contact: ${record.email} (${record.times}x, ${record.plan})`);
+    return record;
+  }
+
+  async listContacts(limit: number = 200): Promise<ContactRecord[]> {
+    return Array.from(this.contacts.values())
+      .sort(
+        (a, b) =>
+          new Date(b.updatedAt || b.createdAt).getTime() -
+          new Date(a.updatedAt || a.createdAt).getTime()
+      )
+      .slice(0, limit);
   }
 }
 

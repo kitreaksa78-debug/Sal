@@ -18,17 +18,17 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   };
 
   return (
-    <div className="bg-[#111827]/80 rounded-2xl border border-slate-800/90 p-5 sm:p-6 backdrop-blur-sm shadow-xl space-y-6">
+    <div className="bg-[#111827]/80 rounded-2xl border border-slate-800/90 p-4 sm:p-6 backdrop-blur-sm shadow-xl space-y-5 sm:space-y-6">
       {/* Smart Voice Hero Card */}
       <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 via-teal-950/20 to-slate-900/40 border border-emerald-500/30">
-        <div className="flex items-start justify-between gap-4">
-          <div className="flex items-center gap-3">
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 min-w-0">
             <div className="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
               <Sparkles className="w-5 h-5" />
             </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <h3 className="text-base font-semibold text-white">Smart Voice</h3>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="text-sm sm:text-base font-semibold text-white">Smart Voice</h3>
                 <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
                   AI RECOMMEND
                 </span>
@@ -52,7 +52,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
         {/* Language & Style */}
         <div className="space-y-2">
           <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
@@ -138,7 +138,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
                 type="button"
                 disabled={disabled}
                 onClick={() => update('voiceStyle', s.id as any)}
-                className={`px-2 py-2 rounded-xl text-xs font-medium border text-center transition-all min-h-[40px] flex items-center justify-between px-3 ${
+                className={`px-3 py-2 rounded-xl text-xs font-medium border text-center transition-all min-h-[44px] flex items-center justify-between gap-2 ${
                   settings.voiceStyle === s.id
                     ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
                     : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:border-slate-700'

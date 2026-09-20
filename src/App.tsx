@@ -5,14 +5,12 @@ import { TranslationSettings } from './components/TranslationSettings';
 import { ProcessingProgress } from './components/ProcessingProgress';
 import { ResultPanel } from './components/ResultPanel';
 import { JobHistory } from './components/JobHistory';
-import { ConfigModal } from './components/ConfigModal';
 import { PricingPage } from './components/PricingPage';
-import { UsageBanner } from './components/UsageBanner';
-import { JobRecord, JobSettings, SystemConfigStatus } from './types';
+import { WelcomePage } from './components/WelcomePage';
+import { JobRecord, JobSettings } from './types';
 import {
   uploadVideoJob,
   getJob,
-  getSystemConfigStatus,
   subscribeToJobUpdates,
   getEntitlement,
   activatePurchase,
@@ -27,7 +25,8 @@ import {
 } from './lib/usage';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'studio' | 'history' | 'status' | 'pricing'>('studio');
+  const [activeTab, setActiveTab] = useState<'welcome' | 'studio' | 'history' | 'pricing'>('welcome');
+
   const [usageStats, setUsageStats] = useState(getUsageStats());
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
@@ -48,28 +47,7 @@ export function App() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
 
-  const [configStatus, setConfigStatus] = useState<SystemConfigStatus | null>(null);
-  const [isConfigModalOpen, setIsConfigModalOpen] = useState(false);
-  const [configLoading, setConfigLoading] = useState(false);
-
   const sseUnsubscribeRef = useRef<(() => void) | null>(null);
-
-  // Fetch system config on load
-  const loadConfig = async () => {
-    try {
-      setConfigLoading(true);
-      const data = await getSystemConfigStatus();
-      setConfigStatus(data);
-    } catch (err) {
-      console.warn('Failed to load system config status:', err);
-    } finally {
-      setConfigLoading(false);
-    }
-  };
-
-  useEffect(() => {
-    loadConfig();
-  }, []);
 
   /**
    * Re-check the Pro plan for the email remembered on this device. Right after a
@@ -253,15 +231,17 @@ export function App() {
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        configStatus={configStatus}
-        onOpenConfig={() => {
-          loadConfig();
-          setIsConfigModalOpen(true);
-        }}
+        /* The tab bar belongs to the app, not to the welcome screen. */
+        showNav={activeTab !== 'welcome'}
       />
 
       {/* Main Content Area */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-8">
+      <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 space-y-6 sm:space-y-8">
+        {/* Welcome / landing screen */}
+        {activeTab === 'welcome' && (
+          <WelcomePage onEnterApp={() => setActiveTab('studio')} />
+        )}
+
         {activeTab === 'studio' && (
           <>
             {/* If no job in progress or finished, show Upload & Settings */}
@@ -332,17 +312,9 @@ export function App() {
         )}
       </main>
 
-      {/* System Status / Admin Configuration Modal */}
-      <ConfigModal
-        isOpen={isConfigModalOpen}
-        onClose={() => setIsConfigModalOpen(false)}
-        config={configStatus}
-        loading={configLoading}
-      />
-
       {/* Modern Minimal Footer */}
-      <footer className="border-t border-slate-900 py-6 px-4 text-center text-xs text-slate-400">
-        <p>KhmerDub AI • Professional AI Video Translation & Cambodian Khmer Dubbing Platform</p>
+      <footer className="border-t border-slate-900 py-6 px-4 pb-8 text-center text-[11px] sm:text-xs text-slate-400 leading-relaxed">
+        <p>KhmerDub AI • Professional AI Video Translation &amp; Cambodian Khmer Dubbing Platform</p>
       </footer>
     </div>
   );
