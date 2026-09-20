@@ -110,5 +110,7 @@ export const GoogleSignInButton: React.FC<GoogleSignInButtonProps> = ({
     };
   }, [clientId, text]);
 
-  return <div ref={containerRef} className="flex justify-center min-h-[44px]" />;
+  /* overflow-hidden keeps Google's fixed-width iframe from pushing the page wide
+     on small phones. */
+  return <div ref={containerRef} className="flex justify-center min-h-[44px] max-w-full overflow-hidden" />;
 };
