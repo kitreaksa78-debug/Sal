@@ -14,13 +14,16 @@ import {
   subscribeToJobUpdates,
   getEntitlement,
   activatePurchase,
+  SignedInUser,
 } from './lib/api';
+import { getSignedInUser, saveSignedInUser, clearSignedInUser } from './lib/auth';
 import {
   canUseFreePlan,
   canProcessVideo,
   recordUsage,
   getUsageStats,
   getAccountEmail,
+  getPlan,
   setPlan,
 } from './lib/usage';
 
@@ -28,6 +31,7 @@ export function App() {
   const [activeTab, setActiveTab] = useState<'welcome' | 'studio' | 'history' | 'pricing'>('welcome');
 
   const [usageStats, setUsageStats] = useState(getUsageStats());
+  const [user, setUser] = useState<SignedInUser | null>(getSignedInUser());
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
@@ -205,6 +209,21 @@ export function App() {
     }
   };
 
+  /** Google sign-in succeeded — the server has already stored the account. */
+  const handleSignedIn = (account: SignedInUser) => {
+    saveSignedInUser(account);
+    setUser(account);
+    // The signed-in email is also what Pro purchases are verified against.
+    if (account.email) setPlan(getPlan(), account.email);
+    setUsageStats(getUsageStats());
+  };
+
+  const handleSignOut = () => {
+    clearSignedInUser();
+    setUser(null);
+    setActiveTab('welcome');
+  };
+
   const handleReset = () => {
     if (sseUnsubscribeRef.current) {
       sseUnsubscribeRef.current();
@@ -233,13 +252,19 @@ export function App() {
         setActiveTab={setActiveTab}
         /* The tab bar belongs to the app, not to the welcome screen. */
         showNav={activeTab !== 'welcome'}
+        user={user}
+        onSignOut={handleSignOut}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 space-y-6 sm:space-y-8">
         {/* Welcome / landing screen */}
         {activeTab === 'welcome' && (
-          <WelcomePage onEnterApp={() => setActiveTab('studio')} />
+          <WelcomePage
+            onEnterApp={() => setActiveTab('studio')}
+            user={user}
+            onSignedIn={handleSignedIn}
+          />
         )}
 
         {activeTab === 'studio' && (

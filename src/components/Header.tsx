@@ -1,5 +1,6 @@
 import React from 'react';
-import { Volume2, Sparkles, History, Crown, type LucideIcon } from 'lucide-react';
+import { Volume2, Sparkles, History, Crown, LogOut, type LucideIcon } from 'lucide-react';
+import type { SignedInUser } from '../lib/api';
 
 type Tab = 'welcome' | 'studio' | 'history' | 'pricing';
 
@@ -11,6 +12,9 @@ interface HeaderProps {
    * so the landing page is nothing but the brand and its one CTA.
    */
   showNav?: boolean;
+  /** The Google account saved for this device. */
+  user?: SignedInUser | null;
+  onSignOut?: () => void;
 }
 
 const NAV_ITEMS: { id: Exclude<Tab, 'welcome'>; label: string; Icon: LucideIcon }[] = [
@@ -19,7 +23,13 @@ const NAV_ITEMS: { id: Exclude<Tab, 'welcome'>; label: string; Icon: LucideIcon 
   { id: 'pricing', label: 'Pro', Icon: Crown },
 ];
 
-export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, showNav = true }) => {
+export const Header: React.FC<HeaderProps> = ({
+  activeTab,
+  setActiveTab,
+  showNav = true,
+  user,
+  onSignOut,
+}) => {
   const tabClass = (isActive: boolean) =>
     `flex items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-colors min-h-[44px] ${
       isActive
@@ -59,6 +69,39 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, showNav
             </span>
           </div>
 
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Signed-in account — proof the Google sign-in was stored */}
+            {user && (
+              <div className="flex items-center gap-2 rounded-full border border-slate-800 bg-slate-900/70 pl-1 pr-1.5 py-1">
+                {user.picture ? (
+                  <img
+                    src={user.picture}
+                    alt=""
+                    referrerPolicy="no-referrer"
+                    className="w-7 h-7 rounded-full border border-emerald-500/30"
+                  />
+                ) : (
+                  <span className="w-7 h-7 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 text-xs font-bold flex items-center justify-center">
+                    {user.name.charAt(0).toUpperCase()}
+                  </span>
+                )}
+                <span className="hidden sm:block text-[11px] text-slate-300 max-w-[110px] truncate">
+                  {user.name}
+                </span>
+                {onSignOut && (
+                  <button
+                    type="button"
+                    onClick={onSignOut}
+                    title="ចាកចេញ (Sign out)"
+                    aria-label="ចាកចេញ (Sign out)"
+                    className="w-7 h-7 rounded-full text-slate-400 hover:text-rose-300 hover:bg-slate-800 flex items-center justify-center transition-colors"
+                  >
+                    <LogOut className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            )}
+
           {/* Desktop navigation */}
           {showNav && (
             <nav className="hidden md:flex items-center gap-1.5 shrink-0">
@@ -75,6 +118,7 @@ export const Header: React.FC<HeaderProps> = ({ activeTab, setActiveTab, showNav
               ))}
             </nav>
           )}
+          </div>
         </div>
 
         {/* Phone / tablet navigation: one full-width segmented row under the brand */}

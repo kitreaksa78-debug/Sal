@@ -77,36 +77,31 @@ export interface JobRecord {
   completedAt?: string;
 }
 
-export type ContactPlan = 'free' | 'pro';
-
 /**
- * A visitor who contacted us from the welcome screen. Stored next to the job
- * history so the list survives the ephemeral restarts of free hosts.
+ * An account created by signing in with Google. Stored next to the job history
+ * so the user list survives the ephemeral restarts of free hosts.
  */
-export interface ContactRecord {
+export interface UserRecord {
+  /** Google account id ("sub") — stable for the life of the account. */
   id: string;
-  name: string;
   email: string;
-  message: string;
-  plan: ContactPlan;
-  /** Where the record came from, e.g. "welcome". */
-  source: string;
-  /** Random id kept in the visitor's browser so repeat visits are recognisable. */
-  deviceId: string;
-  /** How many times this email has written to us. */
-  times: number;
+  name: string;
+  picture?: string;
+  emailVerified: boolean;
+  /** How many times this account has signed in. */
+  logins: number;
+  /** First and latest sign-in, so the list can show new vs returning users. */
   createdAt: string;
-  updatedAt: string;
+  lastLoginAt: string;
 }
 
-/** What the client sends; the server fills in the id and the timestamps. */
-export interface NewContact {
-  name: string;
+/** The verified Google profile the server received for a sign-in. */
+export interface GoogleProfile {
+  id: string;
   email: string;
-  message?: string;
-  plan?: ContactPlan;
-  source?: string;
-  deviceId?: string;
+  name: string;
+  picture?: string;
+  emailVerified: boolean;
 }
 
 export interface SystemConfigStatus {

@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { CheckCircle2, KeyRound, Loader2, AlertCircle, Crown } from 'lucide-react';
 import { activatePurchase } from '../lib/api';
 import { getAccountEmail, getPlan, setPlan } from '../lib/usage';
+import { getSignedInUser } from '../lib/auth';
 
 interface ProActivateProps {
   /** Called after the plan changes so the rest of the app can refresh. */
@@ -14,7 +15,8 @@ interface ProActivateProps {
  * against LemonSqueezy before unlocking.
  */
 export const ProActivate: React.FC<ProActivateProps> = ({ onPlanChange }) => {
-  const [email, setEmail] = useState(getAccountEmail() ?? '');
+  // Default to the Google account that signed in, so the buyer only confirms.
+  const [email, setEmail] = useState(getAccountEmail() ?? getSignedInUser()?.email ?? '');
   const [state, setState] = useState<'idle' | 'checking' | 'granted' | 'notFound' | 'error'>('idle');
   const [message, setMessage] = useState('');
 

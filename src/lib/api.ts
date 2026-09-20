@@ -179,60 +179,54 @@ export async function getEntitlement(email: string): Promise<Entitlement> {
   return (await res.json()) as Entitlement;
 }
 
-// ------------------------------------------------------------------ contact
+// ---------------------------------------------------------------------- auth
 
-export interface ContactPayload {
-  name: string;
+export interface SignedInUser {
+  /** Google account id ("sub"). */
+  id: string;
   email: string;
-  message?: string;
-  plan?: Plan;
-  source?: string;
-  deviceId?: string;
+  name: string;
+  picture?: string;
+  emailVerified: boolean;
+  logins: number;
+  createdAt: string;
+  lastLoginAt: string;
 }
 
-export interface ContactRecord {
-  id: string;
-  name: string;
-  email: string;
-  message: string;
-  plan: Plan;
-  source: string;
-  deviceId: string;
-  times: number;
-  createdAt: string;
-  updatedAt: string;
+/** Whether Google sign-in is ready, and the public client id it needs. */
+export async function getAuthConfig(): Promise<{ configured: boolean; clientId: string | null }> {
+  const res = await fetch(`${API_BASE}/auth/config`);
+  if (!res.ok) throw new Error('Failed to fetch auth configuration');
+  const data = (await res.json()) as { google?: { configured?: boolean; clientId?: string | null } };
+  return {
+    configured: Boolean(data.google?.configured),
+    clientId: data.google?.clientId ?? null,
+  };
 }
 
 /**
- * Store the user before Gmail opens, so the visitor is saved on the server as
- * well as in their inbox draft.
+ * Exchange the Google ID token for a stored account. The server verifies the
+ * token with Google before saving, so the browser cannot fake a sign-in.
  */
-export async function saveContact(
-  payload: ContactPayload
-): Promise<{ ok: boolean; contact: ContactRecord; total: number }> {
-  const res = await fetch(`${API_BASE}/contact`, {
+export async function signInWithGoogle(credential: string): Promise<SignedInUser> {
+  const res = await fetch(`${API_BASE}/auth/google`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload),
+    body: JSON.stringify({ credential }),
   });
-  const data = (await res.json()) as {
-    ok?: boolean;
-    contact?: ContactRecord;
-    total?: number;
-    error?: string;
-  };
-  if (!res.ok || !data.contact) {
-    throw new Error(data.error || 'Failed to save contact');
+  const data = (await res.json()) as { user?: SignedInUser; error?: string };
+  if (!res.ok || !data.user) {
+    throw new Error(data.error || 'Google sign-in failed');
   }
-  return { ok: true, contact: data.contact, total: data.total ?? 0 };
+  return data.user;
 }
 
-/** Every saved user, newest first. */
-export async function listContacts(limit = 200): Promise<ContactRecord[]> {
-  const res = await fetch(`${API_BASE}/contact?limit=${limit}`);
-  if (!res.ok) throw new Error('Failed to fetch contacts');
-  const data = (await res.json()) as { contacts?: ContactRecord[] };
-  return data.contacts || [];
+/** Every saved account, newest login first. */
+export async function listUsers(limit = 200): Promise<SignedInUser[]> {
+  const res = await fetch(`${API_BASE}/auth/users?limit=${limit}`);
+  if (!res.ok) throw new Error('Failed to fetch users');
+  const data = (await res.json()) as { users?: SignedInUser[] };
+  return data.users || [];
 }
 
 /** Verify a purchase by the buyer's email (also used to restore access). */

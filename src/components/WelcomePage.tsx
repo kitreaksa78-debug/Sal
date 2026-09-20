@@ -1,37 +1,9 @@
-import React, { useState } from 'react';
-import { ArrowRight, Crown, Mail, Sparkles, Zap } from 'lucide-react';
-import { getUsageStats, getPlan } from '../lib/usage';
-import {
-  ContactProfile,
-  gmailComposeUrl,
-  getContactProfile,
-  getDeviceId,
-  isValidEmail,
-  saveContactProfile,
-} from '../lib/contact';
-import { saveContact } from '../lib/api';
-
-/** Google "G" mark, inlined so the button needs no extra request. */
-const GoogleG: React.FC<{ className?: string }> = ({ className = 'w-4 h-4' }) => (
-  <svg className={className} viewBox="0 0 48 48" aria-hidden="true" focusable="false">
-    <path
-      fill="#FFC107"
-      d="M43.611 20.083H42V20H24v8h11.303c-1.649 4.657-6.08 8-11.303 8-6.627 0-12-5.373-12-12s5.373-12 12-12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 12.955 4 4 12.955 4 24s8.955 20 20 20 20-8.955 20-20c0-1.341-.138-2.65-.389-3.917z"
-    />
-    <path
-      fill="#FF3D00"
-      d="M6.306 14.691l6.571 4.819C14.655 15.108 18.961 12 24 12c3.059 0 5.842 1.154 7.961 3.039l5.657-5.657C34.046 6.053 29.268 4 24 4 16.318 4 9.656 8.337 6.306 14.691z"
-    />
-    <path
-      fill="#4CAF50"
-      d="M24 44c5.166 0 9.86-1.977 13.409-5.192l-6.19-5.238C29.211 35.091 26.715 36 24 36c-5.202 0-9.619-3.317-11.283-7.946l-6.522 5.025C9.505 39.556 16.227 44 24 44z"
-    />
-    <path
-      fill="#1976D2"
-      d="M43.611 20.083H42V20H24v8h11.303c-.792 2.237-2.231 4.166-4.087 5.571l6.19 5.238C36.971 39.205 44 34 44 24c0-1.341-.138-2.65-.389-3.917z"
-    />
-  </svg>
-);
+import React, { useEffect, useState } from 'react';
+import { AlertCircle, ArrowRight, CheckCircle2, Crown, Mail, Sparkles, Zap } from 'lucide-react';
+import { getUsageStats } from '../lib/usage';
+import { CONTACT_EMAIL, gmailComposeUrl } from '../lib/contact';
+import { getAuthConfig, signInWithGoogle, SignedInUser } from '../lib/api';
+import { GoogleSignInButton } from './GoogleSignInButton';
 
 interface WelcomePageProps {
   /**
@@ -39,76 +11,72 @@ interface WelcomePageProps {
    * bar) only shows once the visitor is inside the app.
    */
   onEnterApp?: () => void;
+  /** The Google account signed in on this device, if any. */
+  user?: SignedInUser | null;
+  /** Called after a successful Google sign-in so the app can remember it. */
+  onSignedIn?: (user: SignedInUser) => void;
 }
 
-type Status = { kind: 'saved' | 'error' | 'warning'; text: string };
+type Status = { kind: 'saved' | 'error' | 'info'; text: string };
 
-const FIELD_CLASS =
-  'w-full px-3.5 py-3 rounded-xl bg-[#0b1220] border border-slate-700 text-white text-sm placeholder:text-slate-500 focus:outline-none focus:ring-2 focus:ring-emerald-500/60 focus:border-emerald-500/60 transition-colors min-h-[48px]';
-
-export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp }) => {
-  // Step 1: only "Get started". Step 2 (after the click): contact with Google.
+export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSignedIn }) => {
+  // Step 1: only "Get started". Step 2 (after the click): sign in with Google.
   const [showContact, setShowContact] = useState(false);
-  const [profile, setProfile] = useState<ContactProfile>(getContactProfile());
+  const [authConfig, setAuthConfig] = useState<{ configured: boolean; clientId: string | null } | null>(
+    null
+  );
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const stats = getUsageStats();
 
-  const handleStart = () => setShowContact(true);
+  // Only ask the server about Google sign-in once the visitor is past the CTA.
+  useEffect(() => {
+    if (!showContact || authConfig) return;
 
-  const update = (patch: Partial<ContactProfile>) =>
-    setProfile((current) => ({ ...current, ...patch }));
+    let cancelled = false;
+    getAuthConfig()
+      .then((config) => {
+        if (!cancelled) setAuthConfig(config);
+      })
+      .catch(() => {
+        if (!cancelled) setAuthConfig({ configured: false, clientId: null });
+      });
 
-  /**
-   * Opens the Gmail draft and stores the visitor. The tab is opened first, while
-   * the click is still a user gesture, so the popup blocker cannot cancel it; the
-   * save then runs in the background and reports back in the panel.
-   */
-  const handleContact = async () => {
-    const trimmed: ContactProfile = {
-      name: profile.name.trim(),
-      email: profile.email.trim(),
-      message: profile.message.trim(),
+    return () => {
+      cancelled = true;
     };
+  }, [showContact, authConfig]);
 
-    if (!trimmed.name) {
-      setStatus({ kind: 'error', text: 'សូមបញ្ចូលឈ្មោះរបស់អ្នក។' });
-      return;
-    }
-    if (!isValidEmail(trimmed.email)) {
-      setStatus({ kind: 'error', text: 'សូមបញ្ចូលអ៊ីមែលត្រឹមត្រូវ (ឧ. name@gmail.com)។' });
-      return;
-    }
-
-    setStatus(null);
+  const handleCredential = async (credential: string) => {
     setBusy(true);
-    setProfile(trimmed);
-    // Remember the details on this device so the next visit is pre-filled.
-    saveContactProfile(trimmed);
-
-    window.open(gmailComposeUrl(trimmed, getPlan()), '_blank', 'noopener,noreferrer');
+    setStatus(null);
 
     try {
-      await saveContact({
-        name: trimmed.name,
-        email: trimmed.email,
-        message: trimmed.message,
-        plan: getPlan(),
-        source: 'welcome',
-        deviceId: getDeviceId(),
-      });
+      const account = await signInWithGoogle(credential);
+      onSignedIn?.(account);
       setStatus({
         kind: 'saved',
-        text: 'បានរក្សាទុកទិន្នន័យរបស់អ្នករួចរាល់ ✓ សូមចុចផ្ញើនៅក្នុងផ្ទាំង Gmail ថ្មី។',
+        text: `បានរក្សាទុកគណនីរបស់អ្នករួចរាល់ ✓ (${account.email})`,
       });
-    } catch {
+    } catch (err) {
       setStatus({
-        kind: 'warning',
-        text: 'មិនអាចរក្សាទុកលើម៉ាស៊ីនបម្រើបានទេ ប៉ុន្តែអ្នកនៅតែអាចផ្ញើអ៊ីមែលនៅក្នុងផ្ទាំងថ្មី។',
+        kind: 'error',
+        text:
+          err instanceof Error && err.message
+            ? err.message
+            : 'ការចូលដោយ Google បរាជ័យ។ សូមព្យាយាមម្តងទៀត។',
       });
     } finally {
       setBusy(false);
     }
+  };
+
+  const openGmail = () => {
+    window.open(
+      gmailComposeUrl(user ? { name: user.name, email: user.email } : null),
+      '_blank',
+      'noopener,noreferrer'
+    );
   };
 
   return (
@@ -136,7 +104,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp }) => {
             <div className="mt-8">
               <button
                 type="button"
-                onClick={handleStart}
+                onClick={() => setShowContact(true)}
                 className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold text-base sm:text-lg shadow-lg shadow-emerald-500/25 active:scale-95 transition-all min-h-[56px] w-full sm:w-auto"
               >
                 <Zap className="w-5 h-5 shrink-0" />
@@ -164,94 +132,92 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp }) => {
                   <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 flex items-center justify-center shrink-0">
                     <Mail className="w-5 h-5" />
                   </div>
-                  <h3 className="text-base sm:text-lg font-bold text-white">Contact with Google</h3>
+                  <h3 className="text-base sm:text-lg font-bold text-white">
+                    {user ? 'គណនី Google របស់អ្នក' : 'ចូលដោយ Google'}
+                  </h3>
                 </div>
 
-                <p className="mt-3 text-xs sm:text-sm text-slate-400 leading-relaxed">
-                  បំពេញព័ត៌មានខាងក្រោម រួចចុច <span className="text-slate-200 font-semibold">Contact with Google</span> —
-                  ទិន្នន័យរបស់អ្នកនឹងត្រូវបានរក្សាទុក ហើយ Gmail នឹងបើកឡើងជាមួយសារដែលសរសេររួច។
-                </p>
-
-                <div className="mt-4 space-y-3">
-                  <div>
-                    <label
-                      htmlFor="contact-name"
-                      className="block mb-1.5 text-[11px] sm:text-xs font-semibold text-slate-300"
-                    >
-                      ឈ្មោះរបស់អ្នក (Your name)
-                    </label>
-                    <input
-                      id="contact-name"
-                      type="text"
-                      autoComplete="name"
-                      value={profile.name}
-                      onChange={(e) => update({ name: e.target.value })}
-                      placeholder="ឧ. សុខ ដារា"
-                      className={FIELD_CLASS}
-                    />
+                {user ? (
+                  /* Signed in — show the saved account. */
+                  <div className="mt-4 flex items-center gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3.5">
+                    {user.picture ? (
+                      <img
+                        src={user.picture}
+                        alt=""
+                        referrerPolicy="no-referrer"
+                        className="w-10 h-10 rounded-full border border-emerald-500/30 shrink-0"
+                      />
+                    ) : (
+                      <div className="w-10 h-10 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 font-bold flex items-center justify-center shrink-0">
+                        {user.name.charAt(0).toUpperCase()}
+                      </div>
+                    )}
+                    <div className="min-w-0">
+                      <p className="text-sm font-semibold text-white truncate">{user.name}</p>
+                      <p className="text-[11px] sm:text-xs text-slate-400 truncate">{user.email}</p>
+                    </div>
                   </div>
+                ) : (
+                  <>
+                    <p className="mt-3 text-xs sm:text-sm text-slate-400 leading-relaxed">
+                      ចូលដោយគណនី Google ដើម្បីរក្សាទុកគណនីរបស់អ្នក — ឈ្មោះ និងអ៊ីមែលនឹងត្រូវបាន
+                      រក្សាទុកដោយស្វ័យប្រវត្តិ។
+                    </p>
 
-                  <div>
-                    <label
-                      htmlFor="contact-email"
-                      className="block mb-1.5 text-[11px] sm:text-xs font-semibold text-slate-300"
-                    >
-                      អ៊ីមែល (Email)
-                    </label>
-                    <input
-                      id="contact-email"
-                      type="email"
-                      inputMode="email"
-                      autoComplete="email"
-                      value={profile.email}
-                      onChange={(e) => update({ email: e.target.value })}
-                      placeholder="you@gmail.com"
-                      className={FIELD_CLASS}
-                    />
-                  </div>
+                    <div className="mt-5">
+                      {authConfig?.configured && authConfig.clientId ? (
+                        <GoogleSignInButton
+                          clientId={authConfig.clientId}
+                          onCredential={handleCredential}
+                          onUnavailable={(text) => setStatus({ kind: 'error', text })}
+                        />
+                      ) : authConfig ? (
+                        <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3.5 flex items-start gap-2.5">
+                          <AlertCircle className="w-4 h-4 text-amber-400 mt-0.5 shrink-0" />
+                          <p className="text-[11px] sm:text-xs text-amber-200 leading-relaxed">
+                            Google sign-in មិនទាន់បានភ្ជាប់ទេ។ ត្រូវការ{' '}
+                            <span className="font-semibold">GOOGLE_CLIENT_ID</span> ក្នុង
+                            Settings → Environment នៃ Render។
+                          </p>
+                        </div>
+                      ) : (
+                        <p className="text-xs text-slate-500">កំពុងពិនិត្យ Google sign-in…</p>
+                      )}
+                    </div>
 
-                  <div>
-                    <label
-                      htmlFor="contact-message"
-                      className="block mb-1.5 text-[11px] sm:text-xs font-semibold text-slate-300"
-                    >
-                      សាររបស់អ្នក (Message)
-                    </label>
-                    <textarea
-                      id="contact-message"
-                      rows={3}
-                      value={profile.message}
-                      onChange={(e) => update({ message: e.target.value })}
-                      placeholder="ខ្ញុំចង់សួរអំពី…"
-                      className={`${FIELD_CLASS} resize-y`}
-                    />
-                  </div>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={handleContact}
-                  disabled={busy}
-                  className="mt-5 w-full inline-flex items-center justify-center gap-2.5 px-5 py-3.5 rounded-xl bg-white text-slate-800 font-semibold border border-slate-200 hover:bg-slate-100 active:scale-95 transition-all min-h-[52px] disabled:opacity-70 disabled:cursor-wait"
-                >
-                  <GoogleG className="w-5 h-5 shrink-0" />
-                  <span>{busy ? 'កំពុងរក្សាទុក…' : 'Contact with Google'}</span>
-                </button>
+                    {busy && (
+                      <p className="mt-3 text-xs text-emerald-300">កំពុងរក្សាទុកគណនី…</p>
+                    )}
+                  </>
+                )}
 
                 {status && (
                   <p
-                    className={`mt-3 text-[11px] sm:text-xs leading-relaxed ${
+                    className={`mt-3 flex items-start gap-1.5 text-[11px] sm:text-xs leading-relaxed ${
                       status.kind === 'saved'
                         ? 'text-emerald-300'
-                        : status.kind === 'warning'
-                          ? 'text-amber-300'
-                          : 'text-rose-300'
+                        : status.kind === 'error'
+                          ? 'text-rose-300'
+                          : 'text-slate-400'
                     }`}
                     role="status"
                   >
-                    {status.text}
+                    {status.kind === 'saved' && (
+                      <CheckCircle2 className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+                    )}
+                    <span>{status.text}</span>
                   </p>
                 )}
+
+                {/* The one other Google action: a prefilled Gmail draft. */}
+                <button
+                  type="button"
+                  onClick={openGmail}
+                  className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-slate-700 text-slate-300 text-xs sm:text-sm font-medium hover:bg-slate-800/60 hover:text-white active:scale-95 transition-all min-h-[48px]"
+                >
+                  <Mail className="w-4 h-4 shrink-0" />
+                  <span>Contact with Google · {CONTACT_EMAIL}</span>
+                </button>
               </div>
 
               {/* The only way off this screen — the tab bar stays hidden until here */}
