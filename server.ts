@@ -6,13 +6,19 @@ import { createServer as createViteServer } from 'vite';
 import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
+import billingRouter, { handleLemonSqueezyWebhook } from './server/routes/billing.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
 import { getDatabase } from './server/services/db.js';
+import { getBilling } from './server/services/billing.js';
 
 const app = express();
 // Honour the port injected by the host, falling back to 3000 for local runs.
 const PORT = Number(process.env.PORT) || 3000;
+
+// Must be mounted before the JSON parser: the LemonSqueezy webhook signature is
+// an HMAC over the exact request bytes, so the body has to stay raw.
+app.post('/api/billing/webhook', express.raw({ type: '*/*', limit: '2mb' }), handleLemonSqueezyWebhook);
 
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
@@ -30,11 +36,15 @@ app.get('/api/health', (req, res) => {
 app.use('/api/jobs', jobsRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/config', configRouter);
+app.use('/api/billing', billingRouter);
 
 async function startServer() {
   // Recover job history from object storage: hosts like Render free wipe the local
   // disk on every restart, but uploads and results live on in Cloudflare R2.
   await getDatabase().hydrateFromRemote();
+  // Pro entitlements live in object storage too, so paying customers keep access
+  // across the restarts that free hosts perform.
+  await getBilling().hydrateFromRemote();
 
   // Check system dependencies on start
   const ffmpegInfo = await FFmpegHelper.checkAvailability();

@@ -128,3 +128,65 @@ export function getAudioDownloadUrl(jobId: string): string {
 export function getMediaFileUrl(category: 'uploads' | 'outputs', filename: string): string {
   return `${API_BASE}/files/${category}/${encodeURIComponent(filename)}`;
 }
+
+// ------------------------------------------------------------------ billing
+
+export type Plan = 'free' | 'pro';
+
+export interface BillingConfig {
+  configured: boolean;
+  webhookConfigured: boolean;
+  storeName?: string;
+  storeUrl?: string;
+  currency?: string;
+  testMode: boolean;
+  product?: {
+    productId: string;
+    productName: string;
+    variantId: string;
+    isSubscription: boolean;
+    interval: string | null;
+    intervalCount: number | null;
+  };
+  missing: string[];
+  checkoutUrl: string | null;
+}
+
+export interface Entitlement {
+  email: string;
+  plan: Plan;
+  status: string;
+  renewsAt?: string | null;
+}
+
+/** Cached briefly: the checkout URL only changes when the product changes. */
+let billingCache: { data: BillingConfig; at: number } | null = null;
+
+export async function getBillingConfig(force = false): Promise<BillingConfig> {
+  if (!force && billingCache && Date.now() - billingCache.at < 60_000) {
+    return billingCache.data;
+  }
+  const res = await fetch(`${API_BASE}/billing/plans${force ? '?refresh=1' : ''}`);
+  if (!res.ok) throw new Error('Failed to fetch billing configuration');
+  const data = (await res.json()) as BillingConfig;
+  billingCache = { data, at: Date.now() };
+  return data;
+}
+
+export async function getEntitlement(email: string): Promise<Entitlement> {
+  const res = await fetch(`${API_BASE}/billing/entitlement?email=${encodeURIComponent(email)}`);
+  if (!res.ok) throw new Error('Failed to fetch entitlement');
+  return (await res.json()) as Entitlement;
+}
+
+/** Verify a purchase by the buyer's email (also used to restore access). */
+export async function activatePurchase(email: string): Promise<Entitlement> {
+  const res = await fetch(`${API_BASE}/billing/activate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email }),
+  });
+  const data = (await res.json()) as Entitlement & { error?: string };
+  if (!res.ok) throw new Error(data.error || 'Activation failed');
+  return data;
+}

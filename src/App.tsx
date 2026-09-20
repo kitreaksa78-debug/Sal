@@ -9,8 +9,22 @@ import { ConfigModal } from './components/ConfigModal';
 import { PricingPage } from './components/PricingPage';
 import { UsageBanner } from './components/UsageBanner';
 import { JobRecord, JobSettings, SystemConfigStatus } from './types';
-import { uploadVideoJob, getJob, getSystemConfigStatus, subscribeToJobUpdates } from './lib/api';
-import { canUseFreePlan, canProcessVideo, recordUsage, getUsageStats } from './lib/usage';
+import {
+  uploadVideoJob,
+  getJob,
+  getSystemConfigStatus,
+  subscribeToJobUpdates,
+  getEntitlement,
+  activatePurchase,
+} from './lib/api';
+import {
+  canUseFreePlan,
+  canProcessVideo,
+  recordUsage,
+  getUsageStats,
+  getAccountEmail,
+  setPlan,
+} from './lib/usage';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'studio' | 'history' | 'status' | 'pricing'>('studio');
@@ -55,6 +69,47 @@ export function App() {
 
   useEffect(() => {
     loadConfig();
+  }, []);
+
+  /**
+   * Re-check the Pro plan for the email remembered on this device. Right after a
+   * checkout the webhook may not have landed yet, so that path asks the billing
+   * API to confirm the purchase directly instead of trusting local state.
+   */
+  const refreshPlan = async (fromCheckout: boolean) => {
+    const email = getAccountEmail();
+    if (!email) return;
+    try {
+      if (fromCheckout) {
+        const result = await activatePurchase(email);
+        setPlan(result.plan, result.email);
+      } else {
+        const result = await getEntitlement(email);
+        setPlan(result.plan);
+      }
+    } catch {
+      // Keep the plan already stored on this device; the billing page can retry.
+    } finally {
+      setUsageStats(getUsageStats());
+    }
+  };
+
+  // LemonSqueezy sends the buyer back with ?upgraded=1 after a successful payment.
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const fromCheckout = params.get('upgraded') === '1';
+    void refreshPlan(fromCheckout);
+    if (fromCheckout) {
+      params.delete('upgraded');
+      const query = params.toString();
+      window.history.replaceState(
+        {},
+        '',
+        `${window.location.pathname}${query ? `?${query}` : ''}`
+      );
+    }
+    // Run once on mount.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Subscribe to SSE updates when a job is active
@@ -266,12 +321,13 @@ export function App() {
         {/* Pricing Tab */}
         {activeTab === 'pricing' && (
           <div className="animate-in fade-in duration-300">
-            <PricingPage onSelectPlan={(plan) => {
-              if (plan === 'free') {
-                setActiveTab('studio');
-              }
-              // Pro plan opens LemonSqueezy checkout
-            }} />
+            <PricingPage
+              onSelectPlan={(plan) => {
+                if (plan === 'free') setActiveTab('studio');
+                // The Pro button opens the LemonSqueezy checkout itself.
+              }}
+              onPlanChange={() => setUsageStats(getUsageStats())}
+            />
           </div>
         )}
       </main>

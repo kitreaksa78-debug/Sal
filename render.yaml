@@ -45,3 +45,17 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
+
+      # Billing (LemonSqueezy). The API key is read-only and lets the server
+      # resolve the checkout URL itself, so no buy link has to be hardcoded.
+      - key: LEMONSQUEEZY_API_KEY
+        sync: false
+      - key: LEMONSQUEEZY_STORE_ID
+        sync: false
+      # Signing secret from LemonSqueezy -> Settings -> Webhooks. Without it the
+      # webhook is refused and purchases are confirmed by email instead.
+      - key: LEMONSQUEEZY_WEBHOOK_SECRET
+        sync: false
+      # Where buyers land after paying (used for the checkout redirect).
+      - key: PUBLIC_APP_URL
+        value: https://khmerdub-ai.pages.dev

@@ -1,11 +1,17 @@
 import React from 'react';
 import { Check, Zap, Crown, Video, Clock, Download, Headphones } from 'lucide-react';
+import { CheckoutButton } from './CheckoutButton';
+import { ProActivate } from './ProActivate';
+import { getPlan, PRO_PRICE_USD } from '../lib/usage';
 
 interface PricingPageProps {
   onSelectPlan?: (plan: 'free' | 'pro') => void;
+  onPlanChange?: (plan: 'free' | 'pro') => void;
 }
 
-export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan }) => {
+export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan, onPlanChange }) => {
+  const isPro = getPlan() === 'pro';
+
   return (
     <div className="max-w-5xl mx-auto py-12 px-4">
       {/* Header */}
@@ -60,7 +66,7 @@ export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan }) => {
             onClick={() => onSelectPlan?.('free')}
             className="w-full py-3 px-6 rounded-xl border border-slate-700 text-white font-semibold hover:bg-slate-800 transition-colors"
           >
-            ចាប់ផ្តើមឥតគិតថ្លៃ
+            {isPro ? 'បន្តប្រើប្រាស់' : 'ចាប់ផ្តើមឥតគិតថ្លៃ'}
           </button>
         </div>
 
@@ -80,7 +86,7 @@ export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan }) => {
             </div>
             <h3 className="text-2xl font-bold text-white">Pro</h3>
             <div className="mt-2">
-              <span className="text-4xl font-bold text-white">$9.99</span>
+              <span className="text-4xl font-bold text-white">${PRO_PRICE_USD}</span>
               <span className="text-slate-400 ml-2">/ខែ</span>
             </div>
           </div>
@@ -112,14 +118,13 @@ export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan }) => {
             </li>
           </ul>
 
-          <button
-            onClick={() => onSelectPlan?.('pro')}
-            className="w-full py-3 px-6 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-semibold hover:from-emerald-600 hover:to-teal-600 transition-all shadow-lg shadow-emerald-500/25"
-          >
-            <Zap className="w-4 h-4 inline mr-2" />
-            Upgrade to Pro
-          </button>
+          <CheckoutButton className="w-full" />
         </div>
+      </div>
+
+      {/* Restore a purchase / unlock on another device */}
+      <div className="mt-10 max-w-4xl mx-auto">
+        <ProActivate onPlanChange={onPlanChange} />
       </div>
 
       {/* Features Comparison */}
