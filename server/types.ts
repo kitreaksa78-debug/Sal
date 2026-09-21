@@ -73,6 +73,12 @@ export interface JobSettings {
   translationStyle: 'natural' | 'formal';
   smartVoice: boolean;
   sourceLanguage?: SourceLanguage;
+  /**
+   * Brand glossary: names, brands and technical terms the translator must leave
+   * alone. One entry per line — a bare term is kept verbatim in the Khmer line,
+   * `term = translation` forces one exact Khmer rendering instead.
+   */
+  glossary?: string;
 }
 
 export interface VideoMetadata {

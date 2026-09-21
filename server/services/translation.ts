@@ -43,6 +43,97 @@ export function hasWrongScript(text: string): boolean {
   return THAI_OR_LAO_SCRIPT.test(text);
 }
 
+/** A parsed brand glossary: terms to keep verbatim, plus terms with a fixed Khmer form. */
+export interface Glossary {
+  /** Written exactly as given inside the Khmer line — never translated or transliterated. */
+  keep: string[];
+  /** Always rendered with this one Khmer phrase. */
+  forced: { term: string; translation: string }[];
+}
+
+/** Enough room for a real product's names without bloating every request. */
+const MAX_GLOSSARY_ENTRIES = 200;
+const MAX_GLOSSARY_TERM_LENGTH = 80;
+
+/**
+ * Reads the glossary the studio sends: one entry per line, `#` for comments.
+ *
+ *   Google            -> kept verbatim in the Khmer sentence
+ *   CEO = នាយកប្រតិបត្តិ  -> always rendered with this exact Khmer phrase
+ */
+export function parseGlossary(raw?: string | null): Glossary {
+  const keep: string[] = [];
+  const forced: { term: string; translation: string }[] = [];
+  if (!raw) return { keep, forced };
+
+  const seen = new Set<string>();
+
+  for (const line of raw.split(/\r?\n/)) {
+    if (keep.length + forced.length >= MAX_GLOSSARY_ENTRIES) break;
+
+    const entry = line.trim().replace(/^[-*•]\s*/, '');
+    if (!entry || entry.startsWith('#')) continue;
+
+    // Any line carrying an `=` is a forced rendering. When it is malformed or
+    // repeats a term it is dropped, never re-read as a plain "keep" entry —
+    // "CEO = ..." is not a term anybody wants written verbatim in the dub.
+    const equals = entry.indexOf('=');
+    if (equals >= 0) {
+      const term = entry.slice(0, equals).trim();
+      const translation = entry.slice(equals + 1).trim();
+      const key = `f:${term.toLowerCase()}`;
+      if (!term || !translation || term.length > MAX_GLOSSARY_TERM_LENGTH || seen.has(key)) {
+        continue;
+      }
+      seen.add(key);
+      forced.push({ term, translation });
+      continue;
+    }
+
+    const key = `k:${entry.toLowerCase()}`;
+    if (entry.length <= MAX_GLOSSARY_TERM_LENGTH && !seen.has(key)) {
+      seen.add(key);
+      keep.push(entry);
+    }
+  }
+
+  return { keep, forced };
+}
+
+/** True when `text` contains `term` as a whole word, ignoring case. */
+export function containsTerm(text: string, term: string): boolean {
+  if (!text || !term) return false;
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`(^|[^\\p{L}\\p{N}])${escaped}($|[^\\p{L}\\p{N}])`, 'iu').test(text);
+}
+
+/** The prompt block that turns a parsed glossary into instructions. Empty when unused. */
+function buildGlossarySection(glossary: Glossary): string {
+  const { keep, forced } = glossary;
+  if (keep.length === 0 && forced.length === 0) return '';
+
+  const rules: string[] = [];
+  if (keep.length > 0) {
+    rules.push(
+      `- Write these exactly as shown, in their original script, inside the Khmer sentence. Never translate them, never rewrite them in Khmer characters, never "correct" their spelling: ${keep.join(
+        ', '
+      )}.`
+    );
+  }
+  if (forced.length > 0) {
+    rules.push(
+      `- Always render these with the given Khmer wording, even when the sentence could be phrased differently: ${forced
+        .map((f) => `"${f.term}" -> "${f.translation}"`)
+        .join(', ')}.`
+    );
+  }
+  rules.push(
+    '- Keeping these terms intact matters more than a smoother sentence: build the Khmer sentence around them.'
+  );
+
+  return `\nBRAND GLOSSARY — HIGHEST PRIORITY, APPLIES TO EVERY LINE:\n${rules.join('\n')}\n`;
+}
+
 /**
  * Pick the translation backend: an explicit TRANSLATION_PROVIDER wins, otherwise
  * whichever provider actually has a key configured.
@@ -147,6 +238,7 @@ export class KhmerDubTranslationService {
     }
 
     const systemInstruction = this.buildSystemInstruction(settings);
+    const glossary = parseGlossary(settings.glossary);
     const translations = new Map<string, { khmer: string; emotion?: string }>();
     const warnings: string[] = [];
     // Rolling window of already-translated lines so names, pronouns and terms
@@ -189,6 +281,7 @@ export class KhmerDubTranslationService {
         }
 
         await this.repairWrongScriptLines(chunk, translations, systemInstruction, warnings);
+        await this.enforceGlossary(chunk, translations, glossary, systemInstruction, warnings);
 
         if (missing > 0) {
           warnings.push(
@@ -249,8 +342,7 @@ export class KhmerDubTranslationService {
 
     return `You are a professional Cambodian Khmer dubbing director and translator for movies and videos.
 Your mission is to translate spoken ${sourceLanguage || 'English/original'} dialogue into natural, authentic spoken Cambodian Khmer (ភាសាខ្មែរនិយាយបែបធម្មជាតិ).
-${sourceLanguage ? `The dialogue you receive is ${sourceLanguage}. Read it as a native speaker of that language before translating, and keep proper names, numbers and units exactly as spoken.\n` : ''}
-
+${sourceLanguage ? `The dialogue you receive is ${sourceLanguage}. Read it as a native speaker of that language before translating, and keep proper names, numbers and units exactly as spoken.\n` : ''}${buildGlossarySection(parseGlossary(settings.glossary))}
 CRITICAL DUBBING TRANSLATION RULES:
 1. NEVER translate word-by-word if it sounds stiff, robotic, or unnatural.
 2. PRESERVE MEANING & EMOTIONAL CONTEXT: Translate into authentic Cambodian conversational phrases that actors actually speak in Cambodia.
@@ -261,6 +353,7 @@ CRITICAL DUBBING TRANSLATION RULES:
    - Analyze the conversation flow between speakers.
    - Maintain consistent pronouns, honorifics, and speaking styles based on character relationships (e.g. older to younger, friends, polite business, parent to child).
    - Keep names and key terms consistent across all lines.
+   - A NAME IS NEVER A WORD TO TRANSLATE. Never translate a person's, brand's, product's or place's name by its meaning ("Apple" the company is never ផ្លែប៉ោម; "Mark" a person is never សម្គាល់). Spell it the way it sounds in the original, and spell it the same way every time.
 4. FIT ORIGINAL DURATION (LIP-SYNC / TIMING CONSTRAINT):
    - Cambodian Khmer audio takes time to speak.
    - Calculate duration = end - start seconds.
@@ -503,6 +596,108 @@ Return JSON with exactly one entry per id, each holding the corrected pure-Khmer
       logger.warn('Pure-Khmer rewrite attempt failed:', repairErr);
       warnings.push(
         `ការកែអក្សរថៃលាយឡំមិនបានសម្រេចទេ។ (Could not repair lines that came back in Thai script: ${
+          repairErr?.message ?? 'unknown error'
+        }).`
+      );
+    }
+  }
+
+  /**
+   * The glossary is a promise to the uploader — a brand name must come back exactly
+   * as they typed it — and models routinely ignore it by transliterating the name
+   * into Khmer script or translating it by meaning. So each line is checked after
+   * the fact: if the source carried a protected term and the Khmer line lost it,
+   * that line is sent back once for a rewrite. Unrepaired lines are reported, since
+   * silently shipping a wrong name is worse than admitting the limit.
+   */
+  private async enforceGlossary(
+    chunk: DialogueSegment[],
+    translations: Map<string, { khmer: string; emotion?: string }>,
+    glossary: Glossary,
+    systemInstruction: string,
+    warnings: string[]
+  ): Promise<void> {
+    if (glossary.keep.length === 0 && glossary.forced.length === 0) return;
+
+    /** The protected terms this line is missing, in the wording the model will read. */
+    const missingTerms = (source: string, khmer: string): string[] => {
+      const missing: string[] = [];
+
+      for (const term of glossary.keep) {
+        if (containsTerm(source, term) && !containsTerm(khmer, term)) {
+          missing.push(`"${term}" (write it verbatim, in its original script)`);
+        }
+      }
+      for (const { term, translation } of glossary.forced) {
+        if (containsTerm(source, term) && !khmer.includes(translation)) {
+          missing.push(`"${term}" -> "${translation}"`);
+        }
+      }
+
+      return missing;
+    };
+
+    const suspects = chunk
+      .map((segment) => ({
+        segment,
+        missing: missingTerms(segment.text, translations.get(segment.id)?.khmer || ''),
+      }))
+      .filter((entry) => entry.missing.length > 0);
+
+    if (suspects.length === 0) return;
+
+    logger.info(
+      `${suspects.length} translated line(s) dropped a glossary term; requesting a rewrite.`
+    );
+
+    const repairPrompt = `The Khmer lines below lost a protected glossary term that MUST appear exactly as specified. Rewrite each line so the required term appears verbatim, keeping the Khmer natural and roughly the same length. Change nothing else about the meaning.
+
+Lines to fix:
+${JSON.stringify(
+      suspects.map(({ segment, missing }) => ({
+        id: segment.id,
+        original: segment.text,
+        khmer: translations.get(segment.id)?.khmer || '',
+        missingTerms: missing,
+      })),
+      null,
+      2
+    )}
+
+Return JSON with exactly one entry per id, each holding the corrected "khmer" text and its "emotion".`;
+
+    try {
+      const repaired = await this.requestTranslation(systemInstruction, repairPrompt);
+      const parsed = this.parseChunkResponse(repaired.content);
+      let stillMissing = 0;
+
+      suspects.forEach(({ segment, missing }, index) => {
+        const candidate = (
+          parsed.get(segment.id)?.khmer ||
+          parsed.get(`__index_${index}`)?.khmer ||
+          ''
+        ).trim();
+
+        if (candidate && missingTerms(segment.text, candidate).length < missing.length) {
+          translations.set(segment.id, {
+            khmer: candidate,
+            emotion: translations.get(segment.id)?.emotion,
+          });
+          if (missingTerms(segment.text, candidate).length > 0) stillMissing++;
+        } else {
+          stillMissing++;
+        }
+      });
+
+      if (stillMissing > 0) {
+        warnings.push(
+          `បន្ទាត់ចំនួន ${stillMissing} មិនបានរក្សាឈ្មោះក្នុងបញ្ជីពាក្យ (Glossary) តាមការកំណត់ទេ។ (${stillMissing} line(s) did not keep a glossary term exactly as configured; check the names in those lines.)`
+        );
+      }
+    } catch (repairErr: any) {
+      logger.warn('Glossary rewrite attempt failed:', repairErr);
+      warnings.push(
+        `ការកែឈ្មោះតាមបញ្ជីពាក្យ (Glossary) មិនបានសម្រេចទេ។ (Could not rewrite lines that dropped a glossary term: ${
           repairErr?.message ?? 'unknown error'
         }).`
       );

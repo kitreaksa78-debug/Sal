@@ -50,6 +50,7 @@ export function App() {
     translationStyle: 'natural',
     smartVoice: true,
     sourceLanguage: 'auto',
+    glossary: '',
   });
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
@@ -409,7 +410,12 @@ export function App() {
 
       {/* Modern Minimal Footer */}
       <footer className="border-t border-slate-900 py-6 px-4 pb-8 text-center text-[11px] sm:text-xs text-slate-400 leading-relaxed">
-        <p>KhmerDub AI • Professional AI Video Translation &amp; Cambodian Khmer Dubbing Platform</p>
+        <p className="mx-auto max-w-md">
+          AI translate video · បកប្រែវីដេអូ និងបញ្ចូលសំឡេងខ្មែរ
+        </p>
+        <p className="mt-1 text-[10px] text-slate-500 sm:text-[11px]">
+          AI Video Translation &amp; Khmer Dubbing
+        </p>
       </footer>
     </div>
   );
