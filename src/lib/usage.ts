@@ -1,11 +1,16 @@
 // Usage tracking + plan state for the free tier.
-// Usage is per-device (localStorage); the Pro plan is verified by the server.
+//
+// Every value here belongs to the signed-in account: the storage keys are scoped
+// by Google account id, so signing in as somebody else on the same phone shows
+// their own counter and their own plan. The server remains the referee — it bumps
+// the daily count on every upload and `getUsage()` mirrors it back here.
 
-import type { Plan } from './api';
+import type { Plan, UsageSummary } from './api';
+import { getSignedInUser } from './auth';
 
-const STORAGE_KEY = 'khmerdub_usage';
-const PLAN_KEY = 'khmerdub_plan';
-const EMAIL_KEY = 'khmerdub_email';
+const USAGE_BASE = 'khmerdub_usage';
+const PLAN_BASE = 'khmerdub_plan';
+const EMAIL_BASE = 'khmerdub_email';
 
 /** Free plan: 3 videos/day, 2 minutes each. */
 export const FREE_DAILY_LIMIT = 3;
@@ -24,6 +29,12 @@ function today(): string {
   return new Date().toISOString().split('T')[0];
 }
 
+/** Keeps one account's numbers from ever showing up under another's name. */
+function scoped(base: string): string {
+  const id = getSignedInUser()?.id ?? 'guest';
+  return `${base}:${id}`;
+}
+
 function readLocal(key: string): string | null {
   try {
     return localStorage.getItem(key);
@@ -40,35 +51,41 @@ function writeLocal(key: string, value: string): void {
   }
 }
 
+function removeLocal(key: string): void {
+  try {
+    localStorage.removeItem(key);
+  } catch {
+    /* ignore */
+  }
+}
+
 export function getPlan(): Plan {
-  return readLocal(PLAN_KEY) === 'pro' ? 'pro' : 'free';
+  return readLocal(scoped(PLAN_BASE)) === 'pro' ? 'pro' : 'free';
 }
 
 export function isPro(): boolean {
   return getPlan() === 'pro';
 }
 
-/** Remember the verified plan and the email it belongs to. */
+/** Remember the verified plan for this account. */
 export function setPlan(plan: Plan, email?: string): void {
-  writeLocal(PLAN_KEY, plan);
-  if (email) writeLocal(EMAIL_KEY, email.trim().toLowerCase());
+  const account = email ?? getSignedInUser()?.email;
+  writeLocal(scoped(PLAN_BASE), plan);
+  if (account) writeLocal(scoped(EMAIL_BASE), account.trim().toLowerCase());
 }
 
+/** The email Pro purchases are verified against for this account. */
 export function getAccountEmail(): string | null {
-  return readLocal(EMAIL_KEY);
+  return getSignedInUser()?.email ?? readLocal(scoped(EMAIL_BASE));
 }
 
 export function clearPlan(): void {
-  try {
-    localStorage.removeItem(PLAN_KEY);
-    localStorage.removeItem(EMAIL_KEY);
-  } catch {
-    /* ignore */
-  }
+  removeLocal(scoped(PLAN_BASE));
+  removeLocal(scoped(EMAIL_BASE));
 }
 
 export function getTodayUsage(): UsageData {
-  const stored = readLocal(STORAGE_KEY);
+  const stored = readLocal(scoped(USAGE_BASE));
 
   if (stored) {
     try {
@@ -82,8 +99,22 @@ export function getTodayUsage(): UsageData {
   }
 
   const fresh: UsageData = { date: today(), count: 0, totalDuration: 0 };
-  writeLocal(STORAGE_KEY, JSON.stringify(fresh));
+  writeLocal(scoped(USAGE_BASE), JSON.stringify(fresh));
   return fresh;
+}
+
+/**
+ * Copy a count down from the server. The server is the one that actually counts,
+ * so whatever it reports wins over this device's mirror.
+ */
+export function applyServerUsage(usage: UsageSummary): void {
+  if (!usage || usage.date !== today()) return;
+  const mirror: UsageData = {
+    date: usage.date,
+    count: usage.count,
+    totalDuration: usage.totalDuration,
+  };
+  writeLocal(scoped(USAGE_BASE), JSON.stringify(mirror));
 }
 
 export function canUseFreePlan(): { allowed: boolean; reason?: string } {
@@ -114,13 +145,6 @@ export function canProcessVideo(durationSeconds: number): { allowed: boolean; re
   }
 
   return { allowed: true };
-}
-
-export function recordUsage(durationSeconds: number): void {
-  const usage = getTodayUsage();
-  usage.count += 1;
-  usage.totalDuration += durationSeconds;
-  writeLocal(STORAGE_KEY, JSON.stringify(usage));
 }
 
 export function getUsageStats(): {

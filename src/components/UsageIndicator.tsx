@@ -3,15 +3,26 @@ import { BarChart3, Crown, Zap } from 'lucide-react';
 import { getUsageStats } from '../lib/usage';
 import { CheckoutButton } from './CheckoutButton';
 
-export const UsageIndicator: React.FC = () => {
-  const [stats, setStats] = useState(getUsageStats());
+interface UsageIndicatorProps {
+  /**
+   * The app's server-synced numbers for the signed-in account. Without them the
+   * panel falls back to this device's mirror, refreshed every minute.
+   */
+  stats?: ReturnType<typeof getUsageStats>;
+}
+
+export const UsageIndicator: React.FC<UsageIndicatorProps> = ({ stats: provided }) => {
+  const [mirror, setMirror] = useState(getUsageStats());
 
   useEffect(() => {
+    if (provided) return;
     const interval = setInterval(() => {
-      setStats(getUsageStats());
+      setMirror(getUsageStats());
     }, 60000);
     return () => clearInterval(interval);
-  }, []);
+  }, [provided]);
+
+  const stats = provided ?? mirror;
 
   if (stats.unlimited) {
     return (

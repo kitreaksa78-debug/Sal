@@ -55,6 +55,9 @@ export interface VideoMetadata {
 
 export interface JobRecord {
   id: string;
+  /** Google account id ("sub") of the signed-in user who uploaded this video. */
+  ownerId?: string;
+  ownerEmail?: string;
   status: JobStatus;
   progress: number; // 0 to 100
   message: string; // User-facing status message (Khmer or English)
@@ -75,6 +78,27 @@ export interface JobRecord {
   technicalError?: string;
   createdAt: string;
   completedAt?: string;
+}
+
+/**
+ * A signed-in browser. The token is minted when Google sign-in succeeds and is
+ * sent back on every API call, which is what keeps one account's job history and
+ * usage apart from another's.
+ */
+export interface SessionRecord {
+  token: string;
+  userId: string;
+  email: string;
+  createdAt: string;
+  lastSeenAt: string;
+}
+
+/** How much of the free daily allowance one account has used. */
+export interface UsageRecord {
+  /** YYYY-MM-DD — a new day starts a fresh count. */
+  date: string;
+  count: number;
+  totalDuration: number;
 }
 
 /**

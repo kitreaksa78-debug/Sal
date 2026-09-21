@@ -2,6 +2,7 @@ import React, { useRef, useState } from 'react';
 import { Upload, FileVideo, CheckCircle2, AlertCircle, Sparkles, Music2, MicOff, ArrowRight } from 'lucide-react';
 import { JobSettings } from '../types';
 import { UsageIndicator } from './UsageIndicator';
+import { getUsageStats } from '../lib/usage';
 
 interface UploadPanelProps {
   onFileSelect: (file: File) => void;
@@ -13,6 +14,8 @@ interface UploadPanelProps {
   onStartDubbing: () => void;
   isUploading: boolean;
   uploadProgress: number;
+  /** The signed-in account's server-synced usage, owned by the app. */
+  usageStats?: ReturnType<typeof getUsageStats>;
 }
 
 export const UploadPanel: React.FC<UploadPanelProps> = ({
@@ -24,6 +27,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
   onStartDubbing,
   isUploading,
   uploadProgress,
+  usageStats,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -119,8 +123,8 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
         </div>
       </div>
 
-      {/* Usage Indicator */}
-      <UsageIndicator />
+      {/* Usage Indicator — this account's own counter */}
+      <UsageIndicator stats={usageStats} />
 
       {/* Selected Video Metadata Preview Card */}
       {selectedFile && (

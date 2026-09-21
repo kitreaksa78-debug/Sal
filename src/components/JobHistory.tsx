@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { History, CheckCircle2, AlertCircle, Clock, ArrowRight, Play, Download } from 'lucide-react';
 import { JobRecord } from '../types';
 import { listJobs, getDownloadUrl } from '../lib/api';
+import { getSignedInUser } from '../lib/auth';
 
 interface JobHistoryProps {
   onSelectJob: (job: JobRecord) => void;
@@ -10,6 +11,8 @@ interface JobHistoryProps {
 export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  // Each account sees only its own uploads — the server filters by session.
+  const account = getSignedInUser();
 
   const fetchJobs = async () => {
     try {
@@ -25,7 +28,7 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
 
   useEffect(() => {
     fetchJobs();
-  }, []);
+  }, [account?.id]);
 
   const formatDate = (isoStr: string) => {
     try {
@@ -51,6 +54,12 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
           </h2>
           <p className="text-xs text-slate-300 mt-1">
             បញ្ជីរាយនាមវីដេអូដែលបានដំណើរការកន្លងមក
+            {account && (
+              <>
+                {' '}
+                — ជាកម្មសិទ្ធិរបស់គណនី <span className="text-emerald-300">{account.email}</span>
+              </>
+            )}
           </p>
         </div>
 
@@ -72,7 +81,7 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
           <History className="w-10 h-10 text-slate-400 mx-auto" />
           <h4 className="text-base font-semibold text-slate-300">មិនទាន់មានប្រវត្តិការងារនៅឡើយទេ</h4>
           <p className="text-xs text-slate-400 max-w-sm mx-auto">
-            សូមត្រឡប់ទៅផ្ទាំង "ស្ទូឌីយោ" ដើម្បីបញ្ចូលវីដេអូដំបូងរបស់អ្នក
+            គណនីនេះមិនទាន់មានវីដេអូទេ។ សូមត្រឡប់ទៅផ្ទាំង "ស្ទូឌីយោ" ដើម្បីបញ្ចូលវីដេអូដំបូងរបស់អ្នក
           </p>
         </div>
       ) : (

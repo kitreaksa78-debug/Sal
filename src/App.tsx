@@ -14,14 +14,18 @@ import {
   subscribeToJobUpdates,
   getEntitlement,
   activatePurchase,
+  getMe,
+  getUsage,
+  signOut,
+  ApiError,
   SignedInUser,
 } from './lib/api';
-import { getSignedInUser, saveSignedInUser, clearSignedInUser } from './lib/auth';
+import { getSignedInUser, saveSession, clearSession, getAuthToken } from './lib/auth';
 import {
   canUseFreePlan,
   canProcessVideo,
-  recordUsage,
   getUsageStats,
+  applyServerUsage,
   getAccountEmail,
   getPlan,
   setPlan,
@@ -54,27 +58,85 @@ export function App() {
   const sseUnsubscribeRef = useRef<(() => void) | null>(null);
 
   /**
-   * Re-check the Pro plan for the email remembered on this device. Right after a
-   * checkout the webhook may not have landed yet, so that path asks the billing
-   * API to confirm the purchase directly instead of trusting local state.
+   * Re-check the Pro plan for the signed-in account. Right after a checkout the
+   * webhook may not have landed yet, so that path asks the billing API to confirm
+   * the purchase directly instead of trusting local state.
    */
-  const refreshPlan = async (fromCheckout: boolean) => {
-    const email = getAccountEmail();
-    if (!email) return;
+  const refreshPlan = async (fromCheckout: boolean, email?: string | null) => {
+    const address = email ?? user?.email ?? getAccountEmail();
+    if (!address) return;
     try {
       if (fromCheckout) {
-        const result = await activatePurchase(email);
+        const result = await activatePurchase(address);
         setPlan(result.plan, result.email);
       } else {
-        const result = await getEntitlement(email);
-        setPlan(result.plan);
+        const result = await getEntitlement(address);
+        setPlan(result.plan, address);
       }
     } catch {
-      // Keep the plan already stored on this device; the billing page can retry.
+      // Keep the plan already stored for this account; the billing page can retry.
     } finally {
       setUsageStats(getUsageStats());
     }
   };
+
+  /**
+   * Pull the account's own counter back from the server, which is the one that
+   * actually counts uploads — that is why the free tier cannot be reset by
+   * clearing the browser or moving to another device.
+   */
+  const syncUsage = async () => {
+    try {
+      applyServerUsage(await getUsage());
+    } catch {
+      // Offline or sleeping server: keep the mirror this device already has.
+    } finally {
+      setUsageStats(getUsageStats());
+    }
+  };
+
+  // Confirm the saved sign-in and load this account's own plan and usage.
+  useEffect(() => {
+    const account = getSignedInUser();
+    if (!account) {
+      setUsageStats(getUsageStats());
+      return;
+    }
+
+    let cancelled = false;
+    void (async () => {
+      try {
+        const fresh = await getMe();
+        if (cancelled) return;
+        saveSession(fresh, getAuthToken());
+        setUser(fresh);
+      } catch (err) {
+        if (cancelled) return;
+        // Only a 401 means the session is really gone; a sleeping server must
+        // not sign the visitor out.
+        if (err instanceof ApiError && err.status === 401) {
+          clearSession();
+          setUser(null);
+        }
+        setUsageStats(getUsageStats());
+        return;
+      }
+
+      await refreshPlan(false, account.email);
+      await syncUsage();
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // Re-runs when a different account signs in on this device.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.id]);
+
+  // The studio, history and pricing all belong to a signed-in account.
+  useEffect(() => {
+    if (!user && activeTab !== 'welcome') setActiveTab('welcome');
+  }, [user, activeTab]);
 
   // LemonSqueezy sends the buyer back with ?upgraded=1 after a successful payment.
   useEffect(() => {
@@ -194,11 +256,9 @@ export function App() {
         setUploadProgress(pct);
       });
 
-      // Record usage
-      if (videoDuration) {
-        recordUsage(videoDuration);
-        setUsageStats(getUsageStats());
-      }
+      // The server counted this upload against the account when the job was
+      // created; mirror its number here.
+      void syncUsage();
 
       setCurrentJob(result.job);
       setActiveTab('studio');
@@ -209,19 +269,28 @@ export function App() {
     }
   };
 
-  /** Google sign-in succeeded — the server has already stored the account. */
-  const handleSignedIn = (account: SignedInUser) => {
-    saveSignedInUser(account);
+  /**
+   * Google sign-in succeeded — the server stored the account and handed back the
+   * session token that every later request uses to claim this account's data.
+   */
+  const handleSignedIn = (account: SignedInUser, token: string) => {
+    saveSession(account, token);
     setUser(account);
-    // The signed-in email is also what Pro purchases are verified against.
-    if (account.email) setPlan(getPlan(), account.email);
+    // Scoped to the account, so switching accounts shows the other one's plan.
+    setPlan(getPlan(), account.email);
     setUsageStats(getUsageStats());
+    void refreshPlan(false, account.email);
+    void syncUsage();
   };
 
-  const handleSignOut = () => {
-    clearSignedInUser();
+  const handleSignOut = async () => {
+    await signOut();
+    clearSession();
     setUser(null);
+    // Never leave one account's video or result on screen for the next person.
+    handleReset();
     setActiveTab('welcome');
+    setUsageStats(getUsageStats());
   };
 
   const handleReset = () => {
@@ -283,6 +352,7 @@ export function App() {
                   onStartDubbing={handleStartDubbing}
                   isUploading={isUploading}
                   uploadProgress={uploadProgress}
+                  usageStats={usageStats}
                 />
 
                 {/* Settings Panel */}

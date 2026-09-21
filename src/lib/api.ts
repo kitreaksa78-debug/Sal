@@ -1,4 +1,21 @@
 import { JobRecord, JobSettings, SystemConfigStatus } from '../types';
+import { getAuthToken } from './auth';
+
+/**
+ * Requests carry the account's session token, which is how the server knows
+ * whose videos and usage to answer with. `<video>` tags and EventSource cannot
+ * set headers, so those URL builders append `?token=` instead.
+ */
+function authHeaders(): Record<string, string> {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+}
+
+function withToken(url: string): string {
+  const token = getAuthToken();
+  if (!token) return url;
+  return `${url}${url.includes('?') ? '&' : '?'}token=${encodeURIComponent(token)}`;
+}
 
 // The API normally lives on the same origin (dev + Freebuff preview).
 // A static host such as Cloudflare Pages can either be given a remote API at
@@ -22,6 +39,8 @@ export async function uploadVideoJob(
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
     xhr.open('POST', `${API_BASE}/jobs`);
+    const token = getAuthToken();
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
 
     if (onUploadProgress && xhr.upload) {
       xhr.upload.onprogress = (e) => {
@@ -59,15 +78,16 @@ export async function uploadVideoJob(
 }
 
 export async function getJob(jobId: string): Promise<JobRecord> {
-  const res = await fetch(`${API_BASE}/jobs/${jobId}`);
+  const res = await fetch(`${API_BASE}/jobs/${jobId}`, { headers: authHeaders() });
   if (!res.ok) {
     throw new Error('Failed to fetch job');
   }
   return await res.json();
 }
 
+/** Only the videos uploaded by the signed-in account. */
 export async function listJobs(): Promise<JobRecord[]> {
-  const res = await fetch(`${API_BASE}/jobs`);
+  const res = await fetch(`${API_BASE}/jobs`, { headers: authHeaders() });
   if (!res.ok) {
     throw new Error('Failed to fetch jobs list');
   }
@@ -88,7 +108,7 @@ export function subscribeToJobUpdates(
   onUpdate: (job: JobRecord) => void,
   onError?: (err: any) => void
 ): () => void {
-  const eventSource = new EventSource(`${API_BASE}/jobs/${jobId}/events`);
+  const eventSource = new EventSource(withToken(`${API_BASE}/jobs/${jobId}/events`));
 
   eventSource.onmessage = (event) => {
     try {
@@ -114,19 +134,19 @@ export function subscribeToJobUpdates(
 }
 
 export function getDownloadUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/download`;
+  return withToken(`${API_BASE}/jobs/${jobId}/download`);
 }
 
 export function getSubtitlesUrl(jobId: string, format: 'srt' | 'vtt' = 'vtt'): string {
-  return `${API_BASE}/jobs/${jobId}/subtitles?format=${format}`;
+  return withToken(`${API_BASE}/jobs/${jobId}/subtitles?format=${format}`);
 }
 
 export function getAudioDownloadUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/audio`;
+  return withToken(`${API_BASE}/jobs/${jobId}/audio`);
 }
 
 export function getMediaFileUrl(category: 'uploads' | 'outputs', filename: string): string {
-  return `${API_BASE}/files/${category}/${encodeURIComponent(filename)}`;
+  return withToken(`${API_BASE}/files/${category}/${encodeURIComponent(filename)}`);
 }
 
 // ------------------------------------------------------------------ billing
@@ -205,25 +225,70 @@ export async function getAuthConfig(): Promise<{ configured: boolean; clientId: 
 }
 
 /**
- * Exchange the Google access token for a stored account. The server verifies the
- * token with Google before saving, so the browser cannot fake a sign-in.
+ * Exchange the Google access token for a stored account plus the session token
+ * that identifies this account on every later request. The server verifies the
+ * Google token first, so the browser cannot fake a sign-in.
  */
-export async function signInWithGoogle(accessToken: string): Promise<SignedInUser> {
+export async function signInWithGoogle(
+  accessToken: string
+): Promise<{ user: SignedInUser; token: string }> {
   const res = await fetch(`${API_BASE}/auth/google`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ accessToken }),
   });
-  const data = (await res.json()) as { user?: SignedInUser; error?: string };
-  if (!res.ok || !data.user) {
+  const data = (await res.json()) as { user?: SignedInUser; token?: string; error?: string };
+  if (!res.ok || !data.user || !data.token) {
     throw new Error(data.error || 'Google sign-in failed');
   }
+  return { user: data.user, token: data.token };
+}
+
+/** An API call that failed, carrying the HTTP status so callers can tell
+ * "signed out" (401) apart from "the server is unreachable". */
+export class ApiError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = 'ApiError';
+    this.status = status;
+  }
+}
+
+/** Confirm the stored session still points at a real account. */
+export async function getMe(): Promise<SignedInUser> {
+  const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
+  const data = (await res.json().catch(() => ({}))) as { user?: SignedInUser; error?: string };
+  if (!res.ok || !data.user) throw new ApiError(data.error || 'Session expired', res.status);
   return data.user;
 }
 
-/** Every saved account, newest login first. */
+/** Forget the session on the server so a shared device can be handed over. */
+export async function signOut(): Promise<void> {
+  try {
+    await fetch(`${API_BASE}/auth/signout`, { method: 'POST', headers: authHeaders() });
+  } catch {
+    /* the local session is cleared either way */
+  }
+}
+
+/** Today's usage for the signed-in account (the server keeps the count). */
+export interface UsageSummary {
+  date: string;
+  count: number;
+  totalDuration: number;
+}
+
+export async function getUsage(): Promise<UsageSummary> {
+  const res = await fetch(`${API_BASE}/usage`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch usage');
+  return (await res.json()) as UsageSummary;
+}
+
+/** Every saved account, newest login first (only the owner gets the full list). */
 export async function listUsers(limit = 200): Promise<SignedInUser[]> {
-  const res = await fetch(`${API_BASE}/auth/users?limit=${limit}`);
+  const res = await fetch(`${API_BASE}/auth/users?limit=${limit}`, { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch users');
   const data = (await res.json()) as { users?: SignedInUser[] };
   return data.users || [];

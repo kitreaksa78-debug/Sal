@@ -5,6 +5,8 @@ import {
   verifyGoogleCredential,
 } from '../services/auth.js';
 import { getDatabase } from '../services/db.js';
+import { isAppOwner } from '../services/accounts.js';
+import { readSessionToken, requireSession } from '../middleware/session.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
@@ -42,8 +44,12 @@ router.post('/google', async (req: Request, res: Response) => {
     const profile = credential
       ? await verifyGoogleCredential(credential)
       : await verifyGoogleAccessToken(accessToken);
-    const user = await getDatabase().upsertUser(profile);
-    res.status(201).json({ ok: true, user });
+    const db = getDatabase();
+    const user = await db.upsertUser(profile);
+    // The token is what ties every later request (uploads, history, usage) to
+    // this account and nobody else's.
+    const session = await db.createSession(user);
+    res.status(201).json({ ok: true, user, token: session.token });
   } catch (err) {
     logger.warn('Rejected a Google sign-in:', err);
     res.status(401).json({
@@ -53,16 +59,58 @@ router.post('/google', async (req: Request, res: Response) => {
 });
 
 /**
+ * GET /api/auth/me
+ * The account behind the caller's token — used to confirm a stored sign-in is
+ * still valid before showing the app.
+ */
+router.get('/me', async (req: Request, res: Response) => {
+  const session = await requireSession(req, res);
+  if (!session) return;
+
+  const user = await getDatabase().getUser(session.userId);
+  if (!user) {
+    await getDatabase().deleteSession(session.token);
+    return res.status(401).json({ error: 'គណនីនេះលែងមានទៀតទេ។', signInRequired: true });
+  }
+
+  res.json({ ok: true, user });
+});
+
+/**
+ * POST /api/auth/signout
+ * Forgets the caller's session so a shared device can be handed over safely.
+ */
+router.post('/signout', async (req: Request, res: Response) => {
+  const token = readSessionToken(req);
+  if (token) await getDatabase().deleteSession(token);
+  res.json({ ok: true });
+});
+
+/**
  * GET /api/auth/users?limit=200
- * The saved accounts, newest login first — open it in a browser to read the list.
+ * The saved accounts, newest login first.
+ *
+ * Only the owner of the app may read the whole list: the account that has been
+ * around the longest, or anyone named in `OWNER_EMAILS`. Everyone else sees their
+ * own record and a total, because one account must never see another's details.
  */
 router.get('/users', async (req: Request, res: Response) => {
+  const session = await requireSession(req, res);
+  if (!session) return;
+
   const requested = Number(req.query.limit);
   const limit = Number.isFinite(requested) && requested > 0 ? Math.min(requested, 1000) : 200;
 
   try {
-    const users = await getDatabase().listUsers(limit);
-    res.json({ total: users.length, users });
+    const db = getDatabase();
+    const users = await db.listUsers(limit);
+
+    if (!(await isAppOwner(session))) {
+      const own = users.find((user) => user.id === session.userId) || null;
+      return res.json({ total: users.length, scope: 'self', users: own ? [own] : [] });
+    }
+
+    res.json({ total: users.length, scope: 'all', users });
   } catch (err) {
     logger.error('Failed to list users:', err);
     res.status(500).json({ error: 'មិនអាចអានបញ្ជីអ្នកប្រើបានទេ។' });

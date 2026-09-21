@@ -4,6 +4,8 @@ import path from 'path';
 import fs from 'fs';
 import { getDatabase } from '../services/db.js';
 import { getStorage } from '../services/storage.js';
+import { requireSession } from '../middleware/session.js';
+import { isAppOwner } from '../services/accounts.js';
 import { JobProcessor, jobEvents } from '../services/jobProcessor.js';
 import { JobRecord, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
@@ -60,6 +62,11 @@ const upload = multer({
  */
 router.post('/', upload.single('video'), async (req: Request, res: Response) => {
   try {
+    // Every video belongs to the account that uploaded it — that is what keeps
+    // two users' histories apart.
+    const session = await requireSession(req, res);
+    if (!session) return;
+
     if (!req.file) {
       return res.status(400).json({ error: 'សូមជ្រើសរើសវីដេអូដើម្បីបញ្ចូល។ (No video file provided)' });
     }
@@ -102,6 +109,8 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
 
     const newJob: JobRecord = {
       id: jobId,
+      ownerId: session.userId,
+      ownerEmail: session.email,
       status: 'queued',
       progress: 5,
       message: 'Job queued...',
@@ -115,6 +124,11 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
     };
 
     await db.createJob(newJob);
+
+    // Count the video against this account's daily allowance. The server is the
+    // one keeping score, so switching devices or clearing a browser cannot reset
+    // the free tier.
+    await db.addUsage(session.userId, Number(meta?.duration) || 0);
 
     // Trigger asynchronous processing pipeline
     setImmediate(() => {
@@ -144,10 +158,27 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
     const db = getDatabase();
     const limit = parseInt(req.query.limit as string || '20', 10);
-    const jobs = await db.listJobs(limit);
-    return res.json({ jobs });
+    let jobs = await db.listJobsForOwner(session.userId, limit);
+
+    // Videos uploaded before accounts existed belong to nobody. They stay with
+    // the app owner rather than leaking into every new account.
+    if (await isAppOwner(session)) {
+      const legacy = (await db.listJobs(1000)).filter((job) => !job.ownerId);
+      const seen = new Set(jobs.map((job) => job.id));
+      jobs = [...jobs, ...legacy.filter((job) => !seen.has(job.id))]
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+        .slice(0, limit);
+    }
+
+    return res.json({
+      jobs,
+      account: { id: session.userId, email: session.email },
+    });
   } catch (err: any) {
     return res.status(500).json({ error: 'Failed to list jobs' });
   }
@@ -159,9 +190,13 @@ router.get('/', async (req: Request, res: Response) => {
  */
 router.get('/:id', async (req: Request, res: Response) => {
   try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
     const db = getDatabase();
     const job = await db.getJob(req.params.id);
-    if (!job) {
+    // Another account's job is simply "not found" — never someone else's video.
+    if (!job || (job.ownerId && job.ownerId !== session.userId)) {
       return res.status(404).json({ error: 'រកមិនឃើញការងារនេះទេ។ (Job not found)' });
     }
     return res.json(job);
@@ -175,11 +210,14 @@ router.get('/:id', async (req: Request, res: Response) => {
  * Server-Sent Events for real-time progress updates
  */
 router.get('/:id/events', async (req: Request, res: Response) => {
+  const session = await requireSession(req, res);
+  if (!session) return;
+
   const jobId = req.params.id;
   const db = getDatabase();
   const job = await db.getJob(jobId);
 
-  if (!job) {
+  if (!job || (job.ownerId && job.ownerId !== session.userId)) {
     return res.status(404).json({ error: 'Job not found' });
   }
 
@@ -213,10 +251,13 @@ router.get('/:id/events', async (req: Request, res: Response) => {
  */
 router.get('/:id/download', async (req: Request, res: Response) => {
   try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
     const db = getDatabase();
     const job = await db.getJob(req.params.id);
 
-    if (!job) {
+    if (!job || (job.ownerId && job.ownerId !== session.userId)) {
       return res.status(404).send('Job not found');
     }
 
@@ -241,9 +282,14 @@ router.get('/:id/download', async (req: Request, res: Response) => {
  */
 router.get('/:id/subtitles', async (req: Request, res: Response) => {
   try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
     const db = getDatabase();
     const job = await db.getJob(req.params.id);
-    if (!job) return res.status(404).send('Job not found');
+    if (!job || (job.ownerId && job.ownerId !== session.userId)) {
+      return res.status(404).send('Job not found');
+    }
 
     const format = (req.query.format as string || 'vtt').toLowerCase();
     const subFile = format === 'srt' ? job.outputSubtitlesSrt : job.outputSubtitlesVtt;
@@ -267,9 +313,15 @@ router.get('/:id/subtitles', async (req: Request, res: Response) => {
  */
 router.get('/:id/audio', async (req: Request, res: Response) => {
   try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
     const db = getDatabase();
     const job = await db.getJob(req.params.id);
-    if (!job || !job.outputAudioFile || !fs.existsSync(job.outputAudioFile)) {
+    if (!job || (job.ownerId && job.ownerId !== session.userId)) {
+      return res.status(404).send('Job not found');
+    }
+    if (!job.outputAudioFile || !fs.existsSync(job.outputAudioFile)) {
       return res.status(404).send('Audio not ready');
     }
 

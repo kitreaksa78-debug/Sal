@@ -7,6 +7,7 @@ import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
 import authRouter from './server/routes/auth.js';
+import usageRouter from './server/routes/usage.js';
 import billingRouter, { handleLemonSqueezyWebhook } from './server/routes/billing.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
@@ -38,6 +39,7 @@ app.use('/api/jobs', jobsRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/config', configRouter);
 app.use('/api/auth', authRouter);
+app.use('/api/usage', usageRouter);
 app.use('/api/billing', billingRouter);
 
 async function startServer() {

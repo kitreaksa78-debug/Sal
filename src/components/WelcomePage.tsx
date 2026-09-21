@@ -23,8 +23,11 @@ interface WelcomePageProps {
   onEnterApp?: () => void;
   /** The Google account signed in on this device, if any. */
   user?: SignedInUser | null;
-  /** Called after a successful Google sign-in so the app can remember it. */
-  onSignedIn?: (user: SignedInUser) => void;
+  /**
+   * Called after a successful Google sign-in with the stored account and the
+   * session token that claims its videos, history and usage.
+   */
+  onSignedIn?: (user: SignedInUser, token: string) => void;
 }
 
 type Status = { kind: 'saved' | 'error' | 'info'; text: string };
@@ -66,8 +69,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
     setStatus(null);
 
     try {
-      const account = await signInWithGoogle(accessToken);
-      onSignedIn?.(account);
+      const { user: account, token } = await signInWithGoogle(accessToken);
+      onSignedIn?.(account, token);
       setStatus({ kind: 'saved', text: `បានរក្សាទុកគណនីរបស់អ្នករួចរាល់ ✓ (${account.email})` });
       // Straight into the studio — the tab bar only appears inside the app.
       window.setTimeout(() => onEnterApp?.(), 900);
@@ -197,7 +200,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                 ) : (
                   <>
                     <p className="mt-3.5 text-xs sm:text-sm text-slate-400 leading-relaxed">
-                      ប្រើគណនី Google របស់អ្នក ដើម្បីរក្សាទុកប្រវត្តិវីដេអូ និងសិទ្ធិ Pro។
+                      ចូលដោយគណនី Google ដើម្បីរក្សាទុកប្រវត្តិវីដេអូ និងសិទ្ធិ Pro របស់អ្នក។
                     </p>
 
                     <div className="mt-4">
@@ -248,7 +251,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
 
                     <p className="mt-3.5 flex items-start gap-1.5 text-[11px] text-slate-500 leading-relaxed">
                       <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400/80" />
-                      យើងរក្សាទុកតែ ឈ្មោះ និងអ៊ីមែលប៉ុណ្ណោះ — គ្មានលេខសម្ងាត់ គ្មានកាត។
+                      យើងរក្សាទុកតែឈ្មោះ និងអ៊ីមែល — គ្មានលេខសម្ងាត់ គ្មានកាត។
+                      វីដេអូ ប្រវត្តិ និងចំនួនប្រើប្រាស់របស់អ្នក រក្សាទុកដោយឡែកតាមគណនីនីមួយៗ។
                     </p>
                   </>
                 )}

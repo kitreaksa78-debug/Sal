@@ -1,6 +1,14 @@
+import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
-import { JobRecord, DialogueSegment, UserRecord, GoogleProfile } from '../types.js';
+import {
+  JobRecord,
+  DialogueSegment,
+  UserRecord,
+  GoogleProfile,
+  SessionRecord,
+  UsageRecord,
+} from '../types.js';
 import { logger } from '../utils/logger.js';
 import { getStorage } from './storage.js';
 
@@ -9,6 +17,8 @@ export interface DatabaseProvider {
   getJob(id: string): Promise<JobRecord | null>;
   updateJob(id: string, updates: Partial<JobRecord>): Promise<JobRecord | null>;
   listJobs(limit?: number): Promise<JobRecord[]>;
+  /** Only the videos this account uploaded. */
+  listJobsForOwner(ownerId: string, limit?: number): Promise<JobRecord[]>;
   deleteJob(id: string): Promise<boolean>;
   saveSegments(jobId: string, segments: DialogueSegment[]): Promise<void>;
   getSegments(jobId: string): Promise<DialogueSegment[]>;
@@ -19,6 +29,13 @@ export interface DatabaseProvider {
   upsertUser(profile: GoogleProfile): Promise<UserRecord>;
   getUser(id: string): Promise<UserRecord | null>;
   listUsers(limit?: number): Promise<UserRecord[]>;
+  /** Mint a session token for a signed-in account. */
+  createSession(user: UserRecord): Promise<SessionRecord>;
+  getSession(token: string): Promise<SessionRecord | null>;
+  deleteSession(token: string): Promise<boolean>;
+  /** Today's video count for one account (the free daily allowance). */
+  getDailyUsage(userId: string): Promise<UsageRecord>;
+  addUsage(userId: string, durationSeconds: number): Promise<UsageRecord>;
   /**
    * Merge in the snapshot kept in remote storage. The server calls this on boot
    * so job history survives hosts with an ephemeral disk (e.g. Render free).
@@ -33,6 +50,9 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
   private jobs: Map<string, JobRecord> = new Map();
   private segments: Map<string, DialogueSegment[]> = new Map();
   private users: Map<string, UserRecord> = new Map();
+  private sessions: Map<string, SessionRecord> = new Map();
+  /** Keyed by account id; the record itself carries the day it belongs to. */
+  private usage: Map<string, UsageRecord> = new Map();
 
   private stateKey: string;
   private remoteTimer: ReturnType<typeof setTimeout> | null = null;
@@ -67,6 +87,14 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
         if (parsed.users && Array.isArray(parsed.users)) {
           parsed.users.forEach((u: UserRecord) => this.users.set(u.id, u));
         }
+        if (parsed.sessions && Array.isArray(parsed.sessions)) {
+          parsed.sessions.forEach((s: SessionRecord) => this.sessions.set(s.token, s));
+        }
+        if (parsed.usage && typeof parsed.usage === 'object') {
+          Object.entries(parsed.usage).forEach(([userId, record]) =>
+            this.usage.set(userId, record as UsageRecord)
+          );
+        }
         logger.info(
           `Loaded ${this.jobs.size} jobs and ${this.users.size} user account(s) from database store`
         );
@@ -82,6 +110,8 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
         jobs: Array.from(this.jobs.values()),
         segments: Object.fromEntries(this.segments.entries()),
         users: Array.from(this.users.values()),
+        sessions: Array.from(this.sessions.values()),
+        usage: Object.fromEntries(this.usage.entries()),
       },
       null,
       2
@@ -161,6 +191,22 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
           added++;
         }
       }
+      // Sessions are the promise that a signed-in browser stays signed in, so a
+      // restart must never drop them.
+      for (const session of (parsed.sessions || []) as SessionRecord[]) {
+        if (!this.sessions.has(session.token)) {
+          this.sessions.set(session.token, session);
+          added++;
+        }
+      }
+      for (const [userId, record] of Object.entries((parsed.usage || {}) as Record<string, UsageRecord>)) {
+        const local = this.usage.get(userId);
+        // Same day -> keep the higher count; newer day -> keep the newer day.
+        if (!local || record.date > local.date || (record.date === local.date && record.count > local.count)) {
+          this.usage.set(userId, record);
+          added++;
+        }
+      }
       if (added > 0) {
         logger.info(`Recovered ${added} job(s) from remote storage`);
         fs.writeFileSync(this.dbPath, this.snapshot(), 'utf8');
@@ -198,6 +244,10 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
       (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
     );
     return all.slice(0, limit);
+  }
+
+  async listJobsForOwner(ownerId: string, limit: number = 50): Promise<JobRecord[]> {
+    return (await this.listJobs(Number.MAX_SAFE_INTEGER)).filter((job) => job.ownerId === ownerId).slice(0, limit);
   }
 
   async deleteJob(id: string): Promise<boolean> {
@@ -253,6 +303,55 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
 
   async getUser(id: string): Promise<UserRecord | null> {
     return this.users.get(id) || null;
+  }
+
+  async createSession(user: UserRecord): Promise<SessionRecord> {
+    const now = new Date().toISOString();
+    const session: SessionRecord = {
+      token: crypto.randomBytes(32).toString('hex'),
+      userId: user.id,
+      email: user.email,
+      createdAt: now,
+      lastSeenAt: now,
+    };
+    this.sessions.set(session.token, session);
+    this.persist();
+    return session;
+  }
+
+  async getSession(token: string): Promise<SessionRecord | null> {
+    const session = this.sessions.get(token);
+    if (!session) return null;
+
+    // Touch at most once an hour so a busy client does not re-upload the store.
+    const now = Date.now();
+    if (now - new Date(session.lastSeenAt).getTime() > 3_600_000) {
+      session.lastSeenAt = new Date(now).toISOString();
+      this.persist();
+    }
+    return session;
+  }
+
+  async deleteSession(token: string): Promise<boolean> {
+    const deleted = this.sessions.delete(token);
+    if (deleted) this.persist();
+    return deleted;
+  }
+
+  async getDailyUsage(userId: string): Promise<UsageRecord> {
+    const today = new Date().toISOString().split('T')[0];
+    const stored = this.usage.get(userId);
+    if (stored && stored.date === today) return stored;
+    return { date: today, count: 0, totalDuration: 0 };
+  }
+
+  async addUsage(userId: string, durationSeconds: number): Promise<UsageRecord> {
+    const usage = await this.getDailyUsage(userId);
+    usage.count += 1;
+    usage.totalDuration += Number.isFinite(durationSeconds) ? durationSeconds : 0;
+    this.usage.set(userId, usage);
+    this.persist();
+    return usage;
   }
 
   async listUsers(limit: number = 200): Promise<UserRecord[]> {
