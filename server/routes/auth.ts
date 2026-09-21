@@ -1,5 +1,9 @@
 import express, { Request, Response } from 'express';
-import { getGoogleAuthConfig, verifyGoogleCredential } from '../services/auth.js';
+import {
+  getGoogleAuthConfig,
+  verifyGoogleAccessToken,
+  verifyGoogleCredential,
+} from '../services/auth.js';
 import { getDatabase } from '../services/db.js';
 import { logger } from '../utils/logger.js';
 
@@ -15,14 +19,17 @@ router.get('/config', (req: Request, res: Response) => {
 });
 
 /**
- * POST /api/auth/google  { credential }
- * The ID token handed back by Google Identity Services. It is verified against
+ * POST /api/auth/google  { accessToken } | { credential }
+ * The token handed back by Google Identity Services: an OAuth 2.0 access token
+ * from the button, or an ID token from One Tap. Either way it is verified with
  * Google and the account is stored, so the user list survives a restart.
  */
 router.post('/google', async (req: Request, res: Response) => {
-  const credential = typeof req.body?.credential === 'string' ? req.body.credential.trim() : '';
+  const read = (key: string) => (typeof req.body?.[key] === 'string' ? req.body[key].trim() : '');
+  const accessToken = read('accessToken');
+  const credential = read('credential');
 
-  if (!credential) {
+  if (!accessToken && !credential) {
     return res.status(400).json({ error: 'សូមផ្តល់លេខសម្គាល់ Google។ (Missing Google credential)' });
   }
   if (!getGoogleAuthConfig().configured) {
@@ -32,7 +39,9 @@ router.post('/google', async (req: Request, res: Response) => {
   }
 
   try {
-    const profile = await verifyGoogleCredential(credential);
+    const profile = credential
+      ? await verifyGoogleCredential(credential)
+      : await verifyGoogleAccessToken(accessToken);
     const user = await getDatabase().upsertUser(profile);
     res.status(201).json({ ok: true, user });
   } catch (err) {

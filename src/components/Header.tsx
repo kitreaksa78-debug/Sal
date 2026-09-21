@@ -49,9 +49,8 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setActiveTab('welcome')}
             className="flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer select-none group"
           >
-            <span className="relative flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-lg shadow-emerald-500/20 text-white shrink-0 group-hover:scale-105 transition-transform duration-200">
+            <span className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-lg shadow-emerald-500/20 text-white shrink-0 group-hover:scale-105 transition-transform duration-200">
               <Volume2 className="w-5 h-5" />
-              <Sparkles className="w-3 h-3 absolute -top-1 -right-1 text-amber-300 animate-pulse" />
             </span>
 
             <span className="min-w-0">

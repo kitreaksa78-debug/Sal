@@ -1,106 +1,65 @@
-import React, { useEffect, useRef } from 'react';
-
-/**
- * Google Identity Services, loaded on demand. The official button renders inside
- * our card and hands back an ID token, which the server verifies with Google
- * before the account is saved.
- */
-const SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
-
-interface GoogleIdentityApi {
-  initialize: (config: {
-    client_id: string;
-    callback: (response: { credential?: string }) => void;
-  }) => void;
-  renderButton: (parent: HTMLElement, options: Record<string, unknown>) => void;
-}
-
-declare global {
-  interface Window {
-    google?: { accounts?: { id?: GoogleIdentityApi } };
-  }
-}
-
-let scriptPromise: Promise<void> | null = null;
-
-function loadGoogleScript(): Promise<void> {
-  if (window.google?.accounts?.id) return Promise.resolve();
-  if (scriptPromise) return scriptPromise;
-
-  scriptPromise = new Promise<void>((resolve, reject) => {
-    const script = document.createElement('script');
-    script.src = SCRIPT_SRC;
-    script.async = true;
-    script.defer = true;
-    script.onload = () => resolve();
-    script.onerror = () => {
-      scriptPromise = null;
-      reject(new Error('Could not load Google Identity Services'));
-    };
-    document.head.appendChild(script);
-  });
-
-  return scriptPromise;
-}
+import React, { useEffect, useRef, useState } from 'react';
+import { GoogleMark } from './GoogleMark';
+import { createGoogleTokenClient, loadGoogleScript, type GoogleTokenClient } from '../lib/google';
 
 interface GoogleSignInButtonProps {
   clientId: string;
-  /** Called with the ID token Google produced. */
-  onCredential: (credential: string) => void;
+  /** Called with the Google access token for the account the visitor picked. */
+  onToken: (accessToken: string) => void;
   onUnavailable?: (message: string) => void;
-  text?: 'signin_with' | 'signup_with' | 'continue_with';
+  disabled?: boolean;
+  label?: string;
 }
 
+/**
+ * Google's own `<iframe>` button ignores our theme (and can stretch into a wide
+ * white bar on phones), so the button is ours and Google's OAuth token model does
+ * the work behind it.
+ */
 export const GoogleSignInButton: React.FC<GoogleSignInButtonProps> = ({
   clientId,
-  onCredential,
+  onToken,
   onUnavailable,
-  text = 'continue_with',
+  disabled = false,
+  label = 'បន្តជាមួយ Google',
 }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const credentialHandler = useRef(onCredential);
-  const unavailableHandler = useRef(onUnavailable);
+  const clientRef = useRef<GoogleTokenClient | null>(null);
+  const [ready, setReady] = useState(false);
+  const [waiting, setWaiting] = useState(false);
+
+  // Keep the newest callbacks without re-creating Google's client.
+  const tokenHandler = useRef(onToken);
+  const errorHandler = useRef(onUnavailable);
 
   useEffect(() => {
-    credentialHandler.current = onCredential;
-    unavailableHandler.current = onUnavailable;
-  });
+    tokenHandler.current = onToken;
+    errorHandler.current = onUnavailable;
+  }, [onToken, onUnavailable]);
 
   useEffect(() => {
     let cancelled = false;
 
     loadGoogleScript()
       .then(() => {
-        const api = window.google?.accounts?.id;
-        const container = containerRef.current;
-        if (cancelled || !container) return;
-        if (!api) throw new Error('Google Identity Services is unavailable');
-
-        api.initialize({
-          client_id: clientId,
-          callback: (response) => {
-            if (response.credential) {
-              credentialHandler.current(response.credential);
-            } else {
-              unavailableHandler.current?.('Google មិនបានផ្តល់ព័ត៌មានចូលទេ។ សូមព្យាយាមម្តងទៀត។');
-            }
+        if (cancelled) return;
+        const client = createGoogleTokenClient({
+          clientId,
+          onToken: (token) => {
+            setWaiting(false);
+            tokenHandler.current(token);
+          },
+          onError: (message) => {
+            setWaiting(false);
+            errorHandler.current?.(message);
           },
         });
-
-        container.innerHTML = '';
-        api.renderButton(container, {
-          type: 'standard',
-          theme: 'filled_black',
-          size: 'large',
-          shape: 'pill',
-          text,
-          logo_alignment: 'left',
-        });
+        clientRef.current = client;
+        setReady(Boolean(client));
       })
       .catch(() => {
         if (!cancelled) {
-          unavailableHandler.current?.(
-            'មិនអាចភ្ជាប់ទៅ Google បានទេ។ សូមពិនិត្យអ៊ីនធឺណិត។ (Could not reach Google)'
+          errorHandler.current?.(
+            'មិនអាចភ្ជាប់ទៅ Google បានទេ។ សូមពិនិត្យអ៊ីនធឺណិត រួចព្យាយាមម្តងទៀត។ (Could not reach Google)'
           );
         }
       });
@@ -108,9 +67,35 @@ export const GoogleSignInButton: React.FC<GoogleSignInButtonProps> = ({
     return () => {
       cancelled = true;
     };
-  }, [clientId, text]);
+  }, [clientId]);
 
-  /* overflow-hidden keeps Google's fixed-width iframe from pushing the page wide
-     on small phones. */
-  return <div ref={containerRef} className="flex justify-center min-h-[44px] max-w-full overflow-hidden" />;
+  const handleClick = () => {
+    const client = clientRef.current;
+    if (!client) {
+      errorHandler.current?.('Google មិនទាន់រួចរាល់ទេ។ សូមរង់ចាំមួយភ្លែត រួចព្យាយាមម្តងទៀត។');
+      return;
+    }
+    // requestAccessToken must run inside the click to count as a user gesture.
+    setWaiting(true);
+    client.requestAccessToken();
+  };
+
+  const busy = waiting || !ready;
+
+  return (
+    <button
+      type="button"
+      onClick={handleClick}
+      disabled={disabled || !ready}
+      aria-busy={busy}
+      className="w-full inline-flex items-center justify-center gap-3 rounded-xl bg-white px-5 min-h-[52px] text-sm sm:text-base font-semibold text-slate-800 shadow-lg shadow-black/30 transition hover:bg-slate-50 active:scale-[0.99] disabled:opacity-60 disabled:cursor-not-allowed"
+    >
+      {ready ? (
+        <GoogleMark className="w-5 h-5 shrink-0" />
+      ) : (
+        <span className="inline-block w-4 h-4 border-2 border-slate-300 border-t-slate-600 rounded-full animate-spin shrink-0" />
+      )}
+      <span>{ready ? label : 'កំពុងភ្ជាប់ Google…'}</span>
+    </button>
+  );
 };

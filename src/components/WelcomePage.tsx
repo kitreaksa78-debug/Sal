@@ -1,9 +1,18 @@
 import React, { useEffect, useState } from 'react';
-import { AlertCircle, ArrowRight, CheckCircle2, Crown, Mail, Sparkles, Zap } from 'lucide-react';
+import {
+  AlertCircle,
+  ArrowLeft,
+  ArrowRight,
+  CheckCircle2,
+  Crown,
+  ShieldCheck,
+  Sparkles,
+  Zap,
+} from 'lucide-react';
 import { getUsageStats } from '../lib/usage';
-import { CONTACT_EMAIL, gmailComposeUrl } from '../lib/contact';
 import { getAuthConfig, signInWithGoogle, SignedInUser } from '../lib/api';
 import { GoogleSignInButton } from './GoogleSignInButton';
+import { GoogleMark } from './GoogleMark';
 
 interface WelcomePageProps {
   /**
@@ -21,7 +30,7 @@ type Status = { kind: 'saved' | 'error' | 'info'; text: string };
 
 export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSignedIn }) => {
   // Step 1: only "Get started". Step 2 (after the click): sign in with Google.
-  const [showContact, setShowContact] = useState(false);
+  const [showSignIn, setShowSignIn] = useState(false);
   const [authConfig, setAuthConfig] = useState<{ configured: boolean; clientId: string | null } | null>(
     null
   );
@@ -31,7 +40,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
 
   // Only ask the server about Google sign-in once the visitor is past the CTA.
   useEffect(() => {
-    if (!showContact || authConfig) return;
+    if (!showSignIn || authConfig) return;
 
     let cancelled = false;
     getAuthConfig()
@@ -45,19 +54,19 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
     return () => {
       cancelled = true;
     };
-  }, [showContact, authConfig]);
+  }, [showSignIn, authConfig]);
 
-  const handleCredential = async (credential: string) => {
+  /** Google handed us a fresh access token — trade it for a stored account. */
+  const handleToken = async (accessToken: string) => {
     setBusy(true);
     setStatus(null);
 
     try {
-      const account = await signInWithGoogle(credential);
+      const account = await signInWithGoogle(accessToken);
       onSignedIn?.(account);
-      setStatus({
-        kind: 'saved',
-        text: `បានរក្សាទុកគណនីរបស់អ្នករួចរាល់ ✓ (${account.email})`,
-      });
+      setStatus({ kind: 'saved', text: `បានរក្សាទុកគណនីរបស់អ្នករួចរាល់ ✓ (${account.email})` });
+      // Straight into the studio — the tab bar only appears inside the app.
+      window.setTimeout(() => onEnterApp?.(), 900);
     } catch (err) {
       setStatus({
         kind: 'error',
@@ -71,49 +80,59 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
     }
   };
 
-  const openGmail = () => {
-    window.open(
-      gmailComposeUrl(user ? { name: user.name, email: user.email } : null),
-      '_blank',
-      'noopener,noreferrer'
-    );
+  /** Returning (already signed-in) visitors skip the sign-in card entirely. */
+  const handleGetStarted = () => {
+    if (user) {
+      onEnterApp?.();
+      return;
+    }
+    setShowSignIn(true);
+  };
+
+  const backToStart = () => {
+    setShowSignIn(false);
+    setStatus(null);
   };
 
   return (
     <div className="animate-in fade-in duration-300">
-      <section className="relative overflow-hidden rounded-3xl border border-emerald-500/20 bg-gradient-to-b from-emerald-950/40 via-[#0b1220] to-[#0b0f17] px-5 py-14 sm:px-10 sm:py-20">
+      <section className="relative overflow-hidden rounded-3xl border border-emerald-500/20 bg-gradient-to-b from-emerald-950/40 via-[#0b1220] to-[#0b0f17] px-5 py-9 sm:px-10 sm:py-14">
         <div className="pointer-events-none absolute -top-24 -right-20 h-60 w-60 rounded-full bg-emerald-500/20 blur-3xl" />
         <div className="pointer-events-none absolute -bottom-28 -left-20 h-60 w-60 rounded-full bg-teal-500/10 blur-3xl" />
 
-        <div className="relative mx-auto max-w-2xl text-center">
+        <div className="relative mx-auto max-w-xl text-center">
           <div className="inline-flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/25 text-[11px] sm:text-xs font-semibold text-emerald-300">
             <Sparkles className="w-3.5 h-3.5" />
             <span>វេទិកាបកប្រែវីដេអូ និងបញ្ចូលសំឡេងខ្មែរ AI</span>
           </div>
 
-          <h2 className="mt-5 text-2xl sm:text-5xl font-bold text-white tracking-tight leading-snug">
+          <h2 className="mt-5 text-2xl sm:text-4xl font-bold text-white tracking-tight leading-snug">
             សូមស្វាគមន៍មកកាន់ <span className="text-emerald-400">KhmerDub AI</span>
           </h2>
 
-          <p className="mt-3 text-sm sm:text-lg text-slate-300 leading-relaxed">
+          <p className="mt-3 text-sm sm:text-base text-slate-300 leading-relaxed">
             បំលែងវីដេអូភាសាបរទេស ទៅជាវីដេអូភាសាខ្មែរ ដោយរក្សាភ្លេង និងសំឡេងបរិយាកាសដើម។
           </p>
 
           {/* Step 1 — the only call to action on arrival */}
-          {!showContact && (
-            <div className="mt-8">
+          {!showSignIn && (
+            <div className="mt-7">
               <button
                 type="button"
-                onClick={() => setShowContact(true)}
+                onClick={handleGetStarted}
                 className="inline-flex items-center justify-center gap-2 px-8 py-4 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-white font-bold text-base sm:text-lg shadow-lg shadow-emerald-500/25 active:scale-95 transition-all min-h-[56px] w-full sm:w-auto"
               >
                 <Zap className="w-5 h-5 shrink-0" />
-                <span>Get started</span>
+                <span>{user ? 'បន្តទៅស្ទូឌីយោ' : 'Get started'}</span>
                 <ArrowRight className="w-5 h-5 shrink-0" />
               </button>
 
               <p className="mt-4 text-[11px] sm:text-xs text-slate-400">
-                {stats.unlimited ? (
+                {user ? (
+                  <span className="inline-flex items-center gap-1.5 text-emerald-300 font-semibold">
+                    <CheckCircle2 className="w-3.5 h-3.5" /> បានចូលជា {user.email}
+                  </span>
+                ) : stats.unlimited ? (
                   <span className="inline-flex items-center gap-1.5 text-emerald-300 font-semibold">
                     <Crown className="w-3.5 h-3.5" /> Pro plan សកម្ម — វីដេអូឥតកំណត់
                   </span>
@@ -125,21 +144,30 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
           )}
 
           {/* Step 2 — revealed after "Get started" */}
-          {showContact && (
-            <div className="mt-8 animate-in fade-in slide-in-from-bottom-2 duration-300">
-              <div className="rounded-2xl border border-slate-800 bg-[#111827]/80 p-5 sm:p-6 text-left">
+          {showSignIn && (
+            <div className="mt-7 text-left animate-in fade-in slide-in-from-bottom-2 duration-300">
+              <div className="rounded-2xl border border-slate-800 bg-[#111827]/80 p-5 sm:p-6 shadow-xl shadow-black/20">
                 <div className="flex items-center gap-3">
-                  <div className="w-11 h-11 rounded-xl bg-emerald-500/15 border border-emerald-500/25 text-emerald-400 flex items-center justify-center shrink-0">
-                    <Mail className="w-5 h-5" />
+                  <span className="w-10 h-10 rounded-xl bg-white flex items-center justify-center shrink-0 shadow-md shadow-black/30">
+                    <GoogleMark className="w-5 h-5" />
+                  </span>
+                  <div className="min-w-0">
+                    <h3 className="text-base sm:text-lg font-bold text-white leading-tight">
+                      ចូលដោយ Google
+                    </h3>
+                    <p className="text-[11px] sm:text-xs text-slate-400">
+                      គ្មានលេខសម្ងាត់ · ចុចតែម្តង
+                    </p>
                   </div>
-                  <h3 className="text-base sm:text-lg font-bold text-white">
-                    {user ? 'គណនី Google របស់អ្នក' : 'ចូលដោយ Google'}
-                  </h3>
                 </div>
 
                 {user ? (
-                  /* Signed in — show the saved account. */
-                  <div className="mt-4 flex items-center gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3.5">
+                  /* Signed in — the account row doubles as the way back in. */
+                  <button
+                    type="button"
+                    onClick={() => onEnterApp?.()}
+                    className="mt-4 w-full flex items-center gap-3 rounded-xl border border-emerald-500/25 bg-emerald-500/5 p-3.5 text-left transition-colors hover:bg-emerald-500/10 active:scale-[0.99]"
+                  >
                     {user.picture ? (
                       <img
                         src={user.picture}
@@ -148,28 +176,33 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                         className="w-10 h-10 rounded-full border border-emerald-500/30 shrink-0"
                       />
                     ) : (
-                      <div className="w-10 h-10 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 font-bold flex items-center justify-center shrink-0">
+                      <span className="w-10 h-10 rounded-full bg-emerald-500/15 border border-emerald-500/25 text-emerald-300 font-bold flex items-center justify-center shrink-0">
                         {user.name.charAt(0).toUpperCase()}
-                      </div>
+                      </span>
                     )}
-                    <div className="min-w-0">
-                      <p className="text-sm font-semibold text-white truncate">{user.name}</p>
-                      <p className="text-[11px] sm:text-xs text-slate-400 truncate">{user.email}</p>
-                    </div>
-                  </div>
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-sm font-semibold text-white truncate">
+                        {user.name}
+                      </span>
+                      <span className="block text-[11px] sm:text-xs text-slate-400 truncate">
+                        {user.email}
+                      </span>
+                    </span>
+                    <ArrowRight className="w-4 h-4 text-emerald-300 shrink-0" />
+                  </button>
                 ) : (
                   <>
-                    <p className="mt-3 text-xs sm:text-sm text-slate-400 leading-relaxed">
-                      ចូលដោយគណនី Google ដើម្បីរក្សាទុកគណនីរបស់អ្នក — ឈ្មោះ និងអ៊ីមែលនឹងត្រូវបាន
-                      រក្សាទុកដោយស្វ័យប្រវត្តិ។
+                    <p className="mt-3.5 text-xs sm:text-sm text-slate-400 leading-relaxed">
+                      ប្រើគណនី Google របស់អ្នក ដើម្បីរក្សាទុកប្រវត្តិវីដេអូ និងសិទ្ធិ Pro។
                     </p>
 
-                    <div className="mt-5">
+                    <div className="mt-4">
                       {authConfig?.configured && authConfig.clientId ? (
                         <GoogleSignInButton
                           clientId={authConfig.clientId}
-                          onCredential={handleCredential}
+                          onToken={handleToken}
                           onUnavailable={(text) => setStatus({ kind: 'error', text })}
+                          disabled={busy}
                         />
                       ) : authConfig ? (
                         <div className="rounded-xl border border-amber-500/25 bg-amber-500/5 p-3.5 flex items-start gap-2.5">
@@ -181,13 +214,24 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                           </p>
                         </div>
                       ) : (
-                        <p className="text-xs text-slate-500">កំពុងពិនិត្យ Google sign-in…</p>
+                        <div className="flex items-center gap-2 text-xs text-slate-500">
+                          <span className="inline-block w-3.5 h-3.5 border-2 border-slate-600 border-t-slate-300 rounded-full animate-spin" />
+                          កំពុងពិនិត្យ Google sign-in…
+                        </div>
                       )}
                     </div>
 
                     {busy && (
-                      <p className="mt-3 text-xs text-emerald-300">កំពុងរក្សាទុកគណនី…</p>
+                      <p className="mt-3 flex items-center justify-center gap-2 text-xs text-emerald-300">
+                        <span className="inline-block w-3.5 h-3.5 border-2 border-emerald-400/40 border-t-emerald-400 rounded-full animate-spin" />
+                        កំពុងរក្សាទុកគណនី…
+                      </p>
                     )}
+
+                    <p className="mt-3.5 flex items-start gap-1.5 text-[11px] text-slate-500 leading-relaxed">
+                      <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400/80" />
+                      យើងរក្សាទុកតែ ឈ្មោះ និងអ៊ីមែលប៉ុណ្ណោះ — គ្មានលេខសម្ងាត់ គ្មានកាត។
+                    </p>
                   </>
                 )}
 
@@ -209,28 +253,17 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                   </p>
                 )}
 
-                {/* The one other Google action: a prefilled Gmail draft. */}
-                <button
-                  type="button"
-                  onClick={openGmail}
-                  className="mt-4 w-full inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl border border-slate-700 text-slate-300 text-xs sm:text-sm font-medium hover:bg-slate-800/60 hover:text-white active:scale-95 transition-all min-h-[48px]"
-                >
-                  <Mail className="w-4 h-4 shrink-0" />
-                  <span>Contact with Google · {CONTACT_EMAIL}</span>
-                </button>
+                {!user && (
+                  <button
+                    type="button"
+                    onClick={backToStart}
+                    className="mt-4 inline-flex items-center gap-1.5 text-[11px] sm:text-xs text-slate-500 hover:text-slate-300 transition-colors min-h-[32px]"
+                  >
+                    <ArrowLeft className="w-3.5 h-3.5" />
+                    ត្រឡប់ក្រោយ
+                  </button>
+                )}
               </div>
-
-              {/* The only way off this screen — the tab bar stays hidden until here */}
-              {onEnterApp && (
-                <button
-                  type="button"
-                  onClick={onEnterApp}
-                  className="mt-4 mx-auto flex items-center gap-1.5 text-xs sm:text-sm font-medium text-emerald-300 hover:text-emerald-200 transition-colors underline-offset-4 hover:underline"
-                >
-                  <span>ចូលទៅស្ទូឌីយោ</span>
-                  <ArrowRight className="w-3.5 h-3.5" />
-                </button>
-              )}
             </div>
           )}
         </div>

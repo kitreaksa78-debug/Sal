@@ -205,14 +205,14 @@ export async function getAuthConfig(): Promise<{ configured: boolean; clientId: 
 }
 
 /**
- * Exchange the Google ID token for a stored account. The server verifies the
+ * Exchange the Google access token for a stored account. The server verifies the
  * token with Google before saving, so the browser cannot fake a sign-in.
  */
-export async function signInWithGoogle(credential: string): Promise<SignedInUser> {
+export async function signInWithGoogle(accessToken: string): Promise<SignedInUser> {
   const res = await fetch(`${API_BASE}/auth/google`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ credential }),
+    body: JSON.stringify({ accessToken }),
   });
   const data = (await res.json()) as { user?: SignedInUser; error?: string };
   if (!res.ok || !data.user) {
