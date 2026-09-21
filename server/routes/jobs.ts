@@ -7,7 +7,7 @@ import { getStorage } from '../services/storage.js';
 import { requireSession } from '../middleware/session.js';
 import { isAppOwner } from '../services/accounts.js';
 import { JobProcessor, jobEvents } from '../services/jobProcessor.js';
-import { JobRecord, JobSettings } from '../types.js';
+import { JobRecord, JobSettings, SOURCE_LANGUAGES } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 
@@ -84,6 +84,7 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       outputQuality: 'original',
       translationStyle: 'natural',
       smartVoice: true,
+      sourceLanguage: 'auto',
     };
 
     if (req.body.settings) {
@@ -93,6 +94,12 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       } catch (e) {
         logger.warn('Failed to parse custom settings string, using defaults');
       }
+    }
+
+    // Only allow languages the studio offers; anything else falls back to auto-detect.
+    if (settings.sourceLanguage && !SOURCE_LANGUAGES.includes(settings.sourceLanguage)) {
+      logger.warn(`Unknown source language "${settings.sourceLanguage}" — using auto-detect.`);
+      settings.sourceLanguage = 'auto';
     }
 
     // Save uploaded file into storage uploads directory

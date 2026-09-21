@@ -33,6 +33,37 @@ export interface SpeakerInfo {
   segments: DialogueSegment[];
 }
 
+/** Languages the transcription step can be told to expect. `auto` lets the model guess. */
+export type SourceLanguage =
+  | 'auto'
+  | 'en'
+  | 'zh'
+  | 'th'
+  | 'vi'
+  | 'ko'
+  | 'ja'
+  | 'km'
+  | 'fr'
+  | 'es';
+
+/** Same codes the studio offers, used to reject anything else from a request. */
+export const SOURCE_LANGUAGES: SourceLanguage[] = [
+  'auto',
+  'en',
+  'zh',
+  'th',
+  'vi',
+  'ko',
+  'ja',
+  'km',
+  'fr',
+  'es',
+];
+
+/**
+ * `sourceLanguage` is optional because jobs stored before the studio offered the
+ * picker do not have it — those fall back to `auto`.
+ */
 export interface JobSettings {
   voice: 'auto' | 'male' | 'female';
   voiceStyle: 'natural' | 'calm' | 'energetic' | 'dramatic';
@@ -41,6 +72,7 @@ export interface JobSettings {
   outputQuality: '720p' | '1080p' | 'original';
   translationStyle: 'natural' | 'formal';
   smartVoice: boolean;
+  sourceLanguage?: SourceLanguage;
 }
 
 export interface VideoMetadata {

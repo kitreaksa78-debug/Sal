@@ -32,6 +32,41 @@ export interface SpeakerInfo {
   segments: DialogueSegment[];
 }
 
+/**
+ * The language spoken in the video. Whisper guesses the language per segment when
+ * this is `auto`, which is where most transcription mistakes come from — naming the
+ * language is the single biggest accuracy win for mixed-language libraries.
+ */
+export type SourceLanguage =
+  | 'auto'
+  | 'en'
+  | 'zh'
+  | 'th'
+  | 'vi'
+  | 'ko'
+  | 'ja'
+  | 'km'
+  | 'fr'
+  | 'es';
+
+export interface SourceLanguageOption {
+  code: SourceLanguage;
+  label: string;
+}
+
+export const SOURCE_LANGUAGES: SourceLanguageOption[] = [
+  { code: 'auto', label: 'រកឃើញដោយស្វ័យប្រវត្តិ (Auto detect)' },
+  { code: 'en', label: 'អង់គ្លេស (English)' },
+  { code: 'zh', label: 'ចិន (Mandarin)' },
+  { code: 'th', label: 'ថៃ (Thai)' },
+  { code: 'vi', label: 'វៀតណាម (Vietnamese)' },
+  { code: 'ko', label: 'កូរ៉េ (Korean)' },
+  { code: 'ja', label: 'ជប៉ុន (Japanese)' },
+  { code: 'km', label: 'ខ្មែរ (Khmer)' },
+  { code: 'fr', label: 'បារាំង (French)' },
+  { code: 'es', label: 'អេស្ប៉ាញ (Spanish)' },
+];
+
 export interface JobSettings {
   voice: 'auto' | 'male' | 'female';
   voiceStyle: 'natural' | 'calm' | 'energetic' | 'dramatic';
@@ -40,6 +75,7 @@ export interface JobSettings {
   outputQuality: '720p' | '1080p' | 'original';
   translationStyle: 'natural' | 'formal';
   smartVoice: boolean;
+  sourceLanguage: SourceLanguage;
 }
 
 export interface VideoMetadata {

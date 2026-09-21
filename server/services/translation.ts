@@ -54,6 +54,22 @@ export function resolveTranslationProvider(): TranslationProviderName {
   return isGroqConfigured() ? 'groq' : 'gemini';
 }
 
+/**
+ * Naming the source language lets the model read the original correctly (Mandarin
+ * idioms, English contractions) instead of treating the text as language-neutral.
+ */
+const SOURCE_LANGUAGE_NAMES: Record<string, string> = {
+  en: 'English',
+  zh: 'Mandarin Chinese',
+  th: 'Thai',
+  vi: 'Vietnamese',
+  ko: 'Korean',
+  ja: 'Japanese',
+  km: 'Khmer',
+  fr: 'French',
+  es: 'Spanish',
+};
+
 export class KhmerDubTranslationService {
   private client: GoogleGenAI | null = null;
   private modelName: string;
@@ -227,8 +243,13 @@ export class KhmerDubTranslationService {
     const isFormal = settings.translationStyle === 'formal';
     const voiceStyle = settings.voiceStyle || 'natural';
 
+    const sourceLanguage = settings.sourceLanguage && settings.sourceLanguage !== 'auto'
+      ? SOURCE_LANGUAGE_NAMES[settings.sourceLanguage]
+      : '';
+
     return `You are a professional Cambodian Khmer dubbing director and translator for movies and videos.
-Your mission is to translate spoken English/original dialogue into natural, authentic spoken Cambodian Khmer (ភាសាខ្មែរនិយាយបែបធម្មជាតិ).
+Your mission is to translate spoken ${sourceLanguage || 'English/original'} dialogue into natural, authentic spoken Cambodian Khmer (ភាសាខ្មែរនិយាយបែបធម្មជាតិ).
+${sourceLanguage ? `The dialogue you receive is ${sourceLanguage}. Read it as a native speaker of that language before translating, and keep proper names, numbers and units exactly as spoken.\n` : ''}
 
 CRITICAL DUBBING TRANSLATION RULES:
 1. NEVER translate word-by-word if it sounds stiff, robotic, or unnatural.

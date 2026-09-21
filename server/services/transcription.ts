@@ -8,10 +8,23 @@ import { getGeminiApiKey } from '../utils/aiKeys.js';
 import { groqFetch, isGroqConfigured } from '../utils/groq.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 
+/**
+ * `language` is the code the studio picked for this video. Naming it beats letting
+ * the model guess: auto-detection drifts between segments on mixed audio and turns
+ * Mandarin into Cantonese, Thai into Lao, and so on.
+ */
+export interface TranscriptionOptions {
+  language?: string;
+}
+
 export interface TranscriptionProvider {
   name: string;
   isConfigured(): boolean;
-  transcribe(audioFilePath: string, durationSeconds: number): Promise<DialogueSegment[]>;
+  transcribe(
+    audioFilePath: string,
+    durationSeconds: number,
+    options?: TranscriptionOptions
+  ): Promise<DialogueSegment[]>;
 }
 
 /**
@@ -51,7 +64,11 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
     return Boolean(process.env.STT_API_KEY || getGeminiApiKey());
   }
 
-  async transcribe(audioFilePath: string, durationSeconds: number): Promise<DialogueSegment[]> {
+  async transcribe(
+    audioFilePath: string,
+    durationSeconds: number,
+    options?: TranscriptionOptions
+  ): Promise<DialogueSegment[]> {
     if (!this.client) {
       throw new Error('Gemini API key is not configured for transcription.');
     }
@@ -60,9 +77,15 @@ export class GeminiTranscriptionProvider implements TranscriptionProvider {
     // Limit inline audio size if too large: if > 20MB, we can compress or downsample
     const base64Audio = audioBuffer.toString('base64');
 
+    const languageLine =
+      options?.language && options.language !== 'auto'
+        ? `\nThe speakers use the language with the BCP-47 code "${options.language}". Transcribe in that language only — do not switch languages mid-video.`
+        : '';
+
     const prompt = `You are a high-precision audio transcription and speech detection engine.
 Listen carefully to the speech in this audio track.
 Transcribe ONLY actual linguistic spoken dialogue.
+${languageLine}
 
 CRITICAL RULES:
 1. DO NOT transcribe or include non-verbal sounds, such as:
@@ -164,7 +187,11 @@ export class GroqTranscriptionProvider implements TranscriptionProvider {
     return isGroqConfigured();
   }
 
-  async transcribe(audioFilePath: string, durationSeconds: number): Promise<DialogueSegment[]> {
+  async transcribe(
+    audioFilePath: string,
+    durationSeconds: number,
+    options?: TranscriptionOptions
+  ): Promise<DialogueSegment[]> {
     const uploadPath = path.join(path.dirname(audioFilePath), `groq_stt_${Date.now()}.mp3`);
 
     try {
@@ -184,8 +211,14 @@ export class GroqTranscriptionProvider implements TranscriptionProvider {
       formData.append('model', this.modelName);
       formData.append('response_format', 'verbose_json');
       formData.append('temperature', '0');
-      if (process.env.STT_LANGUAGE) {
-        formData.append('language', process.env.STT_LANGUAGE);
+      // The studio's pick wins; STT_LANGUAGE stays as the server-wide default.
+      const language =
+        options?.language && options.language !== 'auto' ? options.language : process.env.STT_LANGUAGE;
+      if (language && language !== 'auto') {
+        formData.append('language', language);
+        logger.info(`Whisper is listening for "${language}" speech.`);
+      } else {
+        logger.info('Whisper will auto-detect the spoken language.');
       }
 
       const response = await groqFetch(
@@ -247,7 +280,11 @@ export class AssemblyAITranscriptionProvider implements TranscriptionProvider {
     return Boolean(this.apiKey && this.apiKey.trim().length > 0);
   }
 
-  async transcribe(audioFilePath: string, durationSeconds: number): Promise<DialogueSegment[]> {
+  async transcribe(
+    audioFilePath: string,
+    durationSeconds: number,
+    options?: TranscriptionOptions
+  ): Promise<DialogueSegment[]> {
     if (!this.apiKey) {
       throw new Error('AssemblyAI API key is missing.');
     }
@@ -285,6 +322,9 @@ export class AssemblyAITranscriptionProvider implements TranscriptionProvider {
         speaker_labels: true,
         punctuate: true,
         format_text: true,
+        ...(options?.language && options.language !== 'auto'
+          ? { language_code: options.language }
+          : {}),
       }),
     });
 

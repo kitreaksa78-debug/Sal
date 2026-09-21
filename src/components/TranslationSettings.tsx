@@ -1,6 +1,6 @@
 import React from 'react';
-import { Sliders, Sparkles, Mic, Music, Subtitles, Video, Languages } from 'lucide-react';
-import { JobSettings } from '../types';
+import { Sliders, Sparkles, Mic, Music, Subtitles, Video, Languages, Globe } from 'lucide-react';
+import { JobSettings, SOURCE_LANGUAGES } from '../types';
 
 interface TranslationSettingsProps {
   settings: JobSettings;
@@ -88,6 +88,29 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
               <span className="text-[10px] text-slate-400 opacity-80">Formal Khmer</span>
             </button>
           </div>
+        </div>
+
+        {/* Source language — what the speech-to-text step should expect */}
+        <div className="space-y-2">
+          <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+            <Globe className="w-3.5 h-3.5 text-emerald-400" />
+            <span>ភាសាដើមវីដេអូ (Source Language)</span>
+          </label>
+          <select
+            value={settings.sourceLanguage}
+            disabled={disabled}
+            onChange={(e) => update('sourceLanguage', e.target.value as JobSettings['sourceLanguage'])}
+            className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs font-medium bg-slate-900/60 border border-slate-800 text-slate-200 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-colors disabled:opacity-60"
+          >
+            {SOURCE_LANGUAGES.map((language) => (
+              <option key={language.code} value={language.code} className="bg-slate-900 text-slate-200">
+                {language.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            ជ្រើសភាសាដែលគេនិយាយក្នុងវីដេអូ ដើម្បីឲ្យការស្តាប់ចាប់អក្សរត្រូវជាងមុន។
+          </p>
         </div>
 
         {/* Voice Gender */}

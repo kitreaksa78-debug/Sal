@@ -49,6 +49,7 @@ export function App() {
     outputQuality: 'original',
     translationStyle: 'natural',
     smartVoice: true,
+    sourceLanguage: 'auto',
   });
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
@@ -401,7 +402,6 @@ export function App() {
                 if (plan === 'free') setActiveTab('studio');
                 // The Pro button opens the LemonSqueezy checkout itself.
               }}
-              onPlanChange={() => setUsageStats(getUsageStats())}
             />
           </div>
         )}

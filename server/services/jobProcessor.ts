@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { EventEmitter } from 'events';
-import { JobRecord, JobStatus, DialogueSegment } from '../types.js';
+import { JobRecord, JobSettings, JobStatus, DialogueSegment } from '../types.js';
 import { getDatabase } from './db.js';
 import { getStorage } from './storage.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
@@ -104,6 +104,16 @@ export class JobProcessor {
   }
 
   /**
+   * The language the studio picked for this video, or undefined when the speech-to-text
+   * model should work it out itself. Jobs saved before the picker existed have no value,
+   * which also means "detect it".
+   */
+  private static getSourceLanguage(settings?: JobSettings): string | undefined {
+    const code = settings?.sourceLanguage;
+    return code && code !== 'auto' ? code : undefined;
+  }
+
+  /**
    * Main asynchronous pipeline processor
    */
   public static async processJob(jobId: string): Promise<void> {
@@ -174,15 +184,26 @@ export class JobProcessor {
       await this.updateJobState(jobId, 'transcribing');
       const transcriptionProvider = getTranscriptionProvider();
 
+      // Naming the spoken language up front is what keeps Whisper from guessing
+      // wrong on mixed-language audio; `auto` leaves the guess to the model.
+      const sourceLanguage = this.getSourceLanguage(job.settings);
+      if (sourceLanguage) {
+        logger.info(`Job ${jobId}: speech-to-text is pinned to "${sourceLanguage}".`);
+      }
+
       // Transcribe dialogue with timestamps
-      let dialogueSegments = await transcriptionProvider.transcribe(vocalsTrack, meta.duration);
+      let dialogueSegments = await transcriptionProvider.transcribe(vocalsTrack, meta.duration, {
+        language: sourceLanguage,
+      });
 
       // If no speech was detected, create fallback placeholder segment or notify
       if (dialogueSegments.length === 0) {
         logger.info(`No distinct speech detected in job ${jobId}. Checking full audio track...`);
         // Retry transcription on raw audio in case vocals filter was too aggressive
         try {
-          dialogueSegments = await transcriptionProvider.transcribe(rawAudioPath, meta.duration);
+          dialogueSegments = await transcriptionProvider.transcribe(rawAudioPath, meta.duration, {
+            language: sourceLanguage,
+          });
         } catch {}
       }
 
