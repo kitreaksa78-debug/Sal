@@ -1,14 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import {
-  AlertCircle,
-  ArrowLeft,
-  ArrowRight,
-  CheckCircle2,
-  Crown,
-  ShieldCheck,
-  Sparkles,
-  Zap,
-} from 'lucide-react';
+import { AlertCircle, ArrowLeft, ArrowRight, CheckCircle2, Crown, Sparkles, Zap } from 'lucide-react';
 import { getUsageStats } from '../lib/usage';
 import { getAuthConfig, signInWithGoogle, SignedInUser } from '../lib/api';
 import { GoogleSignInButton } from './GoogleSignInButton';
@@ -199,8 +190,8 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                   </button>
                 ) : (
                   <>
-                    <p className="mt-3.5 text-xs sm:text-sm text-slate-400 leading-relaxed">
-                      ចូលដោយគណនី Google ដើម្បីរក្សាទុកប្រវត្តិវីដេអូ និងសិទ្ធិ Pro របស់អ្នក។
+                    <p className="mt-3.5 text-sm text-slate-300 leading-relaxed">
+                      សូម Login ដោយ Account Google របស់លោកអ្នក ដើម្បីបន្តទៅ websites បាន។
                     </p>
 
                     <div className="mt-4">
@@ -249,11 +240,6 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                       </p>
                     )}
 
-                    <p className="mt-3.5 flex items-start gap-1.5 text-[11px] text-slate-500 leading-relaxed">
-                      <ShieldCheck className="w-3.5 h-3.5 mt-0.5 shrink-0 text-emerald-400/80" />
-                      យើងរក្សាទុកតែឈ្មោះ និងអ៊ីមែល — គ្មានលេខសម្ងាត់ គ្មានកាត។
-                      វីដេអូ ប្រវត្តិ និងចំនួនប្រើប្រាស់របស់អ្នក រក្សាទុកដោយឡែកតាមគណនីនីមួយៗ។
-                    </p>
                   </>
                 )}
 
