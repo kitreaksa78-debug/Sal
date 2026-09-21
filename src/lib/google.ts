@@ -12,18 +12,27 @@ const SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 const SCOPES = 'openid email profile';
 
 /**
- * The site users should sign in from.
+ * The site users should sign in from — the domain the Google OAuth client is
+ * configured for.
  */
-export const CANONICAL_ORIGIN = 'https://khmerdub-ai.pages.dev';
+export const CANONICAL_ORIGIN = 'https://aivideotranslate.dev';
 
 /**
  * Hosts registered as "Authorized JavaScript origins" on the Google OAuth client
  * (`933989049539-…apps.googleusercontent.com`). Google refuses every other host
- * with `origin_mismatch` — a Cloudflare Pages deployment URL such as
- * `https://<hash>.khmerdub-ai.pages.dev` is a different host, so signing in only
- * works from the list below.
+ * with `origin_mismatch` — a deployment URL such as
+ * `https://<hash>.khmerdub-ai.pages.dev` or `https://khmerdub-ai-beta.vercel.app`
+ * is a different host, so signing in only works from the list below.
  */
-const REGISTERED_ORIGINS = [CANONICAL_ORIGIN, 'http://localhost:3000'];
+const REGISTERED_ORIGINS = [
+  CANONICAL_ORIGIN,
+  // The older Cloudflare Pages address keeps working for anyone still using it.
+  'https://khmerdub-ai.pages.dev',
+  'http://localhost:3000',
+];
+
+/** The canonical origin without its scheme, for showing next to a warning. */
+export const CANONICAL_HOST = CANONICAL_ORIGIN.replace(/^https?:\/\//, '');
 
 /** True when Google will accept a sign-in from this page's host. */
 export function isRegisteredOrigin(origin: string): boolean {

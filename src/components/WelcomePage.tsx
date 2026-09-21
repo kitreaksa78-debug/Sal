@@ -4,7 +4,7 @@ import { getUsageStats } from '../lib/usage';
 import { getAuthConfig, signInWithGoogle, SignedInUser } from '../lib/api';
 import { GoogleSignInButton } from './GoogleSignInButton';
 import { GoogleMark } from './GoogleMark';
-import { CANONICAL_ORIGIN, isRegisteredOrigin } from '../lib/google';
+import { CANONICAL_HOST, CANONICAL_ORIGIN, isRegisteredOrigin } from '../lib/google';
 
 interface WelcomePageProps {
   /**
@@ -235,7 +235,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                           href={CANONICAL_ORIGIN}
                           className="font-semibold underline hover:text-amber-100"
                         >
-                          khmerdub-ai.pages.dev
+                          {CANONICAL_HOST}
                         </a>
                       </p>
                     )}

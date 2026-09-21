@@ -9,6 +9,7 @@
     "start": "node dist/server.cjs",
     "build:pages": "vite build --outDir dist-pages --emptyOutDir",
     "deploy:pages": "bun run build:pages && bunx wrangler pages deploy dist-pages --project-name=khmerdub-ai --branch=main --commit-dirty=true",
+    "deploy:vercel": "bun run build:pages && node scripts/deploy-vercel.mjs dist-pages khmerdub-ai",
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit"
