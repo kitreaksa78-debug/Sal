@@ -22,8 +22,6 @@ import {
   SignedInUser,
 } from './lib/api';
 import { getSignedInUser, saveSession, clearSession, getAuthToken } from './lib/auth';
-import { CONTACT_EMAIL, CONTACT_LABEL, gmailComposeUrl, mailtoUrl } from './lib/contact';
-import { GoogleMark } from './components/GoogleMark';
 import {
   canUseFreePlan,
   canProcessVideo,
@@ -435,26 +433,6 @@ export function App() {
         <p className="mt-1 text-[10px] text-slate-500 sm:text-[11px]">
           AI Video Translation &amp; Khmer Dubbing
         </p>
-
-        {/* Contact with Google — opens a Gmail draft addressed to the admin
-            account, pre-filled with the signed-in visitor's own details. */}
-        <div className="mt-4 flex flex-col items-center gap-2">
-          <a
-            href={gmailComposeUrl(user)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800 hover:border-emerald-500/40 text-slate-200 font-semibold min-h-[44px] transition-colors"
-          >
-            <GoogleMark className="w-4 h-4 shrink-0" />
-            <span>ទាក់ទង {CONTACT_LABEL} តាម Google</span>
-          </a>
-          <a
-            href={mailtoUrl(user)}
-            className="text-[10px] sm:text-[11px] text-slate-500 hover:text-emerald-400 transition-colors break-all"
-          >
-            ឬផ្ញើអ៊ីមែលទៅ {CONTACT_EMAIL}
-          </a>
-        </div>
       </footer>
     </div>
   );
