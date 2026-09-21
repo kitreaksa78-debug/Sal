@@ -101,6 +101,28 @@ export async function getJob(jobId: string): Promise<JobRecord> {
 }
 
 /** Only the videos uploaded by the signed-in account. */
+/** Forget one finished job; the server also frees the files it produced. */
+export async function deleteJob(jobId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) {
+    const data = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new ApiError(data.error || 'Failed to delete job', res.status);
+  }
+}
+
+/** Clear this account's whole history. Returns how many jobs were removed. */
+export async function deleteAllJobs(): Promise<number> {
+  const res = await fetch(`${API_BASE}/jobs`, { method: 'DELETE', headers: authHeaders() });
+  const data = (await res.json().catch(() => ({}))) as { deleted?: number; error?: string };
+  if (!res.ok) {
+    throw new ApiError(data.error || 'Failed to clear history', res.status);
+  }
+  return data.deleted ?? 0;
+}
+
 export async function listJobs(): Promise<JobRecord[]> {
   const res = await fetch(`${API_BASE}/jobs`, { headers: authHeaders() });
   if (!res.ok) {

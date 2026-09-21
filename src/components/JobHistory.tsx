@@ -1,7 +1,16 @@
 import React, { useEffect, useState } from 'react';
-import { History, CheckCircle2, AlertCircle, Clock, ArrowRight, Play, Download } from 'lucide-react';
+import {
+  History,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  ArrowRight,
+  Download,
+  Trash2,
+  Loader2,
+} from 'lucide-react';
 import { JobRecord } from '../types';
-import { listJobs, getDownloadUrl } from '../lib/api';
+import { listJobs, getDownloadUrl, deleteJob, deleteAllJobs } from '../lib/api';
 import { getSignedInUser } from '../lib/auth';
 
 interface JobHistoryProps {
@@ -11,8 +20,13 @@ interface JobHistoryProps {
 export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
   const [jobs, setJobs] = useState<JobRecord[]>([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   // Each account sees only its own uploads — the server filters by session.
   const account = getSignedInUser();
+
+  /** A job the pipeline is still writing into must not be deleted out from under it. */
+  const isBusy = (job: JobRecord) => job.status !== 'completed' && job.status !== 'failed';
 
   const fetchJobs = async () => {
     try {
@@ -29,6 +43,49 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
   useEffect(() => {
     fetchJobs();
   }, [account?.id]);
+
+  const removeJob = async (job: JobRecord) => {
+    const label = job.originalFilename || job.id;
+    if (
+      !window.confirm(
+        `លុប "${label}" ចេញពីប្រវត្តិ?\n\nឯកសារវីដេអូ សំឡេង និងអក្សររត់របស់ការងារនេះនឹងត្រូវលុបដែរ ហើយយកមកវិញមិនបានទេ។`
+      )
+    ) {
+      return;
+    }
+
+    setDeletingId(job.id);
+    try {
+      await deleteJob(job.id);
+      setJobs((prev) => prev.filter((item) => item.id !== job.id));
+    } catch (e: any) {
+      alert(e?.message || 'មិនអាចលុបការងារនេះបានទេ');
+    } finally {
+      setDeletingId(null);
+    }
+  };
+
+  const clearHistory = async () => {
+    const finished = jobs.filter((job) => !isBusy(job));
+    if (finished.length === 0) return;
+    if (
+      !window.confirm(
+        `លុបប្រវត្តិទាំង ${finished.length} ការងារ?\n\nឯកសារទាំងអស់នឹងត្រូវលុប ហើយយកមកវិញមិនបានទេ។ ការងារដែលកំពុងដំណើរការនឹងមិនត្រូវប៉ះពាល់ទេ។`
+      )
+    ) {
+      return;
+    }
+
+    setClearing(true);
+    try {
+      await deleteAllJobs();
+      setJobs((prev) => prev.filter((job) => isBusy(job)));
+    } catch (e: any) {
+      alert(e?.message || 'មិនអាចសម្អាតប្រវត្តិបានទេ');
+    } finally {
+      setClearing(false);
+    }
+  };
 
   const formatDate = (isoStr: string) => {
     try {
@@ -63,13 +120,28 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
           </p>
         </div>
 
-        <button
-          type="button"
-          onClick={fetchJobs}
-          className="self-start sm:self-auto px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition-colors shrink-0"
-        >
-          ផ្ទុកឡើងវិញ (Refresh)
-        </button>
+        <div className="flex items-center gap-2 self-start sm:self-auto shrink-0">
+          <button
+            type="button"
+            onClick={fetchJobs}
+            className="px-3 py-2 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs font-medium text-slate-300 transition-colors min-h-[40px]"
+          >
+            ផ្ទុកឡើងវិញ (Refresh)
+          </button>
+
+          {/* Clearing keeps anything still processing — see the server rule. */}
+          {jobs.some((job) => !isBusy(job)) && (
+            <button
+              type="button"
+              onClick={clearHistory}
+              disabled={clearing || deletingId !== null}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 border border-rose-500/25 text-xs font-medium transition-colors min-h-[40px] disabled:opacity-50 disabled:cursor-wait"
+            >
+              {clearing ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Trash2 className="w-3.5 h-3.5" />}
+              <span>លុបទាំងអស់</span>
+            </button>
+          )}
+        </div>
       </div>
 
       {loading ? (
@@ -140,6 +212,24 @@ export const JobHistory: React.FC<JobHistoryProps> = ({ onSelectJob }) => {
                       <Download className="w-4 h-4" />
                     </a>
                   )}
+
+                  <button
+                    type="button"
+                    onClick={() => removeJob(job)}
+                    disabled={isBusy(job) || deletingId === job.id || clearing}
+                    title={
+                      isBusy(job)
+                        ? 'កំពុងដំណើរការ — លុបមិនបានទេ'
+                        : 'លុបចេញពីប្រវត្តិ (រួមទាំងឯកសារ)'
+                    }
+                    className="p-2.5 rounded-xl bg-slate-800/80 text-slate-400 border border-slate-700 hover:bg-rose-500/15 hover:text-rose-300 hover:border-rose-500/30 transition-colors shrink-0 min-h-[44px] min-w-[44px] flex items-center justify-center disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    {deletingId === job.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Trash2 className="w-4 h-4" />
+                    )}
+                  </button>
 
                   <button
                     type="button"

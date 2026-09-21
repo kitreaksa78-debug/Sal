@@ -340,4 +340,106 @@ router.get('/:id/audio', async (req: Request, res: Response) => {
   }
 });
 
+/**
+ * Every stored artefact a job owns, as the (category, filename) pairs the storage
+ * layer understands. `status` in the record only names the local paths it wrote,
+ * so the file name is what both the local disk and R2 buckets are keyed by.
+ */
+function jobArtifacts(job: JobRecord): { category: 'uploads' | 'outputs'; filename: string }[] {
+  const files: { category: 'uploads' | 'outputs'; filename: string }[] = [];
+
+  const add = (category: 'uploads' | 'outputs', stored?: string) => {
+    if (!stored) return;
+    const filename = path.basename(stored.split('?')[0]);
+    if (filename) files.push({ category, filename });
+  };
+
+  add('uploads', job.inputFile);
+  add('outputs', job.outputFile);
+  add('outputs', job.outputAudioFile);
+  add('outputs', job.outputSubtitlesSrt);
+  add('outputs', job.outputSubtitlesVtt);
+
+  return files;
+}
+
+/** A job still being processed writes into its directories, so never delete it. */
+function isBusy(job: JobRecord): boolean {
+  return job.status !== 'completed' && job.status !== 'failed';
+}
+
+/**
+ * DELETE /api/jobs/:id
+ * Forget one history entry and free the files behind it.
+ *
+ * Videos uploaded before accounts existed belong to nobody, so only the app
+ * owner may clear those — everyone else would be able to delete someone's work.
+ */
+router.delete('/:id', async (req: Request, res: Response) => {
+  try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
+    const db = getDatabase();
+    const job = await db.getJob(req.params.id);
+
+    if (!job) {
+      return res.status(404).json({ error: 'រកមិនឃើញការងារនេះទេ។ (Job not found)' });
+    }
+    const owned = job.ownerId ? job.ownerId === session.userId : await isAppOwner(session);
+    if (!owned) {
+      return res.status(404).json({ error: 'រកមិនឃើញការងារនេះទេ។ (Job not found)' });
+    }
+    if (isBusy(job)) {
+      return res.status(409).json({
+        error: 'ការងារនេះកំពុងដំណើរការ សូមរង់ចាំឲ្យចប់សិន។ (This job is still processing)',
+      });
+    }
+
+    const storage = getStorage();
+    for (const { category, filename } of jobArtifacts(job)) {
+      await storage.deleteFile(category, filename);
+    }
+    await storage.cleanProcessingDir(job.id);
+    await db.deleteJob(job.id);
+
+    logger.info(`Deleted job ${job.id} (${job.originalFilename || 'unnamed'}) for ${session.email}`);
+    return res.json({ ok: true, deleted: 1 });
+  } catch (err: any) {
+    logger.error('Failed to delete job:', err);
+    return res.status(500).json({ error: 'មិនអាចលុបការងារនេះបានទេ។ សូមព្យាយាមម្តងទៀត។' });
+  }
+});
+
+/**
+ * DELETE /api/jobs
+ * Clear this account's whole history — the finished jobs only. Anything still
+ * running is left alone so the pipeline can finish writing its result.
+ */
+router.delete('/', async (req: Request, res: Response) => {
+  try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
+    const db = getDatabase();
+    const pending = await db.listJobsForOwner(session.userId, Number.MAX_SAFE_INTEGER);
+    const removable = pending.filter((job) => !isBusy(job));
+
+    const storage = getStorage();
+    for (const job of removable) {
+      for (const { category, filename } of jobArtifacts(job)) {
+        await storage.deleteFile(category, filename);
+      }
+      await storage.cleanProcessingDir(job.id);
+      await db.deleteJob(job.id);
+    }
+
+    logger.info(`Cleared ${removable.length} job(s) from ${session.email}'s history`);
+    return res.json({ ok: true, deleted: removable.length, skipped: pending.length - removable.length });
+  } catch (err: any) {
+    logger.error('Failed to clear history:', err);
+    return res.status(500).json({ error: 'មិនអាចសម្អាតប្រវត្តិបានទេ។ សូមព្យាយាមម្តងទៀត។' });
+  }
+});
+
 export default router;
