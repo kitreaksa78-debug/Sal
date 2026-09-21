@@ -9,6 +9,14 @@ import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { withRetry } from '../utils/retry.js';
 import { getGeminiApiKey } from '../utils/aiKeys.js';
 
+/**
+ * How far a Khmer line may be squeezed to fit the original take before it stops
+ * sounding human. The old value was 1.4x, which produced the rushed, chipmunk-ish
+ * delivery typical of machine dubbing; the remaining overrun is carried into the
+ * next pause instead (dialogue segments are placed on the timeline by start time).
+ */
+const MAX_SPEECH_TEMPO = Number(process.env.MAX_SPEECH_TEMPO || '1.2');
+
 export interface TTSOptions {
   gender?: 'male' | 'female' | 'neutral';
   emotion?: string;
@@ -159,14 +167,17 @@ export class GeminiTTSProvider implements TTSProvider {
     // If target duration is specified (original video dialogue duration), match timing:
     if (options.targetDuration && options.targetDuration > 0.3) {
       const targetDur = options.targetDuration;
-      // If generated speech is longer than target by >10%, speed up with FFmpeg atempo (up to 1.4x)
+      // Khmer lines usually run longer than the original take, so the speech is
+      // squeezed to fit. Squeezing is a last resort, because past ~1.2x it stops
+      // sounding like a person: the tempo cap is deliberately low and the leftover
+      // overrun is absorbed by the next silence instead (see MAX_SPEECH_TEMPO).
       if (currentDuration > targetDur * 1.08) {
-        const speedFactor = Math.min(1.4, currentDuration / targetDur);
+        const speedFactor = Math.min(MAX_SPEECH_TEMPO, currentDuration / targetDur);
         logger.info(`Dialogue length (${currentDuration.toFixed(2)}s) exceeds target (${targetDur.toFixed(2)}s). Adjusting speech tempo by ${speedFactor.toFixed(2)}x`);
         await FFmpegHelper.adjustTempo(rawWavPath, outputPath, speedFactor);
       } else if (currentDuration < targetDur * 0.75) {
-        // Dialogue is slightly shorter: retain natural pauses, slightly adjust if needed (down to 0.9x)
-        const slowFactor = Math.max(0.9, currentDuration / targetDur);
+        // Dialogue is slightly shorter: retain natural pauses, slightly adjust if needed (down to 0.95x)
+        const slowFactor = Math.max(0.95, currentDuration / targetDur);
         await FFmpegHelper.adjustTempo(rawWavPath, outputPath, slowFactor);
       } else {
         fs.copyFileSync(rawWavPath, outputPath);

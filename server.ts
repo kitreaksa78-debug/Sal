@@ -29,7 +29,7 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    app: 'KhmerDub AI',
+    app: 'AI translate video',
     timestamp: new Date().toISOString(),
   });
 });

@@ -238,9 +238,19 @@ export class FFmpegHelper {
       }
     }
 
-    // Step 2: Create vocals (human speech) by bandpassing vocal range (250Hz - 3800Hz) + high-center isolation
+    // Step 2: Build the stem the transcriber listens to.
+    // Centre extraction already cancels the out-of-phase music; on top of that the
+    // signal is band-limited to the speech range (Whisper hears up to ~8 kHz, so the
+    // old 4 kHz cut was throwing sibilants away), the steady background hiss/music
+    // bed is reduced, and the level is evened out so quiet lines are not skipped.
+    // This is what turns "guessed" transcripts into the right words.
+    const enhanceSpeech = process.env.STT_SPEECH_ENHANCE !== '0';
     const vocalsFilter = [
-      '[0:a]pan=stereo|c0=0.5*c0+0.5*c1|c1=0.5*c0+0.5*c1,highpass=f=220,lowpass=f=4000[out]',
+      '[0:a]pan=mono|c0=0.5*c0+0.5*c1,' +
+        (enhanceSpeech
+          ? 'highpass=f=90,lowpass=f=7800,afftdn=nr=12:nf=-30,speechnorm=e=12.5:r=0.0001:l=1'
+          : 'highpass=f=90,lowpass=f=7800') +
+        '[out]',
     ].join(';');
 
     try {
@@ -397,17 +407,19 @@ export class FFmpegHelper {
     const musicVol = options.backgroundMusic === 'reduce' ? 0.35 : (options.musicVolume ?? 0.65);
     const speechVol = options.speechVolume ?? 1.35;
 
-    // Mute the background inside each dialogue window. When phase cancellation
-    // could not run (mono source) the background still holds the original voices,
-    // so it has to be pushed far down; when the centre was cancelled a shallower
-    // dip is enough to mask whatever bleed remains.
-    // A mono background still holds the original voices in full, so it must go
-    // essentially to silence during dialogue windows to ensure only the Khmer
-    // dub is heard. When the centre was cancelled only bleed remains, so a
-    // gentle dip masks it without gutting the music underneath the dub.
+    // Duck the background inside each dialogue window instead of muting it.
+    // A professional dub lowers the soundtrack a few dB under the voice and keeps
+    // it playing; cutting it to silence every time somebody speaks is the single
+    // most obvious "this video was dubbed" give-away, and it is what a whole-band
+    // -60 dB gate used to do. So:
+    //   * centre-cancelled background (only bleed left) -> a light 6 dB dip, the
+    //     music stays continuous and the Khmer voice simply sits on top of it;
+    //   * mono source (no separation possible, original voices are still in the
+    //     background) -> a deep but still not silent dip, so bass and air stay
+    //     audible under the dub.
     const gateDepthDb = options.backgroundHasOriginalVoice
-      ? Number(process.env.BACKGROUND_GATE_DB_MONO || '-60')
-      : Number(process.env.BACKGROUND_GATE_DB_STEREO || '-12');
+      ? Number(process.env.BACKGROUND_GATE_DB_MONO || '-30')
+      : Number(process.env.BACKGROUND_GATE_DB_STEREO || '-6');
     const gatePadMs = Number(process.env.BACKGROUND_GATE_PAD_MS || '150');
 
     const gateExpression = this.buildDialogueGateExpression(
