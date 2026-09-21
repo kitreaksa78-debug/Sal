@@ -11,6 +11,25 @@ const SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 /** `openid` is what makes Google return the account id next to the email. */
 const SCOPES = 'openid email profile';
 
+/**
+ * The site users should sign in from.
+ */
+export const CANONICAL_ORIGIN = 'https://khmerdub-ai.pages.dev';
+
+/**
+ * Hosts registered as "Authorized JavaScript origins" on the Google OAuth client
+ * (`933989049539-…apps.googleusercontent.com`). Google refuses every other host
+ * with `origin_mismatch` — a Cloudflare Pages deployment URL such as
+ * `https://<hash>.khmerdub-ai.pages.dev` is a different host, so signing in only
+ * works from the list below.
+ */
+const REGISTERED_ORIGINS = [CANONICAL_ORIGIN, 'http://localhost:3000'];
+
+/** True when Google will accept a sign-in from this page's host. */
+export function isRegisteredOrigin(origin: string): boolean {
+  return REGISTERED_ORIGINS.includes(origin.trim().replace(/\/+$/, ''));
+}
+
 export interface GoogleTokenResponse {
   access_token?: string;
   error?: string;

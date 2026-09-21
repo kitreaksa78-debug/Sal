@@ -13,6 +13,7 @@ import { getUsageStats } from '../lib/usage';
 import { getAuthConfig, signInWithGoogle, SignedInUser } from '../lib/api';
 import { GoogleSignInButton } from './GoogleSignInButton';
 import { GoogleMark } from './GoogleMark';
+import { CANONICAL_ORIGIN, isRegisteredOrigin } from '../lib/google';
 
 interface WelcomePageProps {
   /**
@@ -37,6 +38,9 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
   const [busy, setBusy] = useState(false);
   const [status, setStatus] = useState<Status | null>(null);
   const stats = getUsageStats();
+  // Cloudflare gives every deploy its own host; Google only knows the real domain.
+  const origin = typeof window === 'undefined' ? CANONICAL_ORIGIN : window.location.origin;
+  const originRegistered = isRegisteredOrigin(origin);
 
   // Only ask the server about Google sign-in once the visitor is past the CTA.
   useEffect(() => {
@@ -225,6 +229,20 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                       <p className="mt-3 flex items-center justify-center gap-2 text-xs text-emerald-300">
                         <span className="inline-block w-3.5 h-3.5 border-2 border-emerald-400/40 border-t-emerald-400 rounded-full animate-spin" />
                         កំពុងរក្សាទុកគណនី…
+                      </p>
+                    )}
+
+                    {!originRegistered && (
+                      <p className="mt-3 rounded-xl border border-amber-500/25 bg-amber-500/5 p-3 text-[11px] sm:text-xs text-amber-200 leading-relaxed">
+                        ដែននេះនៅទីតាំង{' '}
+                        <span className="font-semibold">{origin}</span> មិនទាន់បានចុះឈ្មោះជាមួយ Google ទេ — ការចូលនឹងបង្ហាញ
+                        «origin_mismatch»។ សូមប្រើ{' '}
+                        <a
+                          href={CANONICAL_ORIGIN}
+                          className="font-semibold underline hover:text-amber-100"
+                        >
+                          khmerdub-ai.pages.dev
+                        </a>
                       </p>
                     )}
 
