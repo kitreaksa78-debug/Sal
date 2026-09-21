@@ -39,6 +39,23 @@ export function isRegisteredOrigin(origin: string): boolean {
   return REGISTERED_ORIGINS.includes(origin.trim().replace(/\/+$/, ''));
 }
 
+/**
+ * Deployment hosts that serve this same app: a Cloudflare Pages address (with or
+ * without its deploy hash) or any `*.vercel.app` URL. Google treats each one as an
+ * unknown origin, so visitors are sent to the canonical domain before the app
+ * boots instead of hitting `origin_mismatch`.
+ */
+const ALIAS_HOST = /(^|\.)(khmerdub-ai\.pages\.dev|vercel\.app)$/i;
+
+export function isAliasOrigin(origin: string): boolean {
+  try {
+    const host = new URL(origin).hostname;
+    return host !== new URL(CANONICAL_ORIGIN).hostname && ALIAS_HOST.test(host);
+  } catch {
+    return false;
+  }
+}
+
 export interface GoogleTokenResponse {
   access_token?: string;
   error?: string;
