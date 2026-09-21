@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="AI translate video">
+  <defs>
+    <linearGradient id="mark" x1="2" y1="22" x2="22" y2="2" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
+  </defs>
+  <rect width="24" height="24" rx="5.2" fill="#0b0f17"/>
+  <g transform="translate(12 12) scale(0.88) translate(-12.5 -10.9)">
+    <rect x="2.6" y="5.6" width="18.8" height="12.8" rx="3.6" fill="none" stroke="url(#mark)" stroke-width="2"/>
+    <path d="M7.4 8.7 12.2 12l-4.8 3.3z" fill="url(#mark)"/>
+    <path d="M9.6 17.4 12.43 16.83 22.47 6.79 20.21 4.53 10.17 14.57Z" fill="url(#mark)" stroke="#0b0f17" stroke-width="1.5" stroke-linejoin="round" paint-order="stroke"/>
+  </g>
+</svg>
