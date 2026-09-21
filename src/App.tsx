@@ -62,6 +62,21 @@ export function App() {
   const sseUnsubscribeRef = useRef<(() => void) | null>(null);
 
   /**
+   * Name the open tab after what it shows. Search results and shared links take
+   * their heading from here, so each screen carries its own words instead of one
+   * generic title for the whole app.
+   */
+  useEffect(() => {
+    const titles: Record<typeof activeTab, string> = {
+      welcome: 'បកប្រែវីដេអូជាភាសាខ្មែរ · AI translate video',
+      studio: 'ស្ទូឌីយោបកប្រែវីដេអូ · AI translate video',
+      history: 'ប្រវត្តិការងារ · AI translate video',
+      pricing: 'តម្លៃ Pro · AI translate video',
+    };
+    document.title = titles[activeTab];
+  }, [activeTab]);
+
+  /**
    * Re-check the Pro plan for the signed-in account. Right after a checkout the
    * webhook may not have landed yet, so that path asks the billing API to confirm
    * the purchase directly instead of trusting local state.

@@ -1,0 +1,11 @@
+# AI translate video — https://aivideotranslate.dev
+# Everything here is public marketing and app pages; only the API and the
+# account-scoped media endpoints are off limits.
+
+User-agent: *
+Allow: /
+
+# The API and the per-account media it serves are never search results.
+Disallow: /api/
+
+Sitemap: https://aivideotranslate.dev/sitemap.xml
