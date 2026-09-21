@@ -89,7 +89,13 @@ export async function verifyGoogleAccessToken(accessToken: string): Promise<Goog
     'Google rejected the sign-in token'
   );
 
-  if (claimString(info, 'aud') !== clientId) {
+  // Google names the audience differently depending on the token flavour.
+  const audience =
+    claimString(info, 'aud') ||
+    claimString(info, 'audience') ||
+    claimString(info, 'azp') ||
+    claimString(info, 'issued_to');
+  if (audience !== clientId) {
     throw new Error('The sign-in token was issued for a different application');
   }
 
