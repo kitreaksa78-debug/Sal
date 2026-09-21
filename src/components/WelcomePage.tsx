@@ -191,7 +191,7 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                 ) : (
                   <>
                     <p className="mt-3.5 text-sm text-slate-300 leading-relaxed">
-                      សូម Login ដោយ Account Google របស់លោកអ្នក ដើម្បីបន្តទៅ websites បាន។
+                      សូម Login ដោយ Account Google របស់លោកអ្នក ដើម្បីបន្តទៅ websites បាន
                     </p>
 
                     <div className="mt-4">
