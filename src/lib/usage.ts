@@ -11,6 +11,7 @@ import { getSignedInUser } from './auth';
 const USAGE_BASE = 'khmerdub_usage';
 const PLAN_BASE = 'khmerdub_plan';
 const EMAIL_BASE = 'khmerdub_email';
+const ADMIN_BASE = 'khmerdub_admin';
 
 /** Free plan: 3 videos/day, 2 minutes each. */
 export const FREE_DAILY_LIMIT = 3;
@@ -67,6 +68,27 @@ export function isPro(): boolean {
   return getPlan() === 'pro';
 }
 
+/**
+ * An admin account (the address listed in the server's `OWNER_EMAILS`).
+ *
+ * The server decides this — it reports the flag on every usage sync — and this
+ * device only remembers the answer for the signed-in account. Admin is a
+ * superset of Pro: no daily cap and no 2-minute limit on the owner's own app.
+ */
+export function isAdmin(): boolean {
+  return readLocal(scoped(ADMIN_BASE)) === 'true';
+}
+
+export function setAdmin(admin: boolean): void {
+  if (admin) writeLocal(scoped(ADMIN_BASE), 'true');
+  else removeLocal(scoped(ADMIN_BASE));
+}
+
+/** Pro or admin — both run without the free tier's caps. */
+export function isUnlimited(): boolean {
+  return isPro() || isAdmin();
+}
+
 /** Remember the verified plan for this account. */
 export function setPlan(plan: Plan, email?: string): void {
   const account = email ?? getSignedInUser()?.email;
@@ -82,6 +104,7 @@ export function getAccountEmail(): string | null {
 export function clearPlan(): void {
   removeLocal(scoped(PLAN_BASE));
   removeLocal(scoped(EMAIL_BASE));
+  removeLocal(scoped(ADMIN_BASE));
 }
 
 export function getTodayUsage(): UsageData {
@@ -118,7 +141,7 @@ export function applyServerUsage(usage: UsageSummary): void {
 }
 
 export function canUseFreePlan(): { allowed: boolean; reason?: string } {
-  if (isPro()) return { allowed: true };
+  if (isUnlimited()) return { allowed: true };
 
   const usage = getTodayUsage();
   if (usage.count >= FREE_DAILY_LIMIT) {
@@ -132,14 +155,15 @@ export function canUseFreePlan(): { allowed: boolean; reason?: string } {
 }
 
 export function canProcessVideo(durationSeconds: number): { allowed: boolean; reason?: string } {
-  const limit = isPro() ? PRO_MAX_DURATION : FREE_MAX_DURATION;
-  const limitLabel = isPro() ? '30 នាទី' : '2 នាទី';
+  const unlimited = isUnlimited();
+  const limit = unlimited ? PRO_MAX_DURATION : FREE_MAX_DURATION;
+  const limitLabel = unlimited ? '30 នាទី' : '2 នាទី';
 
   if (durationSeconds > limit) {
     return {
       allowed: false,
-      reason: isPro()
-        ? `វីដេអូរបស់អ្នក ${Math.round(durationSeconds)} វិនាទី។ Pro plan កំណត់ត្រឹម ${limitLabel}។`
+      reason: unlimited
+        ? `វីដេអូរបស់អ្នក ${Math.round(durationSeconds)} វិនាទី។ គណនីនេះកំណត់ត្រឹម ${limitLabel}។`
         : `វីដេអូរបស់អ្នក ${Math.round(durationSeconds)} វិនាទី។ Free plan កំណត់ត្រឹម ${limitLabel}។ Upgrade to Pro សម្រាប់វីដេអូរហូតដល់ 30 នាទី។`,
     };
   }
@@ -152,13 +176,15 @@ export function getUsageStats(): {
   limit: number;
   remaining: number;
   plan: Plan;
+  admin: boolean;
   unlimited: boolean;
 } {
   const plan = getPlan();
+  const admin = isAdmin();
   const usage = getTodayUsage();
 
-  if (plan === 'pro') {
-    return { used: usage.count, limit: Infinity, remaining: Infinity, plan, unlimited: true };
+  if (admin || plan === 'pro') {
+    return { used: usage.count, limit: Infinity, remaining: Infinity, plan, admin, unlimited: true };
   }
 
   return {
@@ -166,6 +192,7 @@ export function getUsageStats(): {
     limit: FREE_DAILY_LIMIT,
     remaining: Math.max(0, FREE_DAILY_LIMIT - usage.count),
     plan,
+    admin,
     unlimited: false,
   };
 }

@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { getDatabase } from '../services/db.js';
+import { isAdminEmail } from '../services/accounts.js';
 import { requireSession } from '../middleware/session.js';
 import { logger } from '../utils/logger.js';
 
@@ -18,7 +19,13 @@ router.get('/', async (req: Request, res: Response) => {
 
   try {
     const usage = await getDatabase().getDailyUsage(session.userId);
-    res.json({ ...usage, account: { id: session.userId, email: session.email } });
+    // `admin` travels with the usage because this is the call every signed-in
+    // browser already makes: an admin account lifts its own daily/plan limits.
+    res.json({
+      ...usage,
+      admin: isAdminEmail(session.email),
+      account: { id: session.userId, email: session.email },
+    });
   } catch (err) {
     logger.error('Failed to read usage:', err);
     res.status(500).json({ error: 'មិនអាចអានការប្រើប្រាស់បានទេ។' });

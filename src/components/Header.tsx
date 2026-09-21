@@ -1,6 +1,7 @@
 import React from 'react';
-import { Volume2, Sparkles, History, Crown, LogOut, type LucideIcon } from 'lucide-react';
+import { Sparkles, History, Crown, LogOut, type LucideIcon } from 'lucide-react';
 import type { SignedInUser } from '../lib/api';
+import { Logo } from './Logo';
 
 type Tab = 'welcome' | 'studio' | 'history' | 'pricing';
 
@@ -49,14 +50,16 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setActiveTab('welcome')}
             className="flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer select-none group"
           >
-            <span className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-500 shadow-lg shadow-emerald-500/20 text-white shrink-0 group-hover:scale-105 transition-transform duration-200">
-              <Volume2 className="w-5 h-5" />
+            {/* Same dark tone as the page, so the logo's pencil "cuts" the frame cleanly. */}
+            <span className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#0b0f17] border border-slate-800 shadow-lg shadow-black/30 shrink-0 group-hover:scale-105 transition-transform duration-200">
+              <Logo className="w-6 h-6 sm:w-7 sm:h-7" />
             </span>
 
             <span className="min-w-0">
               <span className="flex items-center gap-2">
                 <h1 className="text-base sm:text-xl font-bold tracking-tight text-white leading-tight whitespace-nowrap">
-                  KhmerDub<span className="text-emerald-400 font-extrabold ml-0.5">AI</span>
+                  <span className="text-emerald-400 font-extrabold">AI</span>{' '}
+                  <span>translate video</span>
                 </h1>
                 <span className="hidden lg:inline-block text-[11px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
                   PRO DUBBING

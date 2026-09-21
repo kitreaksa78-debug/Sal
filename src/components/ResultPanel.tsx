@@ -3,18 +3,15 @@ import {
   Download, 
   FileText, 
   Music, 
-  Volume2, 
-  Sparkles, 
   CheckCircle2, 
   Subtitles, 
   RefreshCw, 
-  SplitSquareVertical, 
   Play, 
   Clock, 
   User 
 } from 'lucide-react';
-import { JobRecord, DialogueSegment } from '../types';
-import { getDownloadUrl, getSubtitlesUrl, getAudioDownloadUrl, getMediaFileUrl } from '../lib/api';
+import { JobRecord } from '../types';
+import { getDownloadUrl, getSubtitlesUrl, getAudioDownloadUrl } from '../lib/api';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -22,50 +19,19 @@ interface ResultPanelProps {
 }
 
 export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
-  const [viewMode, setViewMode] = useState<'comparison' | 'dubbed_only'>('comparison');
   const [showSubtitles, setShowSubtitles] = useState<boolean>(job.settings.subtitle ?? true);
-  const [selectedSegment, setSelectedSegment] = useState<DialogueSegment | null>(null);
 
   const dubbedVideoRef = useRef<HTMLVideoElement>(null);
-  const originalVideoRef = useRef<HTMLVideoElement>(null);
 
   const finalVideoUrl = getDownloadUrl(job.id);
   const srtUrl = getSubtitlesUrl(job.id, 'srt');
   const vttUrl = getSubtitlesUrl(job.id, 'vtt');
   const audioUrl = getAudioDownloadUrl(job.id);
 
-  // Original video preview URL
-  const originalFilename = job.inputFile ? job.inputFile.split('/').pop() : '';
-  const originalVideoUrl = originalFilename ? getMediaFileUrl('uploads', originalFilename) : '';
-
-  // Synchronized playback for comparison mode
-  const handleOriginalPlay = () => {
-    if (viewMode === 'comparison' && dubbedVideoRef.current && originalVideoRef.current) {
-      if (dubbedVideoRef.current.paused) {
-        dubbedVideoRef.current.play().catch(() => {});
-      }
-    }
-  };
-
-  const handleOriginalPause = () => {
-    if (viewMode === 'comparison' && dubbedVideoRef.current) {
-      dubbedVideoRef.current.pause();
-    }
-  };
-
-  const handleOriginalSeek = () => {
-    if (viewMode === 'comparison' && dubbedVideoRef.current && originalVideoRef.current) {
-      dubbedVideoRef.current.currentTime = originalVideoRef.current.currentTime;
-    }
-  };
-
   const seekToTime = (seconds: number) => {
     if (dubbedVideoRef.current) {
       dubbedVideoRef.current.currentTime = seconds;
       dubbedVideoRef.current.play().catch(() => {});
-    }
-    if (originalVideoRef.current) {
-      originalVideoRef.current.currentTime = seconds;
     }
   };
 
@@ -93,21 +59,11 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
           </div>
         </div>
 
-        <div className="grid grid-cols-2 sm:flex items-center gap-2 w-full sm:w-auto shrink-0">
-          {/* View mode toggle */}
-          <button
-            type="button"
-            onClick={() => setViewMode(viewMode === 'comparison' ? 'dubbed_only' : 'comparison')}
-            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-200 border border-slate-700 transition-colors min-h-[44px]"
-          >
-            <SplitSquareVertical className="w-4 h-4 text-emerald-400" />
-            <span>{viewMode === 'comparison' ? 'មើលតែវីដេអូខ្មែរ' : 'ប្រៀបធៀបដើម & ខ្មែរ'}</span>
-          </button>
-
+        <div className="flex items-center gap-2 w-full sm:w-auto shrink-0">
           <button
             type="button"
             onClick={onReset}
-            className="flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors min-h-[44px]"
+            className="flex flex-1 sm:flex-none items-center justify-center gap-1.5 px-3 py-2 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-xs font-semibold text-slate-300 border border-slate-700 transition-colors min-h-[44px]"
           >
             <RefreshCw className="w-4 h-4" />
             <span>វីដេអូថ្មី</span>
@@ -115,9 +71,10 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
         </div>
       </div>
 
-      {/* Video Players (Comparison vs Single) */}
-      <div className={`grid gap-5 ${viewMode === 'comparison' ? 'grid-cols-1 lg:grid-cols-2' : 'grid-cols-1'}`}>
-        {/* Dubbed Khmer Video Player (Track 1) */}
+      {/* The dubbed result is the only player: the original video is already on
+          the visitor's device, so playing it back here just adds noise. */}
+      <div className="grid gap-5 grid-cols-1">
+        {/* Dubbed Khmer Video Player */}
         <div className="bg-[#111827]/90 rounded-2xl border border-emerald-500/40 p-4 shadow-xl space-y-3">
           <div className="flex flex-wrap items-center justify-between gap-2">
             <div className="flex items-center gap-2 min-w-0">
@@ -162,34 +119,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
             </video>
           </div>
         </div>
-
-        {/* Original Video Player (for side-by-side comparison) */}
-        {viewMode === 'comparison' && (
-          <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 shadow-xl space-y-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="flex items-center gap-2 min-w-0">
-                <span className="w-2.5 h-2.5 rounded-full bg-slate-500 shrink-0" />
-                <h3 className="text-xs sm:text-sm font-bold text-slate-300 flex flex-wrap items-center gap-1.5">
-                  <span>វីដេអូដើម (Original Video)</span>
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 font-mono whitespace-nowrap">BEFORE</span>
-                </h3>
-              </div>
-            </div>
-
-            <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
-              <video
-                ref={originalVideoRef}
-                src={originalVideoUrl || finalVideoUrl}
-                controls
-                playsInline
-                onPlay={handleOriginalPlay}
-                onPause={handleOriginalPause}
-                onSeeked={handleOriginalSeek}
-                className="w-full h-full object-contain"
-              />
-            </div>
-          </div>
-        )}
       </div>
 
       {/* Action Download Buttons */}

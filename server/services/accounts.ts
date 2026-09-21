@@ -16,7 +16,21 @@ export function getOwnerAllowlist(): string[] {
     .filter(Boolean);
 }
 
+/**
+ * Whether an address is on the admin list without touching the database.
+ *
+ * `OWNER_EMAILS` is the authority: when it names someone, that answer is final
+ * and does not depend on who signed up first (or on which accounts survived a
+ * restart). Only the oldest-account fallback needs to read the user list, so
+ * this stays a cheap check that routes can call on every request.
+ */
+export function isAdminEmail(email: string | null | undefined): boolean {
+  if (!email) return false;
+  return getOwnerAllowlist().includes(email.trim().toLowerCase());
+}
+
 export async function isAppOwner(session: SessionRecord): Promise<boolean> {
+  if (isAdminEmail(session.email)) return true;
   const allowlist = getOwnerAllowlist();
   if (allowlist.length > 0) {
     return allowlist.includes(session.email.trim().toLowerCase());

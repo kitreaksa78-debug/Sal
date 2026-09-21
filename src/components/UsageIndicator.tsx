@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { BarChart3, Crown, Zap } from 'lucide-react';
+import { BarChart3, Crown, ShieldCheck, Zap } from 'lucide-react';
 import { getUsageStats } from '../lib/usage';
 import { CheckoutButton } from './CheckoutButton';
 
@@ -26,11 +26,25 @@ export const UsageIndicator: React.FC<UsageIndicatorProps> = ({ stats: provided 
 
   if (stats.unlimited) {
     return (
-      <div className="flex items-center justify-between p-3 rounded-lg border bg-emerald-900/20 border-emerald-500/30">
+      <div
+        className={`flex items-center justify-between p-3 rounded-lg border ${
+          stats.admin
+            ? 'bg-cyan-950/40 border-cyan-500/30'
+            : 'bg-emerald-900/20 border-emerald-500/30'
+        }`}
+      >
         <div className="flex items-center gap-3">
-          <Crown className="w-4 h-4 text-emerald-400" />
+          {stats.admin ? (
+            <ShieldCheck className="w-4 h-4 text-cyan-400" />
+          ) : (
+            <Crown className="w-4 h-4 text-emerald-400" />
+          )}
           <div>
-            <div className="text-sm font-medium text-emerald-300">Pro plan — វីដេអូឥតកំណត់</div>
+            <div
+              className={`text-sm font-medium ${stats.admin ? 'text-cyan-300' : 'text-emerald-300'}`}
+            >
+              {stats.admin ? 'Admin — វីដេអូឥតកំណត់' : 'Pro plan — វីដេអូឥតកំណត់'}
+            </div>
             <div className="text-[11px] text-slate-400">
               {stats.used} វីដេអូដំណើរការរួច · រយៈពេលដល់ 30 នាទីក្នុងមួយវីដេអូ
             </div>

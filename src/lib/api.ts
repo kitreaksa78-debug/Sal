@@ -27,6 +27,21 @@ const RAW_API_BASE = (BUILD_ENV.VITE_API_BASE_URL || '').trim().replace(/\/+$/, 
 
 export const API_BASE = RAW_API_BASE ? `${RAW_API_BASE}/api` : '/api';
 
+/**
+ * A server on a free host sleeps after a few idle minutes and can take most of a
+ * minute to answer the first request. Every probe is therefore bounded: the UI
+ * shows an honest "starting up" state instead of a spinner that never ends.
+ */
+async function fetchWithTimeout(url: string, timeoutMs: number): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export async function uploadVideoJob(
   file: File,
   settings: JobSettings,
@@ -214,14 +229,32 @@ export interface SignedInUser {
 }
 
 /** Whether Google sign-in is ready, and the public client id it needs. */
-export async function getAuthConfig(): Promise<{ configured: boolean; clientId: string | null }> {
-  const res = await fetch(`${API_BASE}/auth/config`);
-  if (!res.ok) throw new Error('Failed to fetch auth configuration');
-  const data = (await res.json()) as { google?: { configured?: boolean; clientId?: string | null } };
-  return {
-    configured: Boolean(data.google?.configured),
-    clientId: data.google?.clientId ?? null,
-  };
+export async function getAuthConfig(
+  attempts = 2
+): Promise<{ configured: boolean; clientId: string | null }> {
+  // Retrying matters: the first request is what wakes a sleeping free instance,
+  // so a timeout that fires while it boots is usually followed by an instant reply.
+  let lastError: unknown = null;
+
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const res = await fetchWithTimeout(`${API_BASE}/auth/config`, 20_000);
+      if (!res.ok) throw new Error(`Failed to fetch auth configuration (${res.status})`);
+      const data = (await res.json()) as {
+        google?: { configured?: boolean; clientId?: string | null };
+      };
+      return {
+        configured: Boolean(data.google?.configured),
+        clientId: data.google?.clientId ?? null,
+      };
+    } catch (err) {
+      lastError = err;
+    }
+  }
+
+  throw lastError instanceof Error
+    ? lastError
+    : new Error('Failed to fetch auth configuration');
 }
 
 /**
@@ -278,6 +311,8 @@ export interface UsageSummary {
   date: string;
   count: number;
   totalDuration: number;
+  /** Server-side admin list (`OWNER_EMAILS`) — the account owns the app. */
+  admin?: boolean;
 }
 
 export async function getUsage(): Promise<UsageSummary> {
@@ -286,12 +321,20 @@ export async function getUsage(): Promise<UsageSummary> {
   return (await res.json()) as UsageSummary;
 }
 
-/** Every saved account, newest login first (only the owner gets the full list). */
-export async function listUsers(limit = 200): Promise<SignedInUser[]> {
+/**
+ * Every saved account, newest login first.
+ *
+ * `scope` is the important half: the server answers `all` only for the app
+ * owner (admin) and `self` for everyone else, which is how the app learns it is
+ * running for an admin without trusting anything sent from the browser.
+ */
+export async function listUsers(
+  limit = 200
+): Promise<{ scope: 'all' | 'self'; users: SignedInUser[] }> {
   const res = await fetch(`${API_BASE}/auth/users?limit=${limit}`, { headers: authHeaders() });
   if (!res.ok) throw new Error('Failed to fetch users');
-  const data = (await res.json()) as { users?: SignedInUser[] };
-  return data.users || [];
+  const data = (await res.json()) as { scope?: string; users?: SignedInUser[] };
+  return { scope: data.scope === 'all' ? 'all' : 'self', users: data.users || [] };
 }
 
 /** Verify a purchase by the buyer's email (also used to restore access). */

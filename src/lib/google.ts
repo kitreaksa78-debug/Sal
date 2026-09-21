@@ -8,6 +8,17 @@
  */
 const SCRIPT_SRC = 'https://accounts.google.com/gsi/client';
 
+/**
+ * The public OAuth client id, used only until the server answers with its own.
+ *
+ * A client id is not a secret — it travels in the URL of every Google sign-in
+ * request — and the server still verifies each token with the matching secret,
+ * so the button can be painted immediately while a sleeping server wakes up.
+ * Whatever `/api/auth/config` reports always wins.
+ */
+export const DEFAULT_GOOGLE_CLIENT_ID =
+  '933989049539-dv748kn014gkkpke70iqbpc6visj6gl6.apps.googleusercontent.com';
+
 /** `openid` is what makes Google return the account id next to the email. */
 const SCOPES = 'openid email profile';
 

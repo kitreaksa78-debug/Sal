@@ -2,10 +2,16 @@
 // draft; when the visitor has signed in with Google their account details are
 // already written into the message.
 
-/** Support inbox. Change this one constant to point the button elsewhere. */
+/**
+ * Support inbox — the app's admin account (`OWNER_EMAILS` on the server).
+ * Change this one constant to point the button elsewhere.
+ */
 export const CONTACT_EMAIL = 'kitreaksa78@gmail.com';
 
-const CONTACT_SUBJECT = 'KhmerDub AI — សំណួរ / ជំនួយ';
+/** Shown next to the button so visitors know whose inbox they are writing to. */
+export const CONTACT_LABEL = 'Admin';
+
+const CONTACT_SUBJECT = 'AI translate video — សំណួរ / ជំនួយ';
 
 export interface ContactIdentity {
   name?: string;
@@ -13,7 +19,7 @@ export interface ContactIdentity {
 }
 
 function buildBody(identity?: ContactIdentity | null): string {
-  const lines = ['សួស្តីក្រុមការងារ KhmerDub AI,', '', 'ខ្ញុំចង់សួរអំពី៖ ', '', '—'];
+  const lines = ['សួស្តីក្រុមការងារ AI translate video,', '', 'ខ្ញុំចង់សួរអំពី៖ ', '', '—'];
 
   if (identity?.name) lines.push(`ឈ្មោះ: ${identity.name}`);
   if (identity?.email) lines.push(`អ៊ីមែល: ${identity.email}`);
