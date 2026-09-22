@@ -3,7 +3,7 @@ import multer from 'multer';
 import path from 'path';
 import fs from 'fs';
 import { getDatabase } from '../services/db.js';
-import { getStorage } from '../services/storage.js';
+import { getStorage, resolveStoredArtifact } from '../services/storage.js';
 import { requireSession } from '../middleware/session.js';
 import { isAppOwner } from '../services/accounts.js';
 import { JobProcessor, jobEvents } from '../services/jobProcessor.js';
@@ -268,14 +268,17 @@ router.get('/:id/download', async (req: Request, res: Response) => {
       return res.status(404).send('Job not found');
     }
 
-    if (job.status !== 'completed' || !job.outputFile || !fs.existsSync(job.outputFile)) {
+    // A restart wipes the local disk, so the file usually has to come back from
+    // object storage before it can be streamed.
+    const videoFile = await resolveStoredArtifact(job.outputFile);
+    if (job.status !== 'completed' || !videoFile) {
       return res.status(400).send('វីដេអូបកប្រែមិនទាន់រួចរាល់ ឬមានបញ្ហា។ (Output video not ready)');
     }
 
     const safeFilename = `khmer-dubbed-${job.id}.mp4`;
     res.setHeader('Content-Type', 'video/mp4');
     res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
-    const fileStream = fs.createReadStream(job.outputFile);
+    const fileStream = fs.createReadStream(videoFile);
     fileStream.pipe(res);
   } catch (err: any) {
     logger.error('Download error:', err);
@@ -299,9 +302,10 @@ router.get('/:id/subtitles', async (req: Request, res: Response) => {
     }
 
     const format = (req.query.format as string || 'vtt').toLowerCase();
-    const subFile = format === 'srt' ? job.outputSubtitlesSrt : job.outputSubtitlesVtt;
+    const storedSubFile = format === 'srt' ? job.outputSubtitlesSrt : job.outputSubtitlesVtt;
+    const subFile = await resolveStoredArtifact(storedSubFile);
 
-    if (!subFile || !fs.existsSync(subFile)) {
+    if (!subFile) {
       return res.status(404).send('Subtitles not ready');
     }
 
@@ -328,13 +332,14 @@ router.get('/:id/audio', async (req: Request, res: Response) => {
     if (!job || (job.ownerId && job.ownerId !== session.userId)) {
       return res.status(404).send('Job not found');
     }
-    if (!job.outputAudioFile || !fs.existsSync(job.outputAudioFile)) {
+    const audioFile = await resolveStoredArtifact(job.outputAudioFile);
+    if (!audioFile) {
       return res.status(404).send('Audio not ready');
     }
 
     res.setHeader('Content-Type', 'audio/wav');
     res.setHeader('Content-Disposition', `attachment; filename="khmer-audio-${job.id}.wav"`);
-    fs.createReadStream(job.outputAudioFile).pipe(res);
+    fs.createReadStream(audioFile).pipe(res);
   } catch (e) {
     res.status(500).send('Failed to download audio');
   }

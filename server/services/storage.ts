@@ -451,6 +451,34 @@ export class S3StorageProvider implements StorageProvider {
 
 let storageInstance: StorageProvider | null = null;
 
+/**
+ * Resolve a stored artefact path to a readable file on this host.
+ *
+ * Job records keep the path the pipeline wrote, but free hosts have an ephemeral
+ * disk: every deploy and restart wipes it while the bucket keeps the file. So when
+ * the local copy is gone, pull it back from object storage first — otherwise a
+ * finished job suddenly reports "not ready" and its download breaks.
+ *
+ * @returns the readable path, or null when the artefact is nowhere to be found.
+ */
+export async function resolveStoredArtifact(
+  storedPath?: string,
+  category: 'uploads' | 'processing' | 'outputs' = 'outputs'
+): Promise<string | null> {
+  if (!storedPath) return null;
+  if (fs.existsSync(storedPath)) return storedPath;
+
+  const filename = path.basename(storedPath.split('?')[0]);
+  if (!filename) return null;
+
+  const restored = await getStorage().ensureFileAvailable(category, filename);
+  if (restored && fs.existsSync(restored)) {
+    logger.info(`Restored ${category}/${filename} from object storage`);
+    return restored;
+  }
+  return null;
+}
+
 export function getStorage(): StorageProvider {
   const s3Config = parseS3Config();
 
