@@ -1,0 +1,9 @@
+# Stem separation models — the same package TachiDUBB Studio uses.
+#
+# `[cpu]` pulls the CPU build of torch and works on any machine (slow).
+# On a CUDA box, replace it with `audio-separator[gpu]`.
+audio-separator[cpu]>=0.17,<1.0
+
+fastapi>=0.115
+uvicorn[standard]>=0.30
+python-multipart>=0.0.9

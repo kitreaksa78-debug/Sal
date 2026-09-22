@@ -171,7 +171,7 @@ export interface SystemConfigStatus {
   translation: { configured: boolean; provider: string; model: string; fallbackModels?: string[] };
   stt: { configured: boolean; provider: string; model: string };
   tts: { configured: boolean; provider: string; model: string };
-  audioSeparation: { configured: boolean; provider: string };
+  audioSeparation: { configured: boolean; provider: string; model?: string; message?: string };
   storage: {
     configured: boolean;
     provider: string;

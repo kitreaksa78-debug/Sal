@@ -4,6 +4,7 @@ import { getStorage } from '../services/storage.js';
 import { getTranscriptionProvider } from '../services/transcription.js';
 import { getTranslationService } from '../services/translation.js';
 import { getTTSProvider } from '../services/tts.js';
+import { getAudioSeparationProvider } from '../services/audioSeparation.js';
 import { SystemConfigStatus } from '../types.js';
 import { getGeminiApiKey } from '../utils/aiKeys.js';
 
@@ -38,8 +39,12 @@ router.get('/status', async (req: Request, res: Response) => {
   const ttsProvider = ttsInstance.name;
   const ttsModel = ttsInstance.getModelName();
 
-  const audioSeparationConfigured = true; // Local DSP separation is always ready with FFmpeg
-  const audioSeparationProvider = process.env.AUDIO_SEPARATION_PROVIDER || 'local_dsp';
+  // The local DSP provider is always ready (FFmpeg ships with the app); the
+  // `audio_separator` sidecar needs its URL configured, and `demucs` needs the CLI
+  // on the host. Asking the provider itself keeps this honest.
+  const audioSeparationInstance = getAudioSeparationProvider();
+  const audioSeparationProvider = audioSeparationInstance.name;
+  const audioSeparationConfigured = audioSeparationInstance.isConfigured();
 
   const maxVideoSizeMb = parseInt(process.env.MAX_VIDEO_SIZE_MB || '500', 10);
   const videoSegmentSeconds = parseInt(process.env.VIDEO_SEGMENT_SECONDS || '300', 10);
@@ -68,6 +73,15 @@ router.get('/status', async (req: Request, res: Response) => {
     audioSeparation: {
       configured: audioSeparationConfigured,
       provider: audioSeparationProvider,
+      ...(audioSeparationProvider === 'audio_separator'
+        ? { model: process.env.AUDIO_SEPARATOR_MODEL || 'UVR-MDX-NET-Inst_HQ_3' }
+        : {}),
+      ...(audioSeparationConfigured
+        ? {}
+        : {
+            message:
+              'មិនទាន់ភ្ជាប់ម៉ាស៊ីនញែកភ្លេងទេ — ត្រូវដាក់ AUDIO_SEPARATOR_URL។ (audio_separator is selected but AUDIO_SEPARATOR_URL is not set.)',
+          }),
     },
     storage: {
       configured: storage.isConfigured(),
