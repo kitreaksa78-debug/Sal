@@ -283,7 +283,7 @@ mkdirSync(OUT_DIR, { recursive: true });
 
 const sizes = [16, 32, 48, 64];
 const rasters = new Map();
-for (const size of [...sizes, 180, 192, 512]) {
+for (const size of [...sizes, 96, 180, 192, 512]) {
   rasters.set(size, encodePng(size, renderIcon(size)));
 }
 
@@ -296,6 +296,9 @@ const write = (name, buffer) => {
 write('favicon.svg', Buffer.from(buildSvg(), 'utf8'));
 write('favicon.ico', encodeIco(sizes.map((size) => ({ size, data: rasters.get(size) }))));
 write('favicon-32.png', rasters.get(32));
+// 96px is the size Google's search-result crawler prefers; a crisp file at
+// exactly /favicon-96x96.png removes its need to upscale the 32px one.
+write('icon-96.png', rasters.get(96));
 write('apple-touch-icon.png', rasters.get(180));
 write('icon-192.png', rasters.get(192));
 write('icon-512.png', rasters.get(512));
