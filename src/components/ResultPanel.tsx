@@ -1,8 +1,6 @@
 import React, { useState, useRef } from 'react';
 import { 
   Download, 
-  FileText, 
-  Music, 
   CheckCircle2, 
   Subtitles, 
   RefreshCw, 
@@ -11,7 +9,7 @@ import {
   User 
 } from 'lucide-react';
 import { JobRecord } from '../types';
-import { getDownloadUrl, getSubtitlesUrl, getAudioDownloadUrl } from '../lib/api';
+import { getDownloadUrl, getSubtitlesUrl } from '../lib/api';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -24,9 +22,9 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   const dubbedVideoRef = useRef<HTMLVideoElement>(null);
 
   const finalVideoUrl = getDownloadUrl(job.id);
-  const srtUrl = getSubtitlesUrl(job.id, 'srt');
+  // The VTT track is still needed for the on-player subtitle toggle; the SRT and
+  // WAV downloads were removed from this panel.
   const vttUrl = getSubtitlesUrl(job.id, 'vtt');
-  const audioUrl = getAudioDownloadUrl(job.id);
 
   const seekToTime = (seconds: number) => {
     if (dubbedVideoRef.current) {
@@ -127,7 +125,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
           ទាញយកលទ្ធផល (Download Outputs)
         </h3>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+        <div className="grid grid-cols-1 gap-3">
           {/* Main Video Download */}
           <a
             href={finalVideoUrl}
@@ -136,36 +134,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
           >
             <Download className="w-4 h-4" />
             <span>ទាញយក MP4 (Khmer Video)</span>
-          </a>
-
-          {/* Subtitle SRT */}
-          <a
-            href={srtUrl}
-            download={`subtitles-${job.id}.srt`}
-            className="flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 active:scale-95 transition-all min-h-[48px]"
-          >
-            <FileText className="w-4 h-4 text-emerald-400" />
-            <span>ទាញយក Subtitles (SRT)</span>
-          </a>
-
-          {/* Subtitle VTT */}
-          <a
-            href={vttUrl}
-            download={`subtitles-${job.id}.vtt`}
-            className="flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 active:scale-95 transition-all min-h-[48px]"
-          >
-            <FileText className="w-4 h-4 text-teal-400" />
-            <span>ទាញយក Subtitles (VTT)</span>
-          </a>
-
-          {/* Mixed Audio WAV */}
-          <a
-            href={audioUrl}
-            download={`khmer-audio-${job.id}.wav`}
-            className="flex items-center justify-center gap-2 px-4 py-3.5 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-slate-200 font-semibold text-xs border border-slate-700 active:scale-95 transition-all min-h-[48px]"
-          >
-            <Music className="w-4 h-4 text-amber-400" />
-            <span>ទាញយកសំឡេងខ្មែរ (WAV)</span>
           </a>
         </div>
       </div>
