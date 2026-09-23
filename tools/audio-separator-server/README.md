@@ -16,7 +16,23 @@ Mini service ដែលរុំ package **`audio-separator`** (UVR / MDX-Net / D
 
 ## ដំណើរការ ១០ នាទី
 
-### Docker (ស្រួលបំផុត — GPU ឬ CPU)
+### ⭐ ស្គ្រីបមួយប៊ូតុង (ឯកសារ launcher)
+
+**Linux / macOS / VM (Oracle, AWS...):**
+```bash
+sh tools/audio-separator-server/start.sh
+```
+
+**Windows:**
+```
+double-click tools\audio-separator-server\start.bat
+```
+
+ស្គ្រីបនេះ ត្រូវធ្វើរាល់អ្វីឯង៖ venv → dependencies → ចាប់ផ្តើម service → **បើក Cloudflare Tunnel**
+បើ cloudflared មាន → ហើយ**បោះពុម្ព env vars ត្រឹមត្រូវ**ដើម្បី paste ទៅ Render។ គ្រាន់តែទុក terminal
+ចាកចេញបើកចុះ (Ctrl-C = ឈប់ទាំង service + tunnel)។
+
+### Docker (GPU ឬ CPU)
 
 ```bash
 cd tools/audio-separator-server
@@ -72,6 +88,18 @@ curl https://aivideotranslate.dev/api/config/status | grep -A3 audioSeparation
 * Upload ធំជាង `SEPARATOR_MAX_MB` (default ២០៤៨ MB) → ឆ្លើយ 413។
 * បើ service ដួល ឬ timeout → គេហទំព័រ**មិនខូច**ទេ៖ provider ថយទៅវិធី FFmpeg DSP ដើមវិញ
   ហើយការងារបន្តធម្មតា (មានសារព្រមានជាភាសាខ្មែរក្នុងលទ្ធផល)។
+
+## បញ្ជីត្រួតពិនិត្យរហ័ស (Checklist)
+
+| ជំហាន | របៀបផ្ទៀងផ្ទាត់ |
+|---|---|
+| ១. service រត់ | `curl http://127.0.0.1:8920/health` → `{"status":"ok"...}` |
+| ២. tunnel បើក | launcher បង្ហាញ URL `https://xxxx.trycloudflare.com` |
+| ៣. Render ដឹង | Render → Environment មាន `AUDIO_SEPARATION_PROVIDER=audio_separator` + URL + key → Save → Manual Deploy |
+| ៤. app ប្រើវា | `curl https://aivideotranslate.dev/api/config/status` → `audioSeparation.provider = "audio_separator"` · `configured: true` |
+| ៥. job ពិត | បកប្រែវីដេអូ → Render logs ឃើញ `Separating stems with the audio-separator service...` → ភ្លេងលែងដាច់ |
+
+> ⚠️ បើ step ៤ នៅបង្ហាញ `local_dsp` → Render មិនទាន់ deploy ឡើងវិញ ឬ env var វាយខុស។ បើ job បង្ហាញសារព្រមាន «audio-separator មិនបានសម្រេច» → service/tunnel បានបិទ — បើក launcher ម្តងទៀត (គ្មានអ្វីខូចដេញដោល — job ប្រើ DSP fallback)។
 
 ## អាជ្ញាបណ្ណ
 
