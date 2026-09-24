@@ -79,6 +79,19 @@ curl -s http://127.0.0.1:8000/
 # {"status":"ok","service":"Demucs API", ...}
 ```
 
+ចង់ដឹងច្បាស់ថា **Demucs ញែកភ្លេងពិតៗបានឬអត់** (មិនមែនតែ API ឆ្លើយតប) សាកបញ្ជាតែមួយនេះ៖
+
+```bash
+sh test-demucs.sh
+```
+
+វាបង្កើតសំឡេងសាកល្បង ២ វិនាទីដោយខ្លួនឯង បញ្ជូនទៅ API រួចប្រាប់ថាជោគជ័យឬអត់
+(លើទូរស័ព្ទចំណាយពេល ១–៣ នាទី)។ បើចង់សាក **URL សាធារណៈ** ដូចដែលគេហទំព័រប្រើ៖
+
+```bash
+sh test-demucs.sh "$(cat ~/demucs-api/tunnel-url.txt)"
+```
+
 > **កុំប្រើ `pip install -r requirements.txt` តែម្នាក់ឯង។** `demucs` ប្រកាសតម្រូវការ
 > `lameenc` (សម្រាប់សរសេរ MP3) ដែលគ្មាន wheel លើ Android/arm ដូច្នេះ pip ដួលទាំងស្រុង៖
 >
@@ -156,6 +169,7 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 
 | ជំហាន | របៀបផ្ទៀងផ្ទាត់ |
 |---|---|
+| ០. Demucs ដើរពិត | `sh test-demucs.sh` — វាញែកសំឡេងសាកល្បងពិតៗ រួចរាយទំហំ vocals/instrumental |
 | ១. API រត់ | `curl -s http://127.0.0.1:8000/` → `{"status":"ok","service":"Demucs API"}` |
 | ២. tunnel បើក | SSH បង្ហាញ URL `https://…` |
 | ៣. គេហទំព័រដឹង | កាត «ញែកភ្លេង» បង្ហាញ **ភ្ជាប់រួច** |
