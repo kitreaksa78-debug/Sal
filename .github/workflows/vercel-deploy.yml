@@ -1,0 +1,44 @@
+# ប្រាប់ Vercel ឲ្យ build commit ដែលទើប push ឡើង main។
+#
+# ហេតុអ្វីត្រូវការ workflow នេះ? Git integration របស់ Vercel ក្នុង project នេះ
+# នៅភ្ជាប់ repo ត្រឹមត្រូវ (វាអាន repo បាន) ប៉ុន្តែ **វាមិនទទួល push event** ទេ —
+# ដូច្នេះ push ចូល main មិនបង្កើត deployment សោះ។ នេះជាបញ្ហាខាង Vercel ដែលគេ
+# រាយការណ៍ថាត្រូវការ support ទើបដោះបាន។ workflow នេះជំនួសវា៖ វាហៅ Vercel API
+# ឲ្យ build `main` ដូចដើមរាល់ពេលមាន push។
+#
+# ត្រូវការ secret មួយក្នុង repo៖ VERCEL_TOKEN (Vercel access token)។
+name: Deploy to Vercel
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ask Vercel to build this commit
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+        run: |
+          set -eu
+          if [ -z "${VERCEL_TOKEN:-}" ]; then
+            echo "VERCEL_TOKEN secret is missing from this repository" >&2
+            exit 1
+          fi
+          curl -fsS -X POST \
+            "https://api.vercel.com/v13/deployments?forceNew=1&teamId=team_Y0hqIalwlFcozCYD1nNbLv0k" \
+            -H "Authorization: Bearer $VERCEL_TOKEN" \
+            -H "Content-Type: application/json" \
+            -d '{
+                  "name": "khmerdub-ai",
+                  "project": "khmerdub-ai",
+                  "target": "production",
+                  "gitSource": { "type": "github", "ref": "main", "repoId": 1371708577 }
+                }' \
+            -o /tmp/deployment.json \
+            -w 'Vercel replied HTTP %{http_code}\n'
+          echo "--- deployment ---"
+          head -c 600 /tmp/deployment.json
+          echo
