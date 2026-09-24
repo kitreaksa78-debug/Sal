@@ -97,6 +97,12 @@ curl -s http://127.0.0.1:8000/
 
 ## ជំហាន ២ — បើក tunnel (URL សាធារណៈ)
 
+**ជម្រើសស្វ័យប្រវត្តិ (ណែនាំ)៖** `phone-start.sh` ធ្វើវាទាំងពីរជំនួសអ្នក — វាសាក
+**Cloudflare** មុន ហើយបើគ្មាន URL ចេញ ឬ URL នោះមិនឆ្លើយតបក្នុង ~១ នាទី
+វាប្តូរទៅ **SSH (localhost.run)** ដោយស្វ័យប្រវត្តិ។ ដូច្នេះជាធម្មតាអ្នកមិនត្រូវធ្វើ
+អ្វីខាងក្រោមនេះដោយដៃទេ — ចាំឲ្យវាបញ្ចប់ រួចយក URL តាមជំហាន ៣។
+វិធីដោយដៃ (ក្នុង Ubuntu នៃ proot)៖
+
 **ជម្រើស A — SSH (មិនត្រូវដំឡើងអ្វីបន្ថែម)។** Termux គ្មាន `cloudflared` ដូច្នេះប្រើ `openssh`៖
 
 ```bash
@@ -156,7 +162,8 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 
 | រោគសញ្ញា | មូលហេតុ / ដំណោះស្រាយ |
 |---|---|
-| «fetch failed» ក្នុងការសាកល្បង | `tunnel បានបិទ` ឬ URL ថ្មី — បើក `sh tunnel-url.sh` វានឹងបង្ហាញ URL ដែលកំពុងរស់ រួច paste ថ្មី (URL ចាស់បាត់ពី DNS ទាំងស្រុង) |
+| tunnel មិនចេញ URL | ស្គ្រីបសាក Cloudflare រួច SSH ជំនួសស្វ័យប្រវត្តិ។ បើទាំងពីរដួល សាកប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data |
+| URL ចេញ តែ «fetch failed» លើគេហទំព័រ | URL ចាស់ (tunnel មុន) — យក URL ថ្មីពី `cat ~/demucs-tunnel-url.txt` រួច paste ម្តងទៀត | | `tunnel បានបិទ` ឬ URL ថ្មី — បើក `sh tunnel-url.sh` វានឹងបង្ហាញ URL ដែលកំពុងរស់ រួច paste ថ្មី (URL ចាស់បាត់ពី DNS ទាំងស្រុង) |
 | ការងារឈប់នៅជំហានញែកភ្លេង | គ្មាន Demucs ភ្ជាប់ទេ — បើក API + tunnel រួចពិនិត្យកាតជាមួយ «សាកល្បង» |
 | បង្ហាញឈ្មោះ service តែបរាជ័យ | API មិនស្គាល់ endpoint នេះទេ — កំណត់ `AUDIO_SEPARATOR_PATH` ឬប្រើ `demucs_api.py` |
 | `401 Invalid or missing API key` | ដាក់ key ដូចនៅក្នុង `DEMUCS_API_KEY` |

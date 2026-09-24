@@ -155,6 +155,7 @@ if ! command -v cloudflared >/dev/null 2>&1; then
 fi
 
 LOG="$DIR/cloudflared.log"
+SSHLOG="$DIR/ssh-tunnel.log"
 : > "$LOG"
 pkill -f "cloudflared tunnel" 2>/dev/null || true
 sleep 1
@@ -168,28 +169,84 @@ fi
 
 # ចំណុចខាងក្រោមមានន័យថា «កំពុងរង់ចាំពិតៗ» — មិនមែនគាំងទេ។ Cloudflare
 # ត្រូវការពេលបន្តិចដើម្បីបង្កើតផ្លូវថ្មី ហើយជួនកាលលើ 4G វាយឺត។
-printf 'រង់ចាំ URL ពី Cloudflare (រហូត ៦០ វិនាទី, ចំណុច = កំពុងដំណើរការ) '
-URL=""
-i=0
-while [ "$i" -lt 60 ]; do
-  URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' "$LOG" 2>/dev/null | tail -1 || true)
-  if [ -n "$URL" ]; then
-    break
+# ស្គាល់ការរង់ចាំ៖ ចំណុច (.) ចេញរាល់វិនាទី — វាមិនមែនគាំងទេ។ ចំណុចចេញទៅ stderr
+# ដើម្បីកុំលាយជាមួយ URL ដែលយើងចាប់យកបាន។
+wait_url() { # $1=log  $2=pattern  $3=វិនាទី
+  n=0
+  found=""
+  while [ "$n" -lt "$3" ]; do
+    found=$(grep -o "$2" "$1" 2>/dev/null | tail -1 || true)
+    if [ -n "$found" ]; then
+      printf '%s' "$found"
+      return 0
+    fi
+    n=$((n + 1))
+    printf '.' >&2
+    sleep 1
+  done
+  return 1
+}
+
+check_url() { # $1=URL — ពិនិត្យថាហៅពីខាងក្រៅបានមែន (ដូចដែលគេហទំព័រធ្វើ)
+  k=0
+  while [ "$k" -lt 8 ]; do
+    body=$(curl -s --max-time 15 "$1/" 2>/dev/null || true)
+    case "$body" in
+      *'"status"'*) return 0 ;;
+    esac
+    k=$((k + 1))
+    echo "  នៅមិនទាន់ឆ្លើយ — សាកម្តងទៀត ($k/8)"
+    sleep 6
+  done
+  return 1
+}
+
+# បើ cloudflared បរាជ័យ (ញឹកញាប់លើបណ្តាញទូរស័ព្ទ) យើងទាញ tunnel តាម SSH ជំនួស។
+start_ssh_tunnel() {
+  if ! command -v ssh >/dev/null 2>&1; then
+    echo "ដំឡើង openssh-client (ចាំបាច់សម្រាប់វិធី SSH)..."
+    (apt-get update -qq && apt-get install -y -qq openssh-client) >/dev/null 2>&1 || true
   fi
-  i=$((i + 1))
-  printf '.'
+  command -v ssh >/dev/null 2>&1 || return 1
+  : > "$SSHLOG"
+  pkill -f 'nokey@localhost.run' 2>/dev/null || true
   sleep 1
-done
+  SSHCMD="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -R 80:localhost:$PORT nokey@localhost.run"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid $SSHCMD > "$SSHLOG" 2>&1 < /dev/null &
+  else
+    nohup $SSHCMD > "$SSHLOG" 2>&1 < /dev/null &
+  fi
+  return 0
+}
+
+echo "រង់ចាំ URL ពី Cloudflare (រហូត ៦០ វិនាទី, ចំណុច = កំពុងដំណើរការ)"
+printf '  '
+URL=$(wait_url "$LOG" 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' 60 || true)
 printf '\n'
 
 if [ -z "$URL" ]; then
-  echo "❌ រក URL មិនឃើញ។ log ចុងក្រោយ៖"
-  tail -20 "$LOG"
-  exit 1
+  echo "❌ Cloudflare មិនចេញ URL ក្នុង ៦០ វិនាទី។ log ចុងក្រោយ៖"
+  tail -8 "$LOG"
+  echo
+  echo "→ សាកបើក tunnel វិធី SSH (localhost.run) ជំនួសវិញ..."
+  pkill -f "cloudflared tunnel" 2>/dev/null || true
+  if start_ssh_tunnel; then
+    printf '  '
+    URL=$(wait_url "$SSHLOG" 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' 45 || true)
+    printf '\n'
+  fi
+  if [ -z "$URL" ]; then
+    echo "❌ ទាំងពីរវិធីមិនចេញ URL ទេ។ log ចុងក្រោយ (SSH)៖"
+    tail -8 "$SSHLOG" 2>/dev/null || true
+    echo "សាក៖ ប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data រួចបើកស្គ្រីបនេះម្តងទៀត"
+    exit 1
+  fi
 fi
 
 # ទុក URL ទៅឯកសារមួយ ដើម្បីឲ្យរកមើលវាបានយូរក្រោយមក ដោយមិនចាំបាច់ប្រើស្គ្រីប៖
-#     cat "$DIR/tunnel-url.txt"printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
+#     cat "$DIR/tunnel-url.txt"
+printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
 # ចម្លងទៅផ្ទះ Termux ផង (ដើរតែពេលផ្ទះនោះមើលឃើញ — ឧ. ពេលរត់ក្នុង proot លើទូរស័ព្ទ)
 if [ -d "$(dirname "$TERMUX_URL_FILE")" ]; then
   printf '%s\n' "$URL" > "$TERMUX_URL_FILE" 2>/dev/null || true
@@ -199,19 +256,32 @@ echo "URL: $URL"
 echo
 echo "កំពុងពិនិត្យថា URL នោះដើរពិតឬអត់ (រហូត ១ នាទី)..."
 ok=0
-i=0
-while [ "$i" -lt 10 ]; do
-  body=$(curl -s --max-time 15 "$URL/" 2>/dev/null || true)
-  case "$body" in
-    *'"status"'*)
-      ok=1
-      break
-      ;;
-  esac
-  i=$((i + 1))
-  echo "  នៅមិនទាន់ឆ្លើយ — សាកម្តងទៀត ($i/10)"
-  sleep 6
-done
+check_url "$URL" && ok=1
+
+# URL ចេញ តែមិនឆ្លើយតបពីខាងក្រៅ? សាកវិធី SSH ផង។
+if [ "$ok" != "1" ]; then
+  echo
+  echo "→ URL នោះមិនឆ្លើយតប — សាកបើក tunnel វិធី SSH (localhost.run)..."
+  pkill -f "cloudflared tunnel" 2>/dev/null || true
+  if start_ssh_tunnel; then
+    printf '  '
+    URL_SSH=$(wait_url "$SSHLOG" 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' 45 || true)
+    printf '\n'
+    if [ -n "$URL_SSH" ]; then
+      URL="$URL_SSH"
+      echo "URL (SSH): $URL"
+      check_url "$URL" && ok=1
+    fi
+  fi
+fi
+
+# ទុក URL ចុងក្រោយទៅឯកសារ (សរសេរម្តងទៀត បើប្តូរទៅវិធី SSH)
+if [ "$ok" = "1" ]; then
+  printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
+  if [ -d "$(dirname "$TERMUX_URL_FILE")" ]; then
+    printf '%s\n' "$URL" > "$TERMUX_URL_FILE" 2>/dev/null || true
+  fi
+fi
 
 echo
 if [ "$ok" = "1" ]; then
@@ -233,6 +303,6 @@ if [ -f "$TERMUX_URL_FILE" ]; then
   echo "URL ដដែល មើលពី Termux បានផង៖  cat ~/demucs-tunnel-url.txt"
 fi
 echo "មើល URL និងផ្ទៀងផ្ទាត់៖  sh tunnel-url.sh"
-echo "មើល log ផ្ទាល់៖   tail -f $LOG"
-echo "បិទ tunnel៖        pkill -f 'cloudflared tunnel'"
+echo "មើល log ផ្ទាល់៖   tail -f $LOG   (បើប្រើវិធី SSH៖ tail -f $SSHLOG)"
+echo "បិទ tunnel៖        pkill -f 'cloudflared tunnel' ; pkill -f 'nokey@localhost.run'"
 echo "បិទ API៖           pkill -f demucs_api.py"

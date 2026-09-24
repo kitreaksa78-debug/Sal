@@ -22,16 +22,22 @@ fi
 
 echo
 echo "== Tunnel =="
-if [ ! -f "$LOG" ]; then
+# tunnel មាន ២ វិធី (Cloudflare និង SSH) ដូច្នេះពិនិត្យ log ទាំងពីរ
+SSHLOG="${SSH_TUNNEL_LOG:-$(dirname "$LOG")/ssh-tunnel.log}"
+if [ ! -f "$LOG" ] && [ ! -f "$SSHLOG" ]; then
   echo "❌ រកមិនឃើញ log: $LOG"
   echo "   បើអ្នកបើក tunnel ដោយវិធីផ្សេង សូមកំណត់ទីតាំង log ដោយ TUNNEL_LOG=/path/to/log"
   exit 1
 fi
 
 URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' "$LOG" 2>/dev/null | tail -1 || true)
+if [ -z "$URL" ] && [ -f "$SSHLOG" ]; then
+  URL=$(grep -o 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' "$SSHLOG" 2>/dev/null | tail -1 || true)
+fi
 if [ -z "$URL" ]; then
   echo "❌ log មិនទាន់មាន URL ទេ — tunnel មិនទាន់ឡើងរួច។ log ចុងក្រោយ៖"
   tail -10 "$LOG"
+  [ -f "$SSHLOG" ] && tail -10 "$SSHLOG"
   exit 1
 fi
 
@@ -55,9 +61,10 @@ case "$body" in
   *)
     echo "❌ URL នេះមិនឆ្លើយតបពីខាងក្រៅទេ — tunnel បានបិទ ឬបណ្តាញដាច់។"
     echo "   បើកវាឡើងវិញ៖"
-    echo "       pkill -f 'cloudflared tunnel'"
+    echo "       pkill -f 'cloudflared tunnel' ; pkill -f 'nokey@localhost.run'"
     echo "       sh phone-start.sh"
-    echo "   log ចុងក្រោយរបស់ cloudflared៖"
-    tail -10 "$LOG"
+    echo "   log ចុងក្រោយរបស់ tunnel៖"
+    tail -10 "$LOG" 2>/dev/null || true
+    [ -f "$SSHLOG" ] && tail -10 "$SSHLOG"
     ;;
 esac
