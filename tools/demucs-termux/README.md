@@ -110,6 +110,10 @@ ssh -R 80:localhost:8000 nokey@localhost.run
 ```
 
 វានឹងបោះពុម្ព URL ដូច `https://xxxxxxxx.lhr.life`។ **ចម្លង URL នោះ។**
+
+> បើបណ្តាញទូរស័ព្ទទប់ **port 22** (ញឹកញាប់លើ 4G) សូមប្រើ port 443៖
+> `ssh -p 443 -R 80:localhost:8000 nokey@localhost.run` —
+> `phone-start.sh` សាកទាំង port 22 និង 443 ដោយស្វ័យប្រវត្តិ។
 (ជម្រើសផ្សេងទៀត៖ `ssh -R 80:localhost:8000 serveo.net` ឬ
 `ssh -p 443 -R0:localhost:8000 a.pinggy.io`។)
 

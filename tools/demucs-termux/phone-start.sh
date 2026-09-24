@@ -202,7 +202,7 @@ check_url() { # $1=URL — ពិនិត្យថាហៅពីខាងក�
 }
 
 # បើ cloudflared បរាជ័យ (ញឹកញាប់លើបណ្តាញទូរស័ព្ទ) យើងទាញ tunnel តាម SSH ជំនួស។
-start_ssh_tunnel() {
+start_ssh_tunnel() { # $1 = port របស់ SSH (22 ឬ 443)
   if ! command -v ssh >/dev/null 2>&1; then
     echo "ដំឡើង openssh-client (ចាំបាច់សម្រាប់វិធី SSH)..."
     (apt-get update -qq && apt-get install -y -qq openssh-client) >/dev/null 2>&1 || true
@@ -211,13 +211,32 @@ start_ssh_tunnel() {
   : > "$SSHLOG"
   pkill -f 'nokey@localhost.run' 2>/dev/null || true
   sleep 1
-  SSHCMD="ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -R 80:localhost:$PORT nokey@localhost.run"
+  SSHCMD="ssh -p ${1:-22} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -R 80:localhost:$PORT nokey@localhost.run"
   if command -v setsid >/dev/null 2>&1; then
     setsid $SSHCMD > "$SSHLOG" 2>&1 < /dev/null &
   else
     nohup $SSHCMD > "$SSHLOG" 2>&1 < /dev/null &
   fi
   return 0
+}
+
+# សាក port 22 មុន រួច port 443 — បណ្តាញទូរស័ព្ទជាច្រើនទប់ port 22 ប៉ុន្តែ 443 ត្រូវអនុញ្ញាត។
+try_ssh_tunnel() {
+  for p in 22 443; do
+    printf '  SSH តាម port %s... ' "$p" >&2
+    if ! start_ssh_tunnel "$p" >&2; then
+      printf 'គ្មាន ssh ទេ\n' >&2
+      return 1
+    fi
+    u=$(wait_url "$SSHLOG" 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' 30 || true)
+    printf '\n' >&2
+    if [ -n "$u" ]; then
+      printf '%s' "$u"
+      return 0
+    fi
+    printf '  port %s មិនចេញ — សាក port បន្ទាប់\n' "$p" >&2
+  done
+  return 1
 }
 
 echo "រង់ចាំ URL ពី Cloudflare (រហូត ៦០ វិនាទី, ចំណុច = កំពុងដំណើរការ)"
@@ -231,11 +250,7 @@ if [ -z "$URL" ]; then
   echo
   echo "→ សាកបើក tunnel វិធី SSH (localhost.run) ជំនួសវិញ..."
   pkill -f "cloudflared tunnel" 2>/dev/null || true
-  if start_ssh_tunnel; then
-    printf '  '
-    URL=$(wait_url "$SSHLOG" 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' 45 || true)
-    printf '\n'
-  fi
+  URL=$(try_ssh_tunnel || true)
   if [ -z "$URL" ]; then
     echo "❌ ទាំងពីរវិធីមិនចេញ URL ទេ។ log ចុងក្រោយ (SSH)៖"
     tail -8 "$SSHLOG" 2>/dev/null || true
@@ -263,15 +278,11 @@ if [ "$ok" != "1" ]; then
   echo
   echo "→ URL នោះមិនឆ្លើយតប — សាកបើក tunnel វិធី SSH (localhost.run)..."
   pkill -f "cloudflared tunnel" 2>/dev/null || true
-  if start_ssh_tunnel; then
-    printf '  '
-    URL_SSH=$(wait_url "$SSHLOG" 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' 45 || true)
-    printf '\n'
-    if [ -n "$URL_SSH" ]; then
-      URL="$URL_SSH"
-      echo "URL (SSH): $URL"
-      check_url "$URL" && ok=1
-    fi
+  URL_SSH=$(try_ssh_tunnel || true)
+  if [ -n "$URL_SSH" ]; then
+    URL="$URL_SSH"
+    echo "URL (SSH): $URL"
+    check_url "$URL" && ok=1
   fi
 fi
 
