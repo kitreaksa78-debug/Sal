@@ -32,12 +32,38 @@ sh ./tools/demucs-termux/run-local.sh          # បើក API នៅ 127.0.0.1:
 
 ---
 
-## ជំហាន ១ — បើក Demucs API ក្នុង Termux
+## ជំហាន ១ — បើក Demucs API លើទូរស័ព្ទ
+
+> ⛔ **កុំដំឡើងក្នុង Termux ដើម។** វានឹងដួលរាល់ដង ព្រោះ pip ត្រូវសង់ `pydantic-core`
+> (ត្រូវការ Rust ដែលមិនស្គាល់ target របស់ Android) ហើយ `torch` ក៏គ្មាន wheel សម្រាប់ Android៖
+>
+> ```
+> Rust not found ... Target triple not supported by rustup: aarch64-unknown-linux-android
+> ERROR: Failed to build 'pydantic-core' when installing build dependencies
+> ```
+>
+> **ធ្វើតាមវិធីនេះវិញ** — ប្រើ Ubuntu ក្នុង `proot-distro` (មាន glibc ពេញ)៖
+>
+> ```bash
+> pkg install -y proot-distro
+> proot-distro install ubuntu
+> proot-distro login ubuntu
+> ```
+>
+> រួចវាយបញ្ជា *ក្នុង Ubuntu* ម្តងទៀត៖
+>
+> ```bash
+> curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux/phone-start.sh | sh
+> ```
+>
+> `phone-start.sh` ដឹងរឿងនេះហើយ៖ បើអ្នកវាយវាក្នុង Termux ដើម វានឹង
+> **ចូល Ubuntu ជំនួសអ្នកដោយស្វ័យប្រវត្តិ** (បើ proot-distro + ubuntu ត្រូវបានដំឡើង)។
 
 បើអ្នកមាន API ដំណើរការរួចហើយ រំលងជំហាននេះ ហើយទៅ **ជំហាន ២** តែម្តង។
 
 ```bash
-pkg install -y python ffmpeg openssh
+# (ក្នុង Ubuntu នៃ proot) — បើក API + tunnel ដោយបញ្ជាតែមួយ
+sh phone-start.sh
 termux-wake-lock              # កុំឲ្យ Android កាត់ CPU ពេលញែកភ្លេង
 
 # ជម្រើស A: API របស់អ្នកមានស្រាប់ (ឧ. ស្គ្រីបរបស់អ្នក) — គ្រាន់តែបើកវា
@@ -135,6 +161,7 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 | បង្ហាញឈ្មោះ service តែបរាជ័យ | API មិនស្គាល់ endpoint នេះទេ — កំណត់ `AUDIO_SEPARATOR_PATH` ឬប្រើ `demucs_api.py` |
 | `401 Invalid or missing API key` | ដាក់ key ដូចនៅក្នុង `DEMUCS_API_KEY` |
 | យឺតខ្លាំង (ឬកម្តៅឡើង) | CPU ទូរស័ព្ទ៖ ប្រហែល ២–៦ ដងនៃរយៈពេលសំឡេង។ សាកល្បងវីដេអូខ្លី។ |
+| ដំឡើងដួល៖ `Failed to build 'pydantic-core'` ឬ `Rust not found` | អ្នកកំពុងដំឡើងក្នុង **Termux ដើម** — មិនអាចទេ។ ចូល Ubuntu ជាមុន៖ `proot-distro login ubuntu` (ឬឲ្យ `phone-start.sh` ចូលឲ្យ) រួចដំឡើងម្តងទៀត |
 | បាត់ពេលបិទអេក្រង់ | `termux-wake-lock` និងបិទ battery optimization សម្រាប់ Termux |
 | វីដេអូឈប់នៅជំហានញែកភ្លេង | ការញែកភ្លេងជា **Demucs តែមួយ** — គ្មានការជំនួសដោយ FFmpeg DSP ទេ។ បើក API ឡើងវិញ រួចចាប់ផ្តើមការងារម្តងទៀត |
 

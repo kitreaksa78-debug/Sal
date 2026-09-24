@@ -22,6 +22,44 @@ RAW="https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-t
 say() { printf '\n===== %s =====\n' "$1"; }
 api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; }
 
+# ---- បើអ្នកវាយបញ្ជានេះក្នុង Termux ដើម ស្គ្រីបនឹងចូល Ubuntu (proot) ជំនួស ----
+# មូលហេតុ៖ Termux ដើមដំឡើង Demucs មិនបានទេ — pip ត្រូវសង់ `pydantic-core` (ត្រូវការ
+# Rust ដែលមិនស្គាល់ Android) ហើយ `torch` ក៏គ្មាន wheel សម្រាប់ Android ដែរ៖
+#     Target triple not supported by rustup: aarch64-unknown-linux-android
+#     ERROR: Failed to build 'pydantic-core'
+# ដូច្នេះជំនួសឲ្យការបរាជ័យ វាបញ្ជូនតទៅ Ubuntu ដែលមាន glibc ពេញ។
+if [ "$(uname -o 2>/dev/null)" = "Android" ] && [ -z "${TERMUX_PROOT:-}" ]; then
+  PD="$(command -v proot-distro 2>/dev/null || true)"
+  ROOTFS="${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/ubuntu"
+  if [ -n "$PD" ] && [ -d "$ROOTFS" ]; then
+    echo "ទូរស័ព្ទនេះជា Termux ដើម — បើកក្នុង Ubuntu (proot) ជំនួសវិញ..."
+    echo "(បើវាដួល សូមវាយដោយដៃ៖ proot-distro login ubuntu រួចវាយបញ្ជានេះម្តងទៀត)"
+    echo
+    exec "$PD" login ubuntu -- /bin/sh -c "command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl; }; curl -fsSL '$RAW/phone-start.sh' | sh" < /dev/null
+  fi
+  cat <<'MSG'
+
+❌ អ្នកកំពុងវាយបញ្ជានេះក្នុង Termux ដើម — ដំឡើង Demucs នៅទីនេះមិនបានទេ។
+
+   មូលហេតុ៖ pip ត្រូវសង់ `pydantic-core` (ត្រូវការ Rust ដែលមិនស្គាល់ Android)
+   ហើយ `torch` ក៏គ្មាន wheel សម្រាប់ Android ដូច្នេះវាដួល៖
+
+       Target triple not supported by rustup: aarch64-unknown-linux-android
+       ERROR: Failed to build 'pydantic-core'
+
+   ដំណោះស្រាយ (ធ្វើតែម្តង) — វាយ ៣ បន្ទាត់នេះម្តងមួយ៖
+
+       pkg install -y proot-distro
+       proot-distro install ubuntu
+       proot-distro login ubuntu
+
+   ក្រោយចូល Ubuntu រួច វាយបញ្ជាដើមនេះម្តងទៀត (curl -fsSL ... | sh)។
+   បើអ្នកមាន `demucs` ក្នុង Ubuntu រួចហើយ វានឹងបើកតែ API និង tunnel ភ្លាម។
+
+MSG
+  exit 1
+fi
+
 mkdir -p "$DIR" 2>/dev/null || true
 cd "$DIR" || { echo "មិនអាចចូលថត $DIR បានទេ"; exit 1; }
 

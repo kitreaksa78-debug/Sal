@@ -1,79 +1,34 @@
-#!/usr/bin/env bash
+#!/usr/bin/env sh
+# បើក Demucs API + tunnel លើទូរស័ព្ទ — បញ្ជូនតទៅ phone-start.sh។
 #
-# One-command launcher for the Demucs API on a phone (Termux).
+# ហេតុអ្វីគ្រាន់តែជាស្គ្រីបខ្លី? ព្រោះ Termux ដើមដំឡើង Demucs មិនបានទេ៖
+# pip ត្រូវសង់ `pydantic-core` ដែលត្រូវការ Rust (ដែលមិនស្គាល់ target របស់ Android)
+# ហើយ `torch` ក៏គ្មាន wheel សម្រាប់ Android ដែរ៖
 #
-#   sh tools/demucs-termux/start-termux.sh
+#     Target triple not supported by rustup: aarch64-unknown-linux-android
+#     ERROR: Failed to build 'pydantic-core' when installing build dependencies
 #
-# What it does:
-#   1. installs python / ffmpeg / openssh (only if they are missing)
-#   2. keeps the CPU awake for the whole separation (termux-wake-lock)
-#   3. starts demucs_api.py on port 8000
-#   4. opens an SSH tunnel and prints the https URL to paste into the website
+# ដូច្នេះផ្លូវត្រូវគឺ៖ ប្រើ Ubuntu ក្នុង `proot-distro` (មាន glibc ពេញ)។ `phone-start.sh`
+# ធ្វើការនោះឲ្យដោយស្វ័យប្រវត្តិ៖ វាឃើញថាជា Termux ដើម រួចចូល Ubuntu ឯង។
 #
-# Stop it with Ctrl-C: that stops both the API and the tunnel.
-set -euo pipefail
+# របៀបប្រើ៖
+#     sh tools/demucs-termux/start-termux.sh
+#
+# ឬលើគ្រប់ប្រព័ន្ធ (គ្មានត្រូវ clone repo)៖
+#     curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux/phone-start.sh | sh
+set -u
 
-cd "$(dirname "$0")"
+DIR=$(cd "$(dirname "$0")" 2>/dev/null && pwd || echo ".")
 
-PORT="${DEMUCS_PORT:-8000}"
-API_KEY="${DEMUCS_API_KEY:-}"
+if [ -f "$DIR/phone-start.sh" ]; then
+  exec sh "$DIR/phone-start.sh"
+fi
 
-if [ -z "${TERMUX_VERSION:-}" ]; then
-  echo "This launcher is meant for Termux (Android). On a normal machine run:"
-  echo "  pip install -r requirements.txt && python demucs_api.py"
+# មិនមានឯកសារក្នុងថត (ឧ. មកពី curl ផ្ទាល់) — ទាញវាមករត់
+RAW="https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux"
+echo "ទាញ phone-start.sh..."
+curl -fsSL "$RAW/phone-start.sh" -o /tmp/phone-start.sh || {
+  echo "❌ ទាញមិនបាន — ពិនិត្យ internet រួចសាកម្តងទៀត" >&2
   exit 1
-fi
-
-if ! command -v pkg >/dev/null 2>&1; then
-  echo "✗ 'pkg' not found — this does not look like Termux."
-  exit 1
-fi
-
-for pkg_name in python ffmpeg openssh; do
-  if ! command -v "$pkg_name" >/dev/null 2>&1; then
-    echo "→ installing $pkg_name"
-    pkg install -y "$pkg_name"
-  fi
-done
-
-# Android suspends background CPU work without this, which would stall a long
-# separation halfway through.
-command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock
-
-# Demucs is deliberately not in requirements.txt: it asks for `lameenc`, which
-# has no build on Android/arm, so it goes through the installer that skips it.
-if ! python -c "import demucs, fastapi, uvicorn" >/dev/null 2>&1; then
-  echo "→ installing Demucs + the API dependencies (first run, this is the big one)"
-  sh ./install-demucs.sh python
-fi
-
-if [ -z "$API_KEY" ]; then
-  API_KEY=$(python -c "import secrets; print(secrets.token_urlsafe(24))")
-  echo "→ generated an API key for this session: $API_KEY"
-  echo "  (set DEMUCS_API_KEY yourself to keep it stable across restarts)"
-fi
-
-echo "→ starting the Demucs API on port $PORT"
-DEMUCS_API_KEY="$API_KEY" python demucs_api.py &
-APP_PID=$!
-trap 'kill "$APP_PID" 2>/dev/null || true' EXIT
-
-for _ in $(seq 1 30); do
-  if curl -fsS -m 2 "http://127.0.0.1:$PORT/" >/dev/null 2>&1; then
-    break
-  fi
-  sleep 1
-done
-echo "✓ local API ready: http://127.0.0.1:$PORT/"
-
-echo "→ opening a public tunnel (keep this terminal open)"
-echo
-echo "══════════════════════════════════════════════════════════════"
-echo " Copy the https URL printed below into the website:"
-echo "   Studio → «ញែកភ្លេង · Demucs API» → URL → រក្សាទុក → សាកល្បង"
-echo
-echo " API key: $API_KEY"
-echo "══════════════════════════════════════════════════════════════"
-echo
-
-exec ssh -R 80:"localhost:$PORT" -o StrictHostKeyChecking=accept-new nokey@localhost.run
+}
+exec sh /tmp/phone-start.sh

@@ -30,6 +30,43 @@ if ! "$PY" -c 'import sys' >/dev/null 2>&1; then
   exit 1
 fi
 
+# ---- ការពារ៖ Termux ដើម (aarch64-linux-android) ដំឡើងមិនបានទេ ----
+# pip លើ Termux ដើមត្រូវសង់ `pydantic-core` ដែលត្រូវការ Rust ហើយ rustup មិនស្គាល់
+# target របស់ Android ដូច្នេះវាដួលភ្លាម៖
+#     Target triple not supported by rustup: aarch64-unknown-linux-android
+#     ERROR: Failed to build 'pydantic-core' when installing build dependencies
+# `torch` (ដែល Demucs ត្រូវការ) ក៏គ្មាន wheel សម្រាប់ Android ដែរ។ ដូច្នេះមិនសាកទេ —
+# ប្រាប់ផ្លូវត្រូវជំនួសវិញ ដើម្បីកុំឲ្យអ្នករង់ចាំ pip យូរឥតប្រយោជន៍។
+if "$PY" -c 'import sysconfig,sys; sys.exit(0 if "android" in (sysconfig.get_config_var("SOABI") or "").lower() else 1)'; then
+  cat >&2 <<'MSG'
+
+❌ នេះជា python របស់ Termux ដើម (Android) — ដំឡើង Demucs នៅទីនេះមិនបានទេ។
+
+   មូលហេតុ៖ pip ត្រូវសង់ `pydantic-core` (ត្រូវការ Rust ដែលមិនស្គាល់ Android)
+   ហើយ `torch` ក៏គ្មាន wheel សម្រាប់ Android ដែរ៖
+
+       Rust not found ... Target triple not supported by rustup: aarch64-unknown-linux-android
+       ERROR: Failed to build 'pydantic-core' when installing build dependencies
+
+   ដំណោះស្រាយ (ធ្វើតែម្តង)៖ ប្រើ Ubuntu ក្នុង proot ដែលមាន glibc ពេញ៖
+
+       pkg install -y proot-distro
+       proot-distro install ubuntu
+       proot-distro login ubuntu
+
+   រួចក្នុង Ubuntu វាយ៖
+
+       sh install-demucs.sh
+
+   សាមញ្ញជាងនេះ៖ ក្នុង Termux វាយពាក្យបញ្ជា `phone-start.sh` តែមួយ — វានឹងចូល
+   Ubuntu ឲ្យដោយស្វ័យប្រវត្តិ រួចដំឡើងបន្តនៅទីនោះ។
+
+   បើចង់ប្រើកុំព្យូទ័រវិញ៖ `sh tools/demucs-termux/run-local.sh`។
+
+MSG
+  exit 1
+fi
+
 step "ដំឡើងបណ្ណាល័យរបស់ API (fastapi, uvicorn)"
 "$PY" -m pip install --upgrade pip >/dev/null 2>&1 || true
 "$PY" -m pip install --disable-pip-version-check \
