@@ -16,3 +16,9 @@ data/
 
 # TypeScript incremental build info
 *.tsbuildinfo
+
+# Local Python tooling (Demucs / audio-separator venvs, caches, scratch files)
+.venv*/
+tmp-*
+__pycache__/
+*.pyc

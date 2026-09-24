@@ -6,6 +6,7 @@ import { ProcessingProgress } from './components/ProcessingProgress';
 import { ResultPanel } from './components/ResultPanel';
 import { JobHistory } from './components/JobHistory';
 import { PricingPage } from './components/PricingPage';
+import { DemucsPanel } from './components/DemucsPanel';
 import { WelcomePage } from './components/WelcomePage';
 import { JobRecord, JobSettings } from './types';
 import {
@@ -375,6 +376,9 @@ export function App() {
             {/* If no job in progress or finished, show Upload & Settings */}
             {!currentJob && (
               <div className="space-y-8 animate-in fade-in duration-300">
+                {/* Admin only: which Demucs/stem service does the separation. */}
+                <DemucsPanel visible={usageStats.admin} />
+
                 {/* Upload Panel */}
                 <UploadPanel
                   onFileSelect={handleFileSelect}

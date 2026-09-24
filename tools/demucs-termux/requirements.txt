@@ -1,0 +1,7 @@
+# Demucs API on a phone (Termux)
+#
+# demucs pulls in torch, which is the big download (~200 MB+ on CPU builds).
+fastapi>=0.115
+uvicorn>=0.30
+python-multipart>=0.0.9
+demucs>=4.0

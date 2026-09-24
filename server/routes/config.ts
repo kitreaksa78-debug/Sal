@@ -5,6 +5,7 @@ import { getTranscriptionProvider } from '../services/transcription.js';
 import { getTranslationService } from '../services/translation.js';
 import { getTTSProvider } from '../services/tts.js';
 import { getAudioSeparationProvider } from '../services/audioSeparation.js';
+import { getSeparatorConnection } from '../services/separatorSettings.js';
 import { SystemConfigStatus } from '../types.js';
 import { getGeminiApiKey } from '../utils/aiKeys.js';
 
@@ -45,6 +46,7 @@ router.get('/status', async (req: Request, res: Response) => {
   const audioSeparationInstance = getAudioSeparationProvider();
   const audioSeparationProvider = audioSeparationInstance.name;
   const audioSeparationConfigured = audioSeparationInstance.isConfigured();
+  const audioSeparationConnection = getSeparatorConnection();
 
   const maxVideoSizeMb = parseInt(process.env.MAX_VIDEO_SIZE_MB || '500', 10);
   const videoSegmentSeconds = parseInt(process.env.VIDEO_SEGMENT_SECONDS || '300', 10);
@@ -73,14 +75,14 @@ router.get('/status', async (req: Request, res: Response) => {
     audioSeparation: {
       configured: audioSeparationConfigured,
       provider: audioSeparationProvider,
-      ...(audioSeparationProvider === 'audio_separator'
-        ? { model: process.env.AUDIO_SEPARATOR_MODEL || 'UVR-MDX-NET-Inst_HQ_3' }
+      ...(audioSeparationProvider === 'audio_separator' || audioSeparationProvider === 'demucs_api'
+        ? { model: audioSeparationConnection.model || 'service default' }
         : {}),
       ...(audioSeparationConfigured
         ? {}
         : {
             message:
-              'មិនទាន់ភ្ជាប់ម៉ាស៊ីនញែកភ្លេងទេ — ត្រូវដាក់ AUDIO_SEPARATOR_URL។ (audio_separator is selected but AUDIO_SEPARATOR_URL is not set.)',
+              'មិនទាន់ភ្ជាប់ម៉ាស៊ីនញែកភ្លេងទេ — សូមដាក់ URL ក្នុងផ្ទាំង «ញែកភ្លេង» ឬកំណត់ AUDIO_SEPARATOR_URL។ (No stem service is connected; set it in the Stem separation panel or via AUDIO_SEPARATOR_URL.)',
           }),
     },
     storage: {

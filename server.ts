@@ -6,6 +6,7 @@ import { createServer as createViteServer } from 'vite';
 import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
+import separatorRouter from './server/routes/separator.js';
 import authRouter from './server/routes/auth.js';
 import usageRouter from './server/routes/usage.js';
 import billingRouter, { handleLemonSqueezyWebhook } from './server/routes/billing.js';
@@ -13,6 +14,7 @@ import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
 import { getDatabase } from './server/services/db.js';
 import { getBilling } from './server/services/billing.js';
+import { hydrateSeparatorSettings } from './server/services/separatorSettings.js';
 
 const app = express();
 // Honour the port injected by the host, falling back to 3000 for local runs.
@@ -38,6 +40,9 @@ app.get('/api/health', (req, res) => {
 app.use('/api/jobs', jobsRouter);
 app.use('/api/files', filesRouter);
 app.use('/api/config', configRouter);
+// Where the stem separation runs (the phone's Demucs API, a home server, the
+// audio-separator sidecar) — admin only.
+app.use('/api/config/separator', separatorRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/usage', usageRouter);
 app.use('/api/billing', billingRouter);
@@ -49,6 +54,9 @@ async function startServer() {
   // Pro entitlements live in object storage too, so paying customers keep access
   // across the restarts that free hosts perform.
   await getBilling().hydrateFromRemote();
+  // The stem service the owner pointed the app at from the website, so a job
+  // started right after a restart still uses the phone instead of the fallback.
+  await hydrateSeparatorSettings();
 
   // Check system dependencies on start
   const ffmpegInfo = await FFmpegHelper.checkAvailability();

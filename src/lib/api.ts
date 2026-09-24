@@ -186,6 +186,87 @@ export function getMediaFileUrl(category: 'uploads' | 'outputs', filename: strin
   return withToken(`${API_BASE}/files/${category}/${encodeURIComponent(filename)}`);
 }
 
+// ---------------------------------------------------- stem separation service
+
+/**
+ * Where model-based stem separation runs — the Demucs API in Termux, a home
+ * server, or the bundled audio-separator sidecar. Only the app owner can read or
+ * change this, and the API key is never sent back to the browser.
+ */
+export interface SeparatorConnectionView {
+  url: string;
+  model: string;
+  path: string;
+  hasApiKey: boolean;
+  /** `app` = saved from this panel, `env` = the deployment's variables. */
+  source: 'app' | 'env' | 'none';
+  updatedAt: string | null;
+  provider: string;
+  configured: boolean;
+}
+
+export interface SeparatorTestResult {
+  ok: boolean;
+  /** What the service says it is, e.g. "Demucs API". */
+  service: string | null;
+  latencyMs: number;
+  detail: string;
+  model?: string;
+  url?: string;
+  stems?: { vocalsBytes: number; instrumentalBytes: number };
+}
+
+async function separatorError(res: Response, fallback: string): Promise<ApiError> {
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  return new ApiError(data.error || fallback, res.status);
+}
+
+export async function getSeparatorConnection(): Promise<SeparatorConnectionView> {
+  const res = await fetch(`${API_BASE}/config/separator`, { headers: authHeaders() });
+  if (!res.ok) throw await separatorError(res, 'Failed to read the stem separation settings');
+  return (await res.json()) as SeparatorConnectionView;
+}
+
+/** An empty `apiKey` keeps the stored one, so re-pointing a tunnel is one field. */
+export async function saveSeparatorConnection(input: {
+  url: string;
+  apiKey?: string;
+  model?: string;
+  path?: string;
+}): Promise<SeparatorConnectionView> {
+  const res = await fetch(`${API_BASE}/config/separator`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await separatorError(res, 'Failed to save the stem separation settings');
+  return (await res.json()) as SeparatorConnectionView;
+}
+
+/** Forget the saved connection and fall back to the deployment's env vars. */
+export async function clearSeparatorConnection(): Promise<SeparatorConnectionView> {
+  const res = await fetch(`${API_BASE}/config/separator`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await separatorError(res, 'Failed to clear the stem separation settings');
+  return (await res.json()) as SeparatorConnectionView;
+}
+
+/**
+ * Send a short test tone through the saved service and report what came back.
+ * This is a real separation, not a ping: a reachable server with the wrong
+ * endpoint still fails here.
+ */
+export async function testSeparatorConnection(): Promise<SeparatorTestResult> {
+  const res = await fetch(`${API_BASE}/config/separator/test`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  if (!res.ok) throw await separatorError(res, 'ការសាកល្បងបរាជ័យ (The test could not run)');
+  return (await res.json()) as SeparatorTestResult;
+}
+
 // ------------------------------------------------------------------ billing
 
 export type Plan = 'free' | 'pro';
