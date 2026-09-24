@@ -1,8 +1,7 @@
-import React, { useState, useRef } from 'react';
+import React, { useRef } from 'react';
 import { 
   Download, 
   CheckCircle2, 
-  Subtitles, 
   RefreshCw, 
   Play, 
   Clock, 
@@ -17,13 +16,11 @@ interface ResultPanelProps {
 }
 
 export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
-  const [showSubtitles, setShowSubtitles] = useState<boolean>(job.settings.subtitle ?? true);
-
   const dubbedVideoRef = useRef<HTMLVideoElement>(null);
 
   const finalVideoUrl = getDownloadUrl(job.id);
-  // The VTT track is still needed for the on-player subtitle toggle; the SRT and
-  // WAV downloads were removed from this panel.
+  // Subtitles follow the choice made before dubbing: the VTT track is attached
+  // when they were turned on, and the player's own captions button toggles it.
   const vttUrl = getSubtitlesUrl(job.id, 'vtt');
 
   const seekToTime = (seconds: number) => {
@@ -79,22 +76,8 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
               <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse shrink-0" />
               <h3 className="text-xs sm:text-sm font-bold text-white flex flex-wrap items-center gap-1.5">
                 <span>វីដេអូសំឡេងខ្មែរ (Khmer Dubbed Video)</span>
-                <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 font-mono whitespace-nowrap">H.264/AAC</span>
               </h3>
             </div>
-
-            <button
-              type="button"
-              onClick={() => setShowSubtitles(!showSubtitles)}
-              className={`flex items-center gap-1 px-2.5 py-1 rounded-lg text-xs font-medium border transition-colors ${
-                showSubtitles
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/40'
-                  : 'bg-slate-800 text-slate-400 border-slate-700'
-              }`}
-            >
-              <Subtitles className="w-3.5 h-3.5" />
-              <span>អក្សររត់ {showSubtitles ? 'បើក' : 'បិទ'}</span>
-            </button>
           </div>
 
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
@@ -105,7 +88,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
               playsInline
               className="w-full h-full object-contain"
             >
-              {showSubtitles && (
+              {(job.settings.subtitle ?? true) && (
                 <track
                   kind="subtitles"
                   src={vttUrl}
