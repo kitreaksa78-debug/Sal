@@ -17,6 +17,11 @@ data/
 # TypeScript incremental build info
 *.tsbuildinfo
 
+# Downloaded model weights (large binaries — keep them out of git)
+**/models/
+*.onnx
+*.pth
+
 # Local Python tooling (Demucs / audio-separator venvs, caches, scratch files)
 .venv*/
 tmp-*

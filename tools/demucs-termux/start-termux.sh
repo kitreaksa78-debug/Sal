@@ -40,9 +40,11 @@ done
 # separation halfway through.
 command -v termux-wake-lock >/dev/null 2>&1 && termux-wake-lock
 
-if ! python -c "import fastapi, uvicorn" >/dev/null 2>&1; then
-  echo "→ installing the API dependencies (first run)"
-  pip install --disable-pip-version-check -r requirements.txt
+# Demucs is deliberately not in requirements.txt: it asks for `lameenc`, which
+# has no build on Android/arm, so it goes through the installer that skips it.
+if ! python -c "import demucs, fastapi, uvicorn" >/dev/null 2>&1; then
+  echo "→ installing Demucs + the API dependencies (first run, this is the big one)"
+  sh ./install-demucs.sh python
 fi
 
 if [ -z "$API_KEY" ]; then

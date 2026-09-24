@@ -104,6 +104,12 @@ def get_separator(model: str):
         model_file_dir=str(MODEL_DIR),
         output_dir=str(STEM_DIR),
         output_format="WAV",
+        # Write stems with soundfile instead of pydub: pydub shells out to an
+        # `ffmpeg` binary it looks up on PATH at export time, which fails on
+        # minimal containers that have no FFmpeg. soundfile writes WAV directly
+        # with no external process, so the only FFmpeg dependency left is the
+        # reading of non-WAV uploads — and this service only ever receives WAV.
+        use_soundfile=True,
     )
     separator.load_model(model_filename=model)
     _separator = separator

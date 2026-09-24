@@ -86,8 +86,8 @@ curl https://aivideotranslate.dev/api/config/status | grep -A3 audioSeparation
 * គ្មាន key → គ្មាន auth។ ដាក់ `SEPARATOR_API_KEY` ជានិច្ចបើបើកចេញក្រៅ។
 * Stem ចាស់ត្រូវលុបស្វ័យប្រវត្តិក្រោយ `SEPARATOR_TTL_HOURS` (default ១២ ម៉ោង)។
 * Upload ធំជាង `SEPARATOR_MAX_MB` (default ២០៤៨ MB) → ឆ្លើយ 413។
-* បើ service ដួល ឬ timeout → គេហទំព័រ**មិនខូច**ទេ៖ provider ថយទៅវិធី FFmpeg DSP ដើមវិញ
-  ហើយការងារបន្តធម្មតា (មានសារព្រមានជាភាសាខ្មែរក្នុងលទ្ធផល)។
+* បើ service ដួល ឬ timeout → ការងារនោះ**ឈប់**នៅជំហានញែកភ្លេង ហើយបង្ហាញមូលហេតុ។
+  ការញែកភ្លេងជា Demucs តែមួយ — គ្មានការថយទៅវិធី FFmpeg DSP ជំនួសទេ។
 
 ## បញ្ជីត្រួតពិនិត្យរហ័ស (Checklist)
 
@@ -95,11 +95,13 @@ curl https://aivideotranslate.dev/api/config/status | grep -A3 audioSeparation
 |---|---|
 | ១. service រត់ | `curl http://127.0.0.1:8920/health` → `{"status":"ok"...}` |
 | ២. tunnel បើក | launcher បង្ហាញ URL `https://xxxx.trycloudflare.com` |
-| ៣. Render ដឹង | Render → Environment មាន `AUDIO_SEPARATION_PROVIDER=audio_separator` + URL + key → Save → Manual Deploy |
-| ៤. app ប្រើវា | `curl https://aivideotranslate.dev/api/config/status` → `audioSeparation.provider = "audio_separator"` · `configured: true` |
+| ៣. Render ដឹង | Render → Environment មាន `AUDIO_SEPARATOR_URL` (+ key បើមាន) → Save → Manual Deploy |
+| ៤. app ប្រើវា | `curl https://aivideotranslate.dev/api/config/status` → `audioSeparation.provider = "demucs_api"` · `configured: true` |
 | ៥. job ពិត | បកប្រែវីដេអូ → Render logs ឃើញ `Separating stems with the audio-separator service...` → ភ្លេងលែងដាច់ |
 
-> ⚠️ បើ step ៤ នៅបង្ហាញ `local_dsp` → Render មិនទាន់ deploy ឡើងវិញ ឬ env var វាយខុស។ បើ job បង្ហាញសារព្រមាន «audio-separator មិនបានសម្រេច» → service/tunnel បានបិទ — បើក launcher ម្តងទៀត (គ្មានអ្វីខូចដេញដោល — job ប្រើ DSP fallback)។
+> ⚠️ បើ step ៤ បង្ហាញ `configured: false` → URL/key មិនទាន់ត្រូវ ឬ Render មិនទាន់ deploy ឡើងវិញ។
+> បើ job ឈប់នៅជំហានញែកភ្លេង → service ឬ tunnel បានបិទ — បើក launcher ម្តងទៀត។
+> (ចាប់ពីពេលនេះតទៅ ការញែកភ្លេងជា **Demucs តែមួយ** — គ្មាន DSP fallback។)
 
 ## អាជ្ញាបណ្ណ
 

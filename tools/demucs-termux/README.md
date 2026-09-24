@@ -25,7 +25,7 @@ sh ./tools/demucs-termux/run-local.sh          # បើក API នៅ 127.0.0.1:
 * ស្គ្រីបនេះប្រើ venv ដែលមាន demucs រួច បើមិនមាន វាបង្កើត `.venv-demucs` ហើយដំឡើង
   (ទាញ torch ~200 MB — ចំណាយពេលតែម្តង)។ បើកនៅ `127.0.0.1` តាម default ដើម្បីកុំឲ្យ
   អ្នកផ្សេងក្នុង Wi-Fi តែមួយហៅបាន — ប្តូរដោយ `DEMUCS_HOST=0.0.0.0` បើត្រូវការ។
-* ត្រូវទុក terminal នោះបើកចោល — បិទ = គេហទំព័រត្រឡប់ទៅ FFmpeg DSP វិញ។
+* ត្រូវទុក terminal នោះបើកចោល — បិទ = ការញែកភ្លេងឈប់ (គ្មានការជំនួសដោយ FFmpeg ទេ)។
 * លើ CPU ខ្សោយ វាយឺតខ្លាំង៖ សាកល្បងក្នុង workspace នេះ សំឡេង ៤ វិនាទី ចំណាយ ~៨០ វិនាទី
   (ប្រហែល ២០ ដងនៃរយៈពេលសំឡេង)។ ដូច្នេះវីដេអូវែងគួរប្រើម៉ាស៊ីនខ្លាំងជាង។
 * បើចង់ឲ្យ **ទូរស័ព្ទ** ជាអ្នកញែកវិញ សូមធ្វើតាមជំហានខាងក្រោម (ត្រូវការ tunnel)។
@@ -42,7 +42,7 @@ termux-wake-lock              # កុំឲ្យ Android កាត់ CPU ព�
 
 # ជម្រើស A: API របស់អ្នកមានស្រាប់ (ឧ. ស្គ្រីបរបស់អ្នក) — គ្រាន់តែបើកវា
 # ជម្រើស B: ប្រើ API ដែលភ្ជាប់មកជាមួយ repo នេះ (contract ច្បាស់ ១០០%)
-pip install -r requirements.txt
+sh install-demucs.sh                                        # ដំឡើង demucs + បណ្ណាល័យ API
 DEMUCS_API_KEY='ដាក់-key-ផ្ទាល់ខ្លួន' python demucs_api.py     # បើកនៅ port 8000
 ```
 
@@ -53,9 +53,21 @@ curl -s http://127.0.0.1:8000/
 # {"status":"ok","service":"Demucs API", ...}
 ```
 
-> `pip install demucs` ទាញ **torch** ដែលធំ ហើយលើ Android ជួនកាលត្រូវការ repo បន្ថែម
-> (ឧ. TUR)។ បើដំឡើងមិនចេញ សូមបន្តប្រើ API ដែលអ្នកមានស្រាប់ — គេហទំព័រសាកល្បង path
-> និងឈ្មោះ field ដោយស្វ័យប្រវត្តិ។
+> **កុំប្រើ `pip install -r requirements.txt` តែម្នាក់ឯង។** `demucs` ប្រកាសតម្រូវការ
+> `lameenc` (សម្រាប់សរសេរ MP3) ដែលគ្មាន wheel លើ Android/arm ដូច្នេះ pip ដួលទាំងស្រុង៖
+>
+> ```
+> ERROR: Cannot install -r requirements.txt because these package versions
+> have conflicting dependencies ... demucs depends on lameenc>=1.2
+> ... no matching distributions available for your environment: lameenc
+> ```
+>
+> ស្គ្រីប `install-demucs.sh` ដោះបញ្ហានេះ ៖ សាកល្បងតាមធម្មតាមុន បើដួល — ដំឡើង demucs
+> ដោយ `--no-deps` រួចដំឡើងបណ្ណាល័យពិតដែលវាត្រូវការ (torch, torchaudio, einops, ...)
+> ដោយឆ្លងកាត់ lameenc។ API នេះសរសេរតែ WAV ដូច្នេះ MP3 មិនចាំបាច់ទេ។
+>
+> បើ **torch** ខ្លួនឯងនៅតែដំឡើងមិនចេញលើ Android សូមបើក API ក្នង
+> `proot-distro ubuntu` (ជំហាន ២ ជម្រើស B) ឬប្រើកុំព្យូទ័រ/VPS វិញ។
 
 ## ជំហាន ២ — បើក tunnel (URL សាធារណៈ)
 
@@ -81,6 +93,8 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 
 * បើ tunnel បង្ហាញ Cloudflare **error 1033** នោះមានន័យថា cloudflared មិនកំពុងរត់
   (ត្រូវបើកវាឡើងវិញ) — URL នោះស្លាប់ហើយ។
+* មិនប្រាកដថា URL មួយណាកំពុងរស់? បើក `sh tunnel-url.sh` — វាបង្ហាញ URL
+  ចុងក្រោយក្នុង log រួចសាកវាពីខាងក្រៅឲ្យអ្នកឃើញផ្ទាល់។
 
 * ទុក terminal នេះចោលបើកចុះ។ បិទ = គេហទំព័រភ្ជាប់មិនបាន។
 * បើកឡើងវិញ **URL ថ្មី** — paste ថ្មីម្តងទៀតនៅជំហាន ៣ (វាលតែ ១ ប្រអប់)។
@@ -116,12 +130,13 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 
 | រោគសញ្ញា | មូលហេតុ / ដំណោះស្រាយ |
 |---|---|
-| «fetch failed» ក្នុងការសាកល្បង | Tunnel បិទ ឬ URL ចាស់ — បើកឡើងវិញ រួច paste URL ថ្មី |
+| «fetch failed» ក្នុងការសាកល្បង | `tunnel បានបិទ` ឬ URL ថ្មី — បើក `sh tunnel-url.sh` វានឹងបង្ហាញ URL ដែលកំពុងរស់ រួច paste ថ្មី (URL ចាស់បាត់ពី DNS ទាំងស្រុង) |
+| ការងារឈប់នៅជំហានញែកភ្លេង | គ្មាន Demucs ភ្ជាប់ទេ — បើក API + tunnel រួចពិនិត្យកាតជាមួយ «សាកល្បង» |
 | បង្ហាញឈ្មោះ service តែបរាជ័យ | API មិនស្គាល់ endpoint នេះទេ — កំណត់ `AUDIO_SEPARATOR_PATH` ឬប្រើ `demucs_api.py` |
 | `401 Invalid or missing API key` | ដាក់ key ដូចនៅក្នុង `DEMUCS_API_KEY` |
 | យឺតខ្លាំង (ឬកម្តៅឡើង) | CPU ទូរស័ព្ទ៖ ប្រហែល ២–៦ ដងនៃរយៈពេលសំឡេង។ សាកល្បងវីដេអូខ្លី។ |
 | បាត់ពេលបិទអេក្រង់ | `termux-wake-lock` និងបិទ battery optimization សម្រាប់ Termux |
-| វីដេអូបន្តដំណើរការធម្មតា | គេហទំព័រ**មិនដួលទេ** — វាត្រឡប់ទៅវិធី FFmpeg DSP វិញ ហើយដាក់សារព្រមានខ្មែរក្នុងលទ្ធផល |
+| វីដេអូឈប់នៅជំហានញែកភ្លេង | ការញែកភ្លេងជា **Demucs តែមួយ** — គ្មានការជំនួសដោយ FFmpeg DSP ទេ។ បើក API ឡើងវិញ រួចចាប់ផ្តើមការងារម្តងទៀត |
 
 ## ជំនួស environment (ជម្រើស)
 

@@ -27,14 +27,15 @@ services:
       - key: TRANSLATION_PROVIDER
         value: groq
 
-      # The keyless parts of the pipeline, pinned so they stay free even after a
-      # paid key (Gemini, a hosted Khmer TTS) is added to this service:
-      # Edge TTS pays nothing and needs no key; local_dsp separates speech from
-      # music with the bundled FFmpeg, so both run without a quota.
+      # Edge TTS pays nothing and needs no key, so the Khmer voice runs without
+      # a quota.
       - key: TTS_PROVIDER
         value: edge
+      # Stem separation runs on Demucs and nothing else — there is no FFmpeg
+      # substitute, so a job needs AUDIO_SEPARATOR_URL (below) or a service URL
+      # saved in the website's stem panel. Without one it stops here.
       - key: AUDIO_SEPARATION_PROVIDER
-        value: local_dsp
+        value: demucs_api
 
       # Secrets — set these in the Render dashboard, not in git.
       - key: GROQ_API_KEY
@@ -42,6 +43,15 @@ services:
       - key: GROQ_API_KEY2
         sync: false
       - key: GROQ_API_KEY3
+        sync: false
+
+      # Where the Demucs service lives: a phone tunnel, a home server, or the
+      # bundled tools/audio-separator-server sidecar. A phone tunnel URL changes
+      # every time it is reopened, so it can also be pasted into the website's
+      # stem panel — which wins over this value.
+      - key: AUDIO_SEPARATOR_URL
+        sync: false
+      - key: AUDIO_SEPARATOR_API_KEY
         sync: false
 
       # Optional: persist uploads and results in Cloudflare R2. A free Render

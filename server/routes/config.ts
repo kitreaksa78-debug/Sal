@@ -40,9 +40,9 @@ router.get('/status', async (req: Request, res: Response) => {
   const ttsProvider = ttsInstance.name;
   const ttsModel = ttsInstance.getModelName();
 
-  // The local DSP provider is always ready (FFmpeg ships with the app); the
-  // `audio_separator` sidecar needs its URL configured, and `demucs` needs the CLI
-  // on the host. Asking the provider itself keeps this honest.
+  // Stem separation runs on the Demucs service and nothing else, so this reads
+  // `false` until one is connected — there is no built-in substitute. Asking the
+  // provider itself keeps that honest.
   const audioSeparationInstance = getAudioSeparationProvider();
   const audioSeparationProvider = audioSeparationInstance.name;
   const audioSeparationConfigured = audioSeparationInstance.isConfigured();
@@ -75,7 +75,7 @@ router.get('/status', async (req: Request, res: Response) => {
     audioSeparation: {
       configured: audioSeparationConfigured,
       provider: audioSeparationProvider,
-      ...(audioSeparationProvider === 'audio_separator' || audioSeparationProvider === 'demucs_api'
+      ...(audioSeparationProvider === 'demucs_api'
         ? { model: audioSeparationConnection.model || 'service default' }
         : {}),
       ...(audioSeparationConfigured

@@ -25,11 +25,13 @@ interface DemucsPanelProps {
   visible: boolean;
 }
 
+/**
+ * Stem separation is Demucs only; the labels just name the machine it runs on,
+ * so the panel never suggests a different method is available.
+ */
 const PROVIDER_LABELS: Record<string, string> = {
   demucs_api: 'Demucs API (ទូរស័ព្ទ / server)',
-  audio_separator: 'audio-separator sidecar',
-  demucs: 'Demucs CLI',
-  local_dsp: 'FFmpeg DSP (ក្នុងម៉ាស៊ីនបម្រើ)',
+  audio_separator: 'Demucs sidecar (audio-separator)',
 };
 
 function formatBytes(bytes: number): string {
@@ -140,7 +142,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
       apply(next);
       setStatus({
         tone: 'warn',
-        text: 'បានផ្តាច់។ ប្រព័ន្ធនឹងប្រើការញែកក្នុងម៉ាស៊ីនបម្រើវិញ។ (Cleared — back to the built-in separation.)',
+        text: 'បានផ្តាច់។ ការញែកភ្លេងនឹងឈប់ដំណើរការ រហូតដល់ភ្ជាប់ Demucs API ឡើងវិញ។ (Cleared — separation stays off until a Demucs API is connected again.)',
       });
     } catch (err: any) {
       setStatus({ tone: 'error', text: err?.message || 'មិនអាចផ្តាច់បានទេ។' });
@@ -190,9 +192,19 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
               <p>១. បើក API ក្នុង Termux (port 8000) — ឧទាហរណ៍ <code className="text-cyan-300">python demucs_api.py</code></p>
               <p>២. បើក tunnel ឲ្យចេញអ៊ីនធឺណិត៖ <code className="text-cyan-300">ssh -R 80:localhost:8000 nokey@localhost.run</code></p>
               <p>៣. ចម្លង URL <code className="text-cyan-300">https://…</code> ដែលទទួលបាន មកដាក់ក្នុងប្រអប់ខាងក្រោម</p>
-              <p>៤. ចុច «រក្សាទុក» រួច «សាកល្បង» — បើជោគជ័យ ការងារបកប្រែនឹងប្រើទូរស័ព្ទញែកភ្លេងជំនួស។</p>
+              <p>៤. ចុច «រក្សាទុក» រួច «សាកល្បង» — ការងារបកប្រែប្រើ Demucs នេះជា​ការចាំបាច់ (គ្មានការជំនួស)។</p>
             </div>
           </div>
+
+          {connection && !connected && (
+            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/30 border border-amber-500/30">
+              <TriangleAlert className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
+              <p className="text-[11px] text-amber-200 leading-relaxed">
+                មិនទាន់ភ្ជាប់ Demucs API ទេ — ការងារបកប្រែនឹងឈប់នៅជំហានញែកភ្លេង ព្រោះប្រព័ន្ធមិនប្រើវិធីផ្សេងជំនួសទេ។
+                (Stem separation needs the Demucs API; jobs stop at that step rather than using a substitute.)
+              </p>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div className="space-y-1.5 sm:col-span-2">

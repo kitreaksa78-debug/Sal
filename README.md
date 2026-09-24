@@ -24,8 +24,27 @@ This Space runs the **whole app** (frontend + API) from one container.
 | Speech to text | Groq `whisper-large-v3` |
 | Translation | Groq `openai/gpt-oss-120b` (automatic model fallback) |
 | Khmer voice | Microsoft Edge TTS (free, unlimited) |
-| Audio separation | Local DSP (`ffmpeg-static`) |
+| Audio separation | Demucs (remote stem API) |
 | Muxing / rendering | FFmpeg (bundled in the image) |
+
+## Stem separation (Demucs only)
+
+Splitting the voices out of the mix runs on Demucs, reached over HTTP. There is
+no built-in substitute: if the service is missing or unreachable, the job stops
+at the separation step and reports why, instead of quietly continuing with a
+lesser separation.
+
+Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
+
+| Host | How |
+| --- | --- |
+| Phone (Termux) | `tools/demucs-termux/` starts the API and a tunnel |
+| Home server / VPS | `tools/demucs-termux/run-local.sh` |
+| Bundled sidecar | `tools/audio-separator-server/` |
+
+The app owner can also paste the URL into the `ញែកភ្លេង · Demucs API` panel in the
+studio, and that value wins over the environment variable — a phone tunnel gets a
+new URL every time it is reopened, so re-pointing it must not need a redeploy.
 
 ## Required secrets
 
@@ -37,6 +56,8 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 | `GROQ_API_KEY2`, `GROQ_API_KEY3` | optional | Extra keys; the app rotates to them automatically on 401/429 |
 | `STT_PROVIDER` | optional | `groq` (default) |
 | `TRANSLATION_PROVIDER` | optional | `groq` (default) |
+| `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service |
+| `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
 
 Optional — keep results after a restart. A Space's disk is **ephemeral**, so
 uploads and outputs are lost whenever the container restarts. Point the app at a

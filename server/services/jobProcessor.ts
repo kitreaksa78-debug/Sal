@@ -173,10 +173,6 @@ export class JobProcessor {
       const separationProvider = getAudioSeparationProvider();
       const separationResult = await separationProvider.separate(rawAudioPath, jobTempDir);
 
-      if (separationResult.warning) {
-        await db.updateJob(jobId, { warning: separationResult.warning });
-      }
-
       const vocalsTrack = separationResult.vocalsPath;
       const noVocalsTrack = separationResult.noVocalsPath; // music/background track
 
@@ -433,7 +429,11 @@ export class JobProcessor {
       let friendlyKhmer = 'មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត។';
       const errMsg = err?.message || '';
 
-      if (/\(429\)|rate limit|too many requests/i.test(errMsg)) {
+      if (errMsg.includes('ញែកភ្លេងដោយ Demucs') || errMsg.includes('ម៉ាស៊ីនញែកភ្លេង')) {
+        // Stem separation has no substitute, so the reason it failed is the whole
+        // story: show it instead of the generic "try another video" line.
+        friendlyKhmer = errMsg;
+      } else if (/\(429\)|rate limit|too many requests/i.test(errMsg)) {
         friendlyKhmer =
           'អត្រាប្រើប្រាស់ AI ពេញ (rate limit)។ សូមរង់ចាំបន្តិច រួចសាកល្បងម្តងទៀត ឬបន្ថែម Groq key ផ្សេងទៀត។ (AI rate limit reached: wait a moment or add another Groq key.)';
       } else if (errMsg.includes('is not configured') || errMsg.includes('No translation provider')) {

@@ -7,7 +7,7 @@
 #
 # វាធ្វើឲ្យអ្នកទាំងអស់៖
 #   ១. ពិនិត្យថា API រត់រួចហើយឬអត់
-#   ២. បើអត់ — ទាញឯកសារ API, រក python ដែលមាន demucs, រួចបើកវា
+#   ២. បើអត់ — ទាញឯកសារ API, ដំឡើង Demucs បើខ្វះ (តាម install-demucs.sh), រួចបើកវា
 #   ៣. ដំឡើង cloudflared បើខ្វះ
 #   ៤. បើក tunnel, រង់ចាំ URL, រួច **ពិនិត្យដោយខ្លួនឯង** ថា URL នោះដើរឬអត់
 #
@@ -38,6 +38,8 @@ else
     exit 1
   fi
   ls -l demucs_api.py
+  # ជំនួយតូច៖ បង្ហាញ និងផ្ទៀងផ្ទាត់ URL របស់ tunnel ដែលកំពុងរស់ (មិនចាំបាច់ទេ បើ​ទាញមិនបាន)
+  curl -fsSL -o tunnel-url.sh "$RAW/tunnel-url.sh" 2>/dev/null || true
 
   # រក python ដែលមាន demucs រួចហើយ (venv របស់អ្នក)
   PY=""
@@ -52,23 +54,31 @@ else
   fi
   if [ -z "$PY" ]; then
     echo "រកមិនឃើញ python ដែលមាន demucs ទេ — ដំឡើងវាឥឡូវនេះ (ធំ ~២០០MB, ចំណាយពេល)"
-    curl -fsSL -o requirements.txt "$RAW/requirements.txt" || true
+    # ដំឡើងតាម install-demucs.sh (មិនមែន `pip install -r requirements.txt` ទេ)៖
+    # `demucs` ទាមទារ `lameenc` ដែលគ្មាន wheel លើ Android/arm ហើយ API នេះសរសេរតែ WAV
+    # ដូច្នេះស្គ្រីបនោះដំឡើង demucs ដោយឆ្លងកាត់ lameenc។
+    if ! curl -fsSL -o install-demucs.sh "$RAW/install-demucs.sh"; then
+      echo "❌ ទាញ install-demucs.sh មិនបាន — ពិនិត្យ internet រួចសាកម្តងទៀត"
+      exit 1
+    fi
     if [ -x "$HOME/demucs-env/bin/python" ]; then
       PY="$HOME/demucs-env/bin/python"
     else
       python3 -m venv "$HOME/demucs-env" && PY="$HOME/demucs-env/bin/python"
     fi
-    "$PY" -m pip install --upgrade pip || true
-    "$PY" -m pip install -r requirements.txt || { echo "❌ ដំឡើងមិនបាន"; exit 1; }
+    sh install-demucs.sh "$PY" || { echo "❌ ដំឡើងមិនបាន"; exit 1; }
+    "$PY" -c "import demucs" >/dev/null 2>&1 || { echo "❌ ដំឡើងរួច តែ import demucs មិនចេញ"; exit 1; }
   fi
   echo "ប្រើ python: $PY"
 
   say "៣/៤  បើក API នៅ port $PORT"
   # setsid ដើម្បីឲ្យ API មិនត្រូវបិទ ពេលអ្នកចុច Ctrl+C លើ terminal ។
+  # `< /dev/null` សំខាន់ពេលស្គ្រីបនេះមកពី `curl | sh`៖ បើកូន process កាន់ stdin
+  # (ដែលជា pipe) ទុក វាអាចទាញអក្សរស្គ្រីបដែលនៅសល់បាត់បង់។
   if command -v setsid >/dev/null 2>&1; then
-    setsid "$PY" demucs_api.py > api.log 2>&1 &
+    setsid "$PY" demucs_api.py > api.log 2>&1 < /dev/null &
   else
-    nohup "$PY" demucs_api.py > api.log 2>&1 &
+    nohup "$PY" demucs_api.py > api.log 2>&1 < /dev/null &
   fi
   i=0
   while [ "$i" -lt 25 ]; do
@@ -108,28 +118,36 @@ sleep 1
 
 CF="cloudflared tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate --url http://localhost:$PORT"
 if command -v setsid >/dev/null 2>&1; then
-  setsid $CF > "$LOG" 2>&1 &
+  setsid $CF > "$LOG" 2>&1 < /dev/null &
 else
-  nohup $CF > "$LOG" 2>&1 &
+  nohup $CF > "$LOG" 2>&1 < /dev/null &
 fi
 
-echo "រង់ចាំ URL ប្រហែល ១០ វិនាទី..."
+# ចំណុចខាងក្រោមមានន័យថា «កំពុងរង់ចាំពិតៗ» — មិនមែនគាំងទេ។ Cloudflare
+# ត្រូវការពេលបន្តិចដើម្បីបង្កើតផ្លូវថ្មី ហើយជួនកាលលើ 4G វាយឺត។
+printf 'រង់ចាំ URL ពី Cloudflare (រហូត ៦០ វិនាទី, ចំណុច = កំពុងដំណើរការ) '
 URL=""
 i=0
-while [ "$i" -lt 40 ]; do
+while [ "$i" -lt 60 ]; do
   URL=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' "$LOG" 2>/dev/null | tail -1 || true)
   if [ -n "$URL" ]; then
     break
   fi
   i=$((i + 1))
+  printf '.'
   sleep 1
 done
+printf '\n'
 
 if [ -z "$URL" ]; then
   echo "❌ រក URL មិនឃើញ។ log ចុងក្រោយ៖"
   tail -20 "$LOG"
   exit 1
 fi
+
+# ទុក URL ទៅឯកសារមួយ ដើម្បីឲ្យរកមើលវាបានយូរក្រោយមក ដោយមិនចាំបាច់ប្រើស្គ្រីប៖
+#     cat "$DIR/tunnel-url.txt"
+printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
 
 echo "URL: $URL"
 echo
@@ -164,6 +182,8 @@ fi
 
 echo
 echo "API និង tunnel កំពុងរត់នៅ background — អ្នកអាចបិទអេក្រង់បាន ✅"
+echo "មើល URL ចុងក្រោយបំផុត៖  cat $DIR/tunnel-url.txt"
+echo "មើល URL និងផ្ទៀងផ្ទាត់៖  sh tunnel-url.sh"
 echo "មើល log ផ្ទាល់៖   tail -f $LOG"
 echo "បិទ tunnel៖        pkill -f 'cloudflared tunnel'"
 echo "បិទ API៖           pkill -f demucs_api.py"

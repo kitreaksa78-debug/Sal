@@ -1,157 +1,31 @@
 import fs from 'fs';
 import path from 'path';
-import { spawn } from 'child_process';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
-import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
-import { getSeparatorConnection, getStoredSeparatorConnection } from './separatorSettings.js';
+import { getSeparatorConnection } from './separatorSettings.js';
 
 export interface SeparationResult {
   vocalsPath: string;
   noVocalsPath: string;
-  warning?: string;
   /**
-   * True when the background track still contains the original voices, which
-   * happens when phase cancellation is impossible (effectively mono audio).
-   * The mixer uses it to decide how hard to mute the background under dialogue.
+   * True when the background track still contains the original voices. Demucs
+   * removes them cleanly, so this is false on every successful separation; the
+   * mixer still honours it so a degraded run could never be over-dipped.
    */
   backgroundHasOriginalVoice?: boolean;
 }
 
-export interface SeparationOptions {
-  /**
-   * Report a failure instead of quietly using the DSP fallback. Only the admin
-   * "test connection" screen asks for this: it wants the real error from the
-   * service, not a job that keeps going.
-   */
-  noFallback?: boolean;
-}
-
+/**
+ * Splitting the voices out of a video. There is exactly one implementation —
+ * the Demucs service — because the owner asked for real model separation only:
+ * a job either gets Demucs stems or fails with the reason, and never quietly
+ * continues with a substitute separation.
+ */
 export interface AudioSeparationProvider {
   name: string;
   isConfigured(): boolean;
-  separate(
-    inputWavPath: string,
-    outputDir: string,
-    options?: SeparationOptions
-  ): Promise<SeparationResult>;
-}
-
-/**
- * Local DSP Audio Separation using FFmpeg center-channel subtraction + bandpass filters.
- * High speed, zero external dependencies, robust and keeps stereo background music and ambience.
- */
-export class DspAudioSeparationProvider implements AudioSeparationProvider {
-  name = 'local_dsp';
-
-  isConfigured(): boolean {
-    return true; // Always available via native FFmpeg
-  }
-
-  async separate(inputWavPath: string, outputDir: string): Promise<SeparationResult> {
-    const vocalsPath = path.join(outputDir, 'vocals.wav');
-    const noVocalsPath = path.join(outputDir, 'no_vocals.wav');
-
-    try {
-      const separation = await FFmpegHelper.separateCenterVocalDsp(inputWavPath, vocalsPath, noVocalsPath);
-
-      // Verify files were generated
-      const noVocalsExists = fs.existsSync(noVocalsPath) && fs.statSync(noVocalsPath).size > 1024;
-
-      if (!noVocalsExists) {
-        logger.warn('no_vocals.wav was not generated cleanly, falling back to original audio copy');
-        fs.copyFileSync(inputWavPath, noVocalsPath);
-        return {
-          vocalsPath,
-          noVocalsPath,
-          backgroundHasOriginalVoice: true,
-          warning: 'ការញែកសំឡេងមិនទាន់ពេញលេញ។ សំឡេងដើមត្រូវបានរក្សាទុកជាផ្ទៃខាងក្រោយ។ (Audio separation partial; original audio preserved as background.)',
-        };
-      }
-
-      logger.info(
-        separation.backgroundHasOriginalVoice
-          ? 'Background keeps the original mix; the original voices will be muted inside each dialogue window.'
-          : 'Centre-channel cancellation used for the background; only a light dip is needed under dialogue.'
-      );
-
-      return {
-        vocalsPath,
-        noVocalsPath,
-        backgroundHasOriginalVoice: separation.backgroundHasOriginalVoice,
-      };
-    } catch (err: any) {
-      logger.warn('DSP audio separation encountered an issue, continuing gracefully with fallback:', err);
-      // Graceful fallback: use original audio as background so job continues smoothly
-      fs.copyFileSync(inputWavPath, noVocalsPath);
-      fs.copyFileSync(inputWavPath, vocalsPath);
-
-      return {
-        vocalsPath,
-        noVocalsPath,
-        backgroundHasOriginalVoice: true,
-        warning: 'ការញែកសំឡេងមិនបានល្អឥតខ្ចោះទេ ប៉ុន្តែវីដេអូនឹងនៅតែដំណើរការបន្ត។ (Audio separation warning; continuing with graceful fallback.)',
-      };
-    }
-  }
-}
-
-/**
- * Demucs CLI provider if the user has demucs installed on the host
- */
-export class DemucsAudioSeparationProvider implements AudioSeparationProvider {
-  name = 'demucs';
-  private fallback = new DspAudioSeparationProvider();
-
-  isConfigured(): boolean {
-    return process.env.AUDIO_SEPARATION_PROVIDER === 'demucs';
-  }
-
-  async separate(inputWavPath: string, outputDir: string): Promise<SeparationResult> {
-    try {
-      const isDemucsInstalled = await new Promise<boolean>((resolve) => {
-        const check = spawn('demucs', ['--help']);
-        check.on('close', (code) => resolve(code === 0));
-        check.on('error', () => resolve(false));
-      });
-
-      if (!isDemucsInstalled) {
-        logger.info('Demucs command not found, using local DSP separation fallback');
-        return await this.fallback.separate(inputWavPath, outputDir);
-      }
-
-      logger.info('Running demucs vocal separation...');
-      await new Promise<void>((resolve, reject) => {
-        const proc = spawn('demucs', ['--two-stems=vocals', '-o', outputDir, inputWavPath]);
-        proc.on('close', (code) => {
-          if (code === 0) resolve();
-          else reject(new Error(`Demucs exited with code ${code}`));
-        });
-        proc.on('error', reject);
-      });
-
-      // Find demucs output
-      const baseName = path.basename(inputWavPath, path.extname(inputWavPath));
-      const modelDir = path.join(outputDir, 'htdemucs', baseName);
-      const demucsVocals = path.join(modelDir, 'vocals.wav');
-      const demucsNoVocals = path.join(modelDir, 'no_vocals.wav');
-
-      const targetVocals = path.join(outputDir, 'vocals.wav');
-      const targetNoVocals = path.join(outputDir, 'no_vocals.wav');
-
-      if (fs.existsSync(demucsVocals) && fs.existsSync(demucsNoVocals)) {
-        fs.copyFileSync(demucsVocals, targetVocals);
-        fs.copyFileSync(demucsNoVocals, targetNoVocals);
-        return { vocalsPath: targetVocals, noVocalsPath: targetNoVocals };
-      }
-
-      return await this.fallback.separate(inputWavPath, outputDir);
-    } catch (e: any) {
-      logger.warn('Demucs separation failed, gracefully falling back to DSP:', e);
-      return await this.fallback.separate(inputWavPath, outputDir);
-    }
-  }
+  separate(inputWavPath: string, outputDir: string): Promise<SeparationResult>;
 }
 
 // --------------------------------------------------------------- remote stems
@@ -269,6 +143,60 @@ function decodeBase64Audio(value: string): Buffer {
 }
 
 /**
+ * `fetch` collapses every network-level failure into the bare message "fetch
+ * failed" and hides the real reason in `cause` — ENOTFOUND when the address no
+ * longer exists, ECONNREFUSED, a reset connection, a timeout. A quick tunnel is
+ * exactly the case where that detail matters: it is handed a brand-new hostname
+ * every time it is reopened, so the old one stops resolving entirely. Lifting the
+ * cause into the message is what turns an opaque failure into a fixable one.
+ */
+function describeFetchError(err: unknown): string {
+  const base = err instanceof Error ? err.message : String(err);
+  const cause = (err as { cause?: unknown } | null | undefined)?.cause;
+  if (!cause) return base;
+
+  const detail =
+    typeof cause === 'object' && cause !== null
+      ? (cause as { code?: string }).code ?? (cause as Error).message
+      : String(cause);
+
+  return detail && detail !== base ? `${base} (${detail})` : base;
+}
+
+/** Everything that went wrong inside `fetch`, message and all, as one string. */
+function fetchErrorText(err: unknown): string {
+  const name = typeof err === 'object' && err !== null ? (err as { name?: string }).name ?? '' : '';
+  return `${name} ${describeFetchError(err)}`;
+}
+
+/**
+ * A sentence naming what to check, chosen from how the connection actually
+ * failed. Empty when the failure was about the stems rather than the network, so
+ * a service that answered wrongly is not blamed on a dead tunnel.
+ */
+function connectionHint(err: unknown): string {
+  const text = fetchErrorText(err);
+
+  if (/ENOTFOUND|EAI_AGAIN|Could not resolve|getaddrinfo/i.test(text)) {
+    return ' រកអាសយដ្ឋាននេះមិនឃើញ — tunnel នេះបានបិទហើយ។ Quick tunnel ទទួលបាន URL ថ្មីរាល់ពេលបើក ដូច្នេះសូមបើកវាឡើងវិញ រួច paste URL ថ្មីក្នុងកាត «ញែកភ្លេង»។ (That hostname no longer exists: the quick tunnel is closed and has a new URL — reopen it and paste the new one.)';
+  }
+
+  if (/ECONNREFUSED|ECONNRESET|other side closed|socket hang up|EPIPE/i.test(text)) {
+    return ' ភ្ជាប់ទៅម៉ាស៊ីនញែកភ្លេងមិនបាន — API ឬ tunnel បានបិទ។ សូមបើកវាឡើងវិញនៅលើទូរស័ព្ទ។ (The connection was refused or dropped: the Demucs API or its tunnel is not running.)';
+  }
+
+  if (/TimeoutError|AbortError|ETIMEDOUT|UND_ERR.*TIMEOUT|timed out/i.test(text)) {
+    return ' អស់ពេលរង់ចាំ — ម៉ាស៊ីនញែកភ្លេងយឺត ឬបណ្តាញទូរស័ព្ទដាច់។ សាកល្បងវីដេអូខ្លី ឬពិនិត្យបណ្តាញ។ (It timed out: the phone is slow or its network dropped.)';
+  }
+
+  if (/fetch failed|UND_ERR/i.test(text)) {
+    return ' សូមពិនិត្យថា Demucs API និង tunnel កំពុងរត់នៅលើទូរស័ព្ទ រួចចុច «សាកល្បងការតភ្ជាប់» ម្តងទៀត។ (Check that the Demucs API and its tunnel are still running on the phone.)';
+  }
+
+  return '';
+}
+
+/**
  * A stem service reached over HTTP.
  *
  * The Node/FFmpeg host cannot run UVR/Demucs models itself, so the model runs
@@ -284,14 +212,14 @@ function decodeBase64Audio(value: string): Buffer {
  * lets the mixer hold the music at full level under the Khmer dialogue (a gentle
  * 6 dB dip) instead of gating it down to -30 dB.
  *
- * Anything that goes wrong — service down, timeout, unrecognised answer — falls
- * back to the local DSP provider, so separation never fails a job.
+ * There is no substitute path: a job that cannot reach the service fails with
+ * the reason instead of silently continuing with a lesser separation, so a
+ * broken tunnel can never be mistaken for a working Demucs run.
  */
 export class RemoteStemSeparationProvider implements AudioSeparationProvider {
   name: string;
-  private fallback = new DspAudioSeparationProvider();
 
-  constructor(name = 'audio_separator') {
+  constructor(name = 'demucs_api') {
     this.name = name;
   }
 
@@ -304,30 +232,26 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     const connection = getSeparatorConnection();
     if (connection.model) return connection.model;
     // A Demucs service rejects an MDX file name and the other way round, so the
-    // fallback name is only used for the sidecar this repository ships.
+    // sidecar name is only used for the sidecar this repository ships.
     return this.name === 'demucs_api' ? '' : 'UVR-MDX-NET-Inst_HQ_3';
   }
 
-  async separate(
-    inputWavPath: string,
-    outputDir: string,
-    options: SeparationOptions = {}
-  ): Promise<SeparationResult> {
+  async separate(inputWavPath: string, outputDir: string): Promise<SeparationResult> {
     const vocalsPath = path.join(outputDir, 'vocals.wav');
     const noVocalsPath = path.join(outputDir, 'no_vocals.wav');
     const connection = getSeparatorConnection();
 
     if (!connection.url) {
-      logger.info('No stem service is configured; using the local DSP separation fallback');
-      if (options.noFallback) throw new Error('មិនទាន់បានកំណត់ URL របស់ម៉ាស៊ីនញែកភ្លេងទេ។ (No stem service URL is configured.)');
-      return this.fallback.separate(inputWavPath, outputDir);
+      throw new Error(
+        'មិនទាន់បានភ្ជាប់ម៉ាស៊ីនញែកភ្លេង (Demucs API) ទេ — សូមដាក់ URL ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API» ជាមុនសិន។ (No Demucs API is connected; set its URL in the stem separation panel first.)'
+      );
     }
 
-    try {
-      // The stems are streamed straight to disk, and the caller's directory may
-      // not exist yet on the "test connection" path.
-      fs.mkdirSync(outputDir, { recursive: true });
+    // The stems are streamed straight to disk, and the caller's directory may
+    // not exist yet on the "test connection" path.
+    fs.mkdirSync(outputDir, { recursive: true });
 
+    try {
       const stems = await this.requestStems(inputWavPath, connection.url, connection.apiKey, connection.path);
 
       await this.writeStem(connection.url, stems.vocals, vocalsPath, connection.apiKey);
@@ -335,7 +259,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
 
       const usable = (p: string) => fs.existsSync(p) && fs.statSync(p).size > 1024;
       if (!usable(vocalsPath) || !usable(noVocalsPath)) {
-        throw new Error('the service returned empty stems');
+        throw new Error('the service answered without usable stems');
       }
 
       logger.info(`Stem service finished (${connection.url}, model: ${stems.model || this.getModelName() || 'default'})`);
@@ -346,15 +270,13 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
         backgroundHasOriginalVoice: false,
       };
     } catch (err: any) {
-      logger.warn(`Stem separation via ${connection.url} failed:`, err?.message || err);
-      if (options.noFallback) throw err;
-
-      const result = await this.fallback.separate(inputWavPath, outputDir);
-      return {
-        ...result,
-        warning:
-          'ការញែកភ្លេងដោយម៉ូឌែល (Demucs) មិនបានសម្រេច ដូច្នេះវីដេអូនេះប្រើវិធីញែកធម្មតាជំនួសវិញ។ (Model separation was unavailable for this job; used the built-in DSP fallback.)',
-      };
+      const reason = describeFetchError(err);
+      logger.warn(`Stem separation via ${connection.url} failed:`, reason);
+      // No substitute separation: the job stops here with the real reason, which
+      // is what makes a dead tunnel obvious instead of silently degraded.
+      throw new Error(
+        `ញែកភ្លេងដោយ Demucs បរាជ័យ៖ ${reason} (Demucs stem separation failed.)${connectionHint(err)}`
+      );
     }
   }
 
@@ -538,8 +460,8 @@ export interface SeparatorTestReport {
  * End-to-end check used by the admin screen: send one short tone through the
  * configured service and confirm two real stems come back.
  *
- * It deliberately runs without the DSP fallback, so a silent fallback can never
- * be mistaken for a working Demucs service.
+ * It runs the same code the pipeline runs, so whatever this reports is exactly
+ * what a real job would get.
  */
 export async function testRemoteSeparation(
   inputWavPath: string,
@@ -561,7 +483,7 @@ export async function testRemoteSeparation(
   const service = await describeRemoteService(connection.url, connection.apiKey).catch(() => null);
 
   try {
-    const result = await provider.separate(inputWavPath, outputDir, { noFallback: true });
+    const result = await provider.separate(inputWavPath, outputDir);
     const vocalsBytes = fs.statSync(result.vocalsPath).size;
     const instrumentalBytes = fs.statSync(result.noVocalsPath).size;
     return {
@@ -582,21 +504,14 @@ export async function testRemoteSeparation(
   }
 }
 
+/**
+ * The one separation provider the pipeline uses.
+ *
+ * Where Demucs runs — a phone in Termux, a home server, the bundled sidecar —
+ * comes from `AUDIO_SEPARATOR_URL` or the connection the owner saved from the
+ * website. With neither set the provider is simply unconfigured, and jobs fail
+ * with a message saying so; stem separation is never swapped for another method.
+ */
 export function getAudioSeparationProvider(): AudioSeparationProvider {
-  // Pointing the app at a phone/box service from the website is an explicit
-  // choice, so it wins over whatever provider the deployment defaults to.
-  const saved = getStoredSeparatorConnection();
-  if (saved?.url) return new RemoteStemSeparationProvider('demucs_api');
-
-  const provider = (process.env.AUDIO_SEPARATION_PROVIDER || 'local_dsp').toLowerCase();
-  if (['audio_separator', 'audio-separator'].includes(provider)) {
-    return new RemoteStemSeparationProvider('audio_separator');
-  }
-  if (['demucs_api', 'demucs-api', 'demucs_http'].includes(provider)) {
-    return new RemoteStemSeparationProvider('demucs_api');
-  }
-  if (provider === 'demucs') {
-    return new DemucsAudioSeparationProvider();
-  }
-  return new DspAudioSeparationProvider();
+  return new RemoteStemSeparationProvider('demucs_api');
 }

@@ -1,7 +1,10 @@
-# Demucs API on a phone (Termux)
+# Demucs API — បណ្ណាល័យរបស់ HTTP server
 #
-# demucs pulls in torch, which is the big download (~200 MB+ on CPU builds).
+# ចំណាំ៖ `demucs` ចេតនាមិននៅក្នុងឯកសារនេះទេ។ ដំឡើងវាដោយស្គ្រីបខាងក្រោម ព្រោះ
+# `pip install demucs` ដួលលើ `lameenc` (ដែលប្រើតែសម្រាប់ MP3) លើ Android/arm៖
+#
+#     sh install-demucs.sh
+#
 fastapi>=0.115
 uvicorn>=0.30
 python-multipart>=0.0.9
-demucs>=4.0

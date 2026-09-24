@@ -23,7 +23,7 @@ GET  /stems/<job>/<name>      -> ឯកសារ WAV
 
 ដំណើរការ
 --------
-    pip install -r requirements.txt      # ត្រូវការ torch (ធំ) — មើល README.md
+    sh install-demucs.sh                 # ត្រូវការ torch (ធំ) — មើល README.md
     python demucs_api.py                 # បើកនៅ port 8000
 
 បរិស្ថាន (Environment)
