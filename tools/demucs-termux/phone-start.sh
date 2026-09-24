@@ -33,14 +33,28 @@ api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q 
 #     Target triple not supported by rustup: aarch64-unknown-linux-android
 #     ERROR: Failed to build 'pydantic-core'
 # ដូច្នេះជំនួសឲ្យការបរាជ័យ វាបញ្ជូនតទៅ Ubuntu ដែលមាន glibc ពេញ។
-if [ "$(uname -o 2>/dev/null)" = "Android" ] && [ -z "${TERMUX_PROOT:-}" ]; then
+# ---- តើយើងកំពុងនៅក្នុង proot Ubuntu ហើយ? ----
+# នៅក្នុង proot ក៏ `uname -o` នៅតែបង្ហាញ `Android` ដូច្នេះមិនអាចសន្តឹងតែវាទេ។ បើយើងកុំចាប់យក
+# វាទៀត វានឹងបញ្ជូនចូល Ubuntu ម្តងហើយងាយកន្លង ហើយបន្ទាប់មកបង្ហាញកំហុសមិនពាក់ព័ន្ធ
+# (ដូចរូបភាពអេក្រង់ — `proot-distro` គ្រាន់តែមាននៅខាង Termux ដូច្នេះក្នុង Ubuntu រកមិនឃើញ)។
+# ដូច្នេះយើងមើលសញ្ញាផ្សេងៗ ហើយក្នុងការបញ្ជូនក៏កំណត់ TERMUX_PROOT=1 ដើម្បីកុំឲ្យបរាជ័យងាយកន្លង។
+IN_PROOT=no
+[ -n "${TERMUX_PROOT:-}" ] && IN_PROOT=yes
+[ -n "${PROOT_L2S_DIR:-}" ] && IN_PROOT=yes
+
+if [ "$IN_PROOT" = no ] && [ "$(uname -o 2>/dev/null)" = "Android" ]; then
   PD="$(command -v proot-distro 2>/dev/null || true)"
   ROOTFS="${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/ubuntu"
-  if [ -n "$PD" ] && [ -d "$ROOTFS" ]; then
+  HAS_UBUNTU=no
+  [ -d "$ROOTFS" ] && HAS_UBUNTU=yes
+  if [ "$HAS_UBUNTU" = no ] && [ -n "$PD" ] && "$PD" list 2>/dev/null | grep -qi ubuntu; then
+    HAS_UBUNTU=yes
+  fi
+  if [ -n "$PD" ] && [ "$HAS_UBUNTU" = yes ]; then
     echo "ទូរស័ព្ទនេះជា Termux ដើម — បើកក្នុង Ubuntu (proot) ជំនួសវិញ..."
     echo "(បើវាដួល សូមវាយដោយដៃ៖ proot-distro login ubuntu រួចវាយបញ្ជានេះម្តងទៀត)"
     echo
-    exec "$PD" login ubuntu -- /bin/sh -c "command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl; }; curl -fsSL '$RAW/phone-start.sh' | sh" < /dev/null
+    exec "$PD" login ubuntu -- /bin/sh -c "export TERMUX_PROOT=1; command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl; }; curl -fsSL '$RAW/phone-start.sh' | sh" < /dev/null
   fi
   cat <<'MSG'
 
