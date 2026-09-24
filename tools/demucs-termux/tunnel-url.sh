@@ -36,6 +36,14 @@ if [ -z "$URL" ]; then
 fi
 
 echo "URL: $URL"
+
+# ផ្ទះរបស់ Termux និងផ្ទះក្នុង proot Ubuntu ខុសគ្នា — ចម្លងទៅផ្ទះ Termux ផង ដើម្បីងាយមើល
+T="${TERMUX_URL_FILE:-/data/data/com.termux/files/home/demucs-tunnel-url.txt}"
+if [ -d "$(dirname "$T")" ]; then
+  printf '%s\n' "$URL" > "$T" 2>/dev/null || true
+  echo "(បានចម្លងទៅផង — មើលពី Termux បាន៖ cat ~/demucs-tunnel-url.txt)"
+fi
+
 echo "កំពុងពិនិត្យពីខាងក្រៅ (ដូចដែលគេហទំព័រធ្វើ)..."
 body=$(curl -s --max-time 20 "$URL/" 2>/dev/null || true)
 

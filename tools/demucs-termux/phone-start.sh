@@ -19,6 +19,11 @@ DIR="${DEMUCS_HOME:-$HOME/demucs-api}"
 PORT="${PORT:-8000}"
 RAW="https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux"
 
+# ផ្ទះរបស់ Termux និងផ្ទះខាងក្នុង proot Ubuntu គឺ **ខុសគ្នាទាំងស្រុង** (Termux: /data/data/…
+# Ubuntu: /root)។ ដូច្នេះពេលយើងរត់ក្នុង Ubuntu យើងចម្លង URL មួយទៅផ្ទះ Termux ផង
+# ដើម្បីឲ្យអ្នកអាច `cat ~/demucs-tunnel-url.txt` ពី Termux បានផ្ទាល់។
+TERMUX_URL_FILE="${TERMUX_URL_FILE:-/data/data/com.termux/files/home/demucs-tunnel-url.txt}"
+
 say() { printf '\n===== %s =====\n' "$1"; }
 api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; }
 
@@ -184,8 +189,11 @@ if [ -z "$URL" ]; then
 fi
 
 # ទុក URL ទៅឯកសារមួយ ដើម្បីឲ្យរកមើលវាបានយូរក្រោយមក ដោយមិនចាំបាច់ប្រើស្គ្រីប៖
-#     cat "$DIR/tunnel-url.txt"
-printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
+#     cat "$DIR/tunnel-url.txt"printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
+# ចម្លងទៅផ្ទះ Termux ផង (ដើរតែពេលផ្ទះនោះមើលឃើញ — ឧ. ពេលរត់ក្នុង proot លើទូរស័ព្ទ)
+if [ -d "$(dirname "$TERMUX_URL_FILE")" ]; then
+  printf '%s\n' "$URL" > "$TERMUX_URL_FILE" 2>/dev/null || true
+fi
 
 echo "URL: $URL"
 echo
@@ -221,6 +229,9 @@ fi
 echo
 echo "API និង tunnel កំពុងរត់នៅ background — អ្នកអាចបិទអេក្រង់បាន ✅"
 echo "មើល URL ចុងក្រោយបំផុត៖  cat $DIR/tunnel-url.txt"
+if [ -f "$TERMUX_URL_FILE" ]; then
+  echo "URL ដដែល មើលពី Termux បានផង៖  cat ~/demucs-tunnel-url.txt"
+fi
 echo "មើល URL និងផ្ទៀងផ្ទាត់៖  sh tunnel-url.sh"
 echo "មើល log ផ្ទាល់៖   tail -f $LOG"
 echo "បិទ tunnel៖        pkill -f 'cloudflared tunnel'"
