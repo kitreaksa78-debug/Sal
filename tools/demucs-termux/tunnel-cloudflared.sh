@@ -25,6 +25,18 @@ TERMUX_URL_FILE="${TERMUX_URL_FILE:-/data/data/com.termux/files/home/demucs-tunn
 
 mkdir -p "$DIR" 2>/dev/null || true
 
+# ---- ០. គួររត់ក្នុង Ubuntu មិនមែន Termux ដើម -------------------------
+# Termux ដើមគ្មាន `setsid` ទេ ដូច្នេះពេលស្គ្រីបចប់ (ជាពិសេសពេលមកពី `curl | sh`)
+# Android អាចសម្លាប់ cloudflared ភ្លាម — URL ថ្មីនោះនឹងស្លាប់ភ្លាមដែរ។
+# ក្នុង proot Ubuntu វា​រត់ជា session ដោយខ្លួនឯង ហើយ URL ក៏ត្រូវសរសេរទៅផ្ទះដដែល
+# ដែល API រស់នៅ ដូច្នេះស្គ្រីបផ្សេងរកវាឃើញ។
+if [ -z "${TERMUX_PROOT:-}" ] && [ -z "${PROOT_L2S_DIR:-}" ] && [ "$(uname -o 2>/dev/null)" = "Android" ]; then
+  echo "⚠️  អ្នកកំពុងរត់ក្នុង Termux ដើម — tunnel អាចស្លាប់ភ្លាមពេលស្គ្រីបបញ្ចប់។"
+  echo "    គួររត់ក្នុង Ubuntu ជំនួស៖  proot-distro login ubuntu  រួចបើកស្គ្រីបនេះម្តងទៀត"
+  echo "    (ឬងាយបំផុត៖ `sh phone-start.sh` ដែលចូល Ubuntu ឲ្យស្វ័យប្រវត្តិ)"
+  echo
+fi
+
 # ---- ០. API គួរតែរត់រួចហើយ ------------------------------------------------
 if curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; then
   echo "API រត់នៅ http://127.0.0.1:$PORT/ ✅"
@@ -132,9 +144,14 @@ if [ "$ok" = "1" ]; then
   echo "បិទ tunnel៖     pkill -f 'cloudflared tunnel'"
   echo "មើល log៖        tail -f $LOG"
 else
-  echo "❌ URL នោះមិនឆ្លើយតបពីខាងក្រៅទេ (tunnel បិទ ឬបណ្តាញដាច់)។"
-  echo "សាកម្តងទៀត៖  pkill -f 'cloudflared tunnel' ; sh tunnel-cloudflared.sh"
-  echo "log ចុងក្រោយ៖"
+  echo "⚠️  ការផ្ទៀងផ្ទាត់ពីទូរស័ព្ទបរាជ័យ (ញឹកញាប់លើ 4G — មិនមែនមានន័យថា tunnel ដើរមិនបានទេ)។"
+  echo
+  echo "    URL របស់ tunnel៖  $URL"
+  echo
+  echo "    សូមផ្ញើ URL នេះទៅអ្នកអភិវឌ្ឍ ដើម្បីឲ្យគាត់សាកល្បងពីខាងក្រៅផ្ទាល់។"
+  echo "    (ឯកសារ URL បានសរសេរត្រង់៖  cat $DIR/tunnel-url.txt )"
+  echo
+  echo "log ចុងក្រោយរបស់ cloudflared៖"
   tail -12 "$LOG"
   exit 1
 fi
