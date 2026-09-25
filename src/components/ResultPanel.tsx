@@ -1,12 +1,5 @@
 import React, { useRef } from 'react';
-import { 
-  Download, 
-  CheckCircle2, 
-  RefreshCw, 
-  Play, 
-  Clock, 
-  User 
-} from 'lucide-react';
+import { Download, CheckCircle2, RefreshCw } from 'lucide-react';
 import { JobRecord } from '../types';
 import { getDownloadUrl, getSubtitlesUrl } from '../lib/api';
 
@@ -22,19 +15,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   // Subtitles follow the choice made before dubbing: the VTT track is attached
   // when they were turned on, and the player's own captions button toggles it.
   const vttUrl = getSubtitlesUrl(job.id, 'vtt');
-
-  const seekToTime = (seconds: number) => {
-    if (dubbedVideoRef.current) {
-      dubbedVideoRef.current.currentTime = seconds;
-      dubbedVideoRef.current.play().catch(() => {});
-    }
-  };
-
-  const formatTime = (secs: number) => {
-    const mins = Math.floor(secs / 60);
-    const rem = (secs % 60).toFixed(1);
-    return `${mins}:${parseFloat(rem) < 10 ? '0' : ''}${rem}s`;
-  };
 
   return (
     <div className="space-y-6">
@@ -120,73 +100,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
           </a>
         </div>
       </div>
-
-      {/* Interactive Dialogue Transcript & Timing Explorer */}
-      {job.segments && job.segments.length > 0 && (
-        <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-5 shadow-xl space-y-4">
-          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-800 pb-3">
-            <div className="min-w-0">
-              <h3 className="text-xs sm:text-sm font-bold text-white flex flex-wrap items-center gap-2">
-                <span>អត្ថបទសន្ទនា & ការបកប្រែ (Dialogue & Translation Transcript)</span>
-                <span className="text-[11px] px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 whitespace-nowrap">
-                  {job.segments.length} បន្ទាត់
-                </span>
-              </h3>
-              <p className="text-xs text-slate-300 mt-0.5">
-                ចុចលើបន្ទាត់នីមួយៗដើម្បីស្វែងរក និងចាក់សំឡេងត្រង់វិនាទីនោះ
-              </p>
-            </div>
-          </div>
-
-          <div className="divide-y divide-slate-800/80 max-h-96 overflow-y-auto scroll-slim pr-1">
-            {job.segments.map((seg, idx) => (
-              <div
-                key={seg.id || idx}
-                onClick={() => seekToTime(seg.start)}
-                className="py-3 px-3 rounded-xl hover:bg-slate-800/50 cursor-pointer transition-colors space-y-1.5 group"
-              >
-                <div className="flex flex-wrap items-center justify-between gap-1.5 text-xs">
-                  <div className="flex flex-wrap items-center gap-2 min-w-0">
-                    <span className="inline-flex items-center gap-1 font-semibold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/20">
-                      <User className="w-3 h-3" />
-                      <span>{seg.speaker}</span>
-                      {seg.speakerGender && (
-                        <span className="text-[10px] text-slate-400 capitalize">({seg.speakerGender})</span>
-                      )}
-                    </span>
-
-                    {seg.emotion && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-400 capitalize whitespace-nowrap">
-                        {seg.emotion}
-                      </span>
-                    )}
-                  </div>
-
-                  <div className="flex items-center gap-1 text-slate-300 font-mono group-hover:text-emerald-300 shrink-0">
-                    <Clock className="w-3 h-3" />
-                    <span>{formatTime(seg.start)} - {formatTime(seg.end)}</span>
-                    <Play className="w-3 h-3 ml-1 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-400" />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                  {/* Original line */}
-                  <div className="text-slate-300 italic">
-                    <span className="text-[10px] font-bold text-slate-400 uppercase mr-1">EN:</span>
-                    "{seg.text}"
-                  </div>
-
-                  {/* Translated Khmer line */}
-                  <div className="text-emerald-300 font-medium font-sans">
-                    <span className="text-[10px] font-bold text-emerald-400 uppercase mr-1">KM:</span>
-                    "{seg.khmer || seg.text}"
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
     </div>
   );
 };

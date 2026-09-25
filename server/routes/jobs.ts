@@ -374,6 +374,44 @@ function isBusy(job: JobRecord): boolean {
 }
 
 /**
+ * DELETE /api/jobs
+ * Clear this account's whole history — the finished jobs only. Anything still
+ * running is left alone so the pipeline can finish writing its result.
+ * Admin sees own + legacy (pre-account) jobs, same as GET /, so clearing
+ * actually removes what the admin is looking at.
+ */
+router.delete('/', async (req: Request, res: Response) => {
+  try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
+    const db = getDatabase();
+    let pending = await db.listJobsForOwner(session.userId, Number.MAX_SAFE_INTEGER);
+    if (await isAppOwner(session)) {
+      const legacy = (await db.listJobs(1000)).filter((job) => !job.ownerId);
+      const seen = new Set(pending.map((job) => job.id));
+      pending = [...pending, ...legacy.filter((job) => !seen.has(job.id))];
+    }
+    const removable = pending.filter((job) => !isBusy(job));
+
+    const storage = getStorage();
+    for (const job of removable) {
+      for (const { category, filename } of jobArtifacts(job)) {
+        await storage.deleteFile(category, filename);
+      }
+      await storage.cleanProcessingDir(job.id);
+      await db.deleteJob(job.id);
+    }
+
+    logger.info(`Cleared ${removable.length} job(s) from ${session.email}'s history (admin=${await isAppOwner(session)})`);
+    return res.json({ ok: true, deleted: removable.length, skipped: pending.length - removable.length });
+  } catch (err: any) {
+    logger.error('Failed to clear history:', err);
+    return res.status(500).json({ error: 'មិនអាចសម្អាតប្រវត្តិបានទេ។ សូមព្យាយាមម្តងទៀត។' });
+  }
+});
+
+/**
  * DELETE /api/jobs/:id
  * Forget one history entry and free the files behind it.
  *
@@ -413,37 +451,6 @@ router.delete('/:id', async (req: Request, res: Response) => {
   } catch (err: any) {
     logger.error('Failed to delete job:', err);
     return res.status(500).json({ error: 'មិនអាចលុបការងារនេះបានទេ។ សូមព្យាយាមម្តងទៀត។' });
-  }
-});
-
-/**
- * DELETE /api/jobs
- * Clear this account's whole history — the finished jobs only. Anything still
- * running is left alone so the pipeline can finish writing its result.
- */
-router.delete('/', async (req: Request, res: Response) => {
-  try {
-    const session = await requireSession(req, res);
-    if (!session) return;
-
-    const db = getDatabase();
-    const pending = await db.listJobsForOwner(session.userId, Number.MAX_SAFE_INTEGER);
-    const removable = pending.filter((job) => !isBusy(job));
-
-    const storage = getStorage();
-    for (const job of removable) {
-      for (const { category, filename } of jobArtifacts(job)) {
-        await storage.deleteFile(category, filename);
-      }
-      await storage.cleanProcessingDir(job.id);
-      await db.deleteJob(job.id);
-    }
-
-    logger.info(`Cleared ${removable.length} job(s) from ${session.email}'s history`);
-    return res.json({ ok: true, deleted: removable.length, skipped: pending.length - removable.length });
-  } catch (err: any) {
-    logger.error('Failed to clear history:', err);
-    return res.status(500).json({ error: 'មិនអាចសម្អាតប្រវត្តិបានទេ។ សូមព្យាយាមម្តងទៀត។' });
   }
 });
 

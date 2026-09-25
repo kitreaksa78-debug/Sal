@@ -5,13 +5,8 @@ import {
   ArrowRight,
   CheckCircle2,
   Crown,
-  Download,
-  Languages,
-  Music4,
   RefreshCw,
-  ShieldCheck,
   Sparkles,
-  Upload,
   Zap,
 } from 'lucide-react';
 import { getUsageStats } from '../lib/usage';
@@ -41,25 +36,6 @@ interface WelcomePageProps {
 }
 
 type Status = { kind: 'saved' | 'error' | 'info'; text: string };
-
-/** What the pipeline actually does, so the promise on the hero is concrete. */
-const STEPS = [
-  {
-    icon: Upload,
-    title: 'បញ្ចូលវីដេអូ',
-    detail: 'MP4 · MOV · MKV រហូតដល់ 2 នាទី (Free)',
-  },
-  {
-    icon: Languages,
-    title: 'បកប្រែជាខ្មែរ',
-    detail: 'ស្តាប់ចាប់សំឡេង រួចបកប្រែដោយ AI',
-  },
-  {
-    icon: Download,
-    title: 'ទាញយកលទ្ធផល',
-    detail: 'MP4 ជាមួយសំឡេងខ្មែរ ភ្លេងដើម និងអក្សររត់',
-  },
-];
 
 export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSignedIn }) => {
   // Step 1: only "Get started". Step 2 (after the click): sign in with Google.
@@ -187,16 +163,6 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
             <Sparkles className="h-3.5 w-3.5 shrink-0" />
             <span>បកប្រែវីដេអូ និងបញ្ចូលសំឡេងខ្មែរ ដោយ AI</span>
           </div>
-
-          <h1 className="mt-6 text-3xl font-bold leading-snug tracking-tight text-white sm:text-4xl">
-            សូមស្វាគមន៍មកកាន់
-            <span className="mt-1 block text-emerald-400">បកប្រែវីដេអូដោយ AI</span>
-          </h1>
-
-          <p className="mx-auto mt-4 max-w-md text-sm leading-relaxed text-slate-300 sm:max-w-lg sm:text-base">
-            បម្លែងវីដេអូភាសាបរទេសទៅជាភាសាខ្មែរ
-            ដោយរក្សាភ្លេង និងសំឡេងបរិយាកាសដើម។
-          </p>
 
           {/* Step 1 — the only call to action on arrival */}
           {!showSignIn && (
@@ -367,43 +333,6 @@ export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSi
                 )}
               </div>
             </div>
-          )}
-
-          {/* What happens after the click — only worth reading on arrival. */}
-          {!showSignIn && (
-            <>
-              <div className="mt-10 grid gap-3 text-left sm:grid-cols-3">
-                {STEPS.map(({ icon: Icon, title, detail }) => (
-                  <div
-                    key={title}
-                    className="rounded-2xl border border-white/5 bg-white/[0.03] p-4 transition-colors hover:border-emerald-500/20 hover:bg-emerald-500/[0.04]"
-                  >
-                    <span className="flex h-9 w-9 items-center justify-center rounded-lg border border-emerald-500/20 bg-emerald-500/10 text-emerald-300">
-                      <Icon className="h-4 w-4" />
-                    </span>
-                    <p className="mt-3 text-sm font-semibold text-white">{title}</p>
-                    <p className="mt-1 text-[11px] leading-relaxed text-slate-400 sm:text-xs">
-                      {detail}
-                    </p>
-                  </div>
-                ))}
-              </div>
-
-              <div className="mt-6 flex flex-wrap items-center justify-center gap-x-5 gap-y-2 text-[11px] text-slate-400 sm:text-xs">
-                <span className="inline-flex items-center gap-1.5">
-                  <Music4 className="h-3.5 w-3.5 text-emerald-400" />
-                  រក្សាភ្លេងដើម
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <Languages className="h-3.5 w-3.5 text-emerald-400" />
-                  សំឡេងខ្មែរធម្មជាតិ
-                </span>
-                <span className="inline-flex items-center gap-1.5">
-                  <ShieldCheck className="h-3.5 w-3.5 text-emerald-400" />
-                  ទិន្នន័យដាច់ដោយឡែកតាមគណនី
-                </span>
-              </div>
-            </>
           )}
         </div>
       </section>
