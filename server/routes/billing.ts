@@ -1,5 +1,6 @@
 import express, { Request, Response } from 'express';
 import { getBilling, normalizeEmail } from '../services/billing.js';
+import { getProStatus } from '../services/proPayments.js';
 import { logger } from '../utils/logger.js';
 
 const router = express.Router();
@@ -21,18 +22,23 @@ router.get('/plans', async (req: Request, res: Response) => {
  * GET /api/billing/entitlement?email=
  * The client asks for the current plan of the email stored on this device.
  */
-router.get('/entitlement', (req: Request, res: Response) => {
+router.get('/entitlement', async (req: Request, res: Response) => {
   const email = typeof req.query.email === 'string' ? req.query.email : '';
   if (!email.includes('@')) {
     return res.status(400).json({ error: 'សូមផ្តល់ email ត្រឹមត្រូវ។ (A valid email is required)' });
   }
   const billing = getBilling();
   const record = billing.findByEmail(email);
+  // A Pro plan the owner granted after a bank transfer counts just as much as a
+  // subscription the payment provider knows about.
+  const manual = await getProStatus(email);
   res.json({
     email: normalizeEmail(email),
-    plan: billing.getPlan(email),
-    status: record?.status ?? 'none',
-    renewsAt: record?.renewsAt ?? null,
+    plan: manual.plan === 'pro' || billing.getPlan(email) === 'pro' ? 'pro' : 'free',
+    status: record?.status ?? (manual.plan === 'pro' ? 'manual' : 'none'),
+    renewsAt: record?.renewsAt ?? manual.proExpiresAt ?? null,
+    proExpiresAt: manual.proExpiresAt,
+    pendingRequest: manual.pendingRequest,
   });
 });
 
@@ -65,7 +71,9 @@ router.post('/activate', async (req: Request, res: Response) => {
     }
     res.json({
       email: record.email,
-      plan: billing.getPlan(record.email),
+      // Never downgrade a Pro the owner granted by hand while restoring a
+      // subscription that the payment provider has not caught up with yet.
+      plan: (await getProStatus(record.email)).plan === 'pro' ? 'pro' : billing.getPlan(record.email),
       status: record.status,
       renewsAt: record.renewsAt ?? null,
     });

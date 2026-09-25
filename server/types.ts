@@ -159,6 +159,39 @@ export interface UserRecord {
   /** First and latest sign-in, so the list can show new vs returning users. */
   createdAt: string;
   lastLoginAt: string;
+  /**
+   * The plan the owner granted after a manual (bank QR) payment. It sits next to
+   * the account rather than inside the billing provider, so an approved receipt
+   * keeps Pro even though no subscription service knows about it.
+   */
+  plan?: 'free' | 'pro';
+  proStartedAt?: string | null;
+  /** When the manual Pro runs out; absent or past means the free tier is back. */
+  proExpiresAt?: string | null;
+}
+
+/** A receipt a customer uploaded, waiting for the owner to check the payment. */
+export type ProRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ProPaymentRequest {
+  id: string;
+  userId: string;
+  email: string;
+  name?: string;
+  /** What the customer says they paid, in USD. */
+  amount: number;
+  /** Whatever reference the bank showed them — optional but very useful. */
+  transactionRef?: string;
+  note?: string;
+  /** The receipt image, kept in the private `receipts` storage category. */
+  receiptFile: string;
+  receiptMime: string;
+  status: ProRequestStatus;
+  submittedAt: string;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+  /** Set on approval: the moment the Pro window this payment bought ends. */
+  proExpiresAt?: string | null;
 }
 
 /** The verified Google profile the server received for a sign-in. */

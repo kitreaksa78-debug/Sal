@@ -10,6 +10,7 @@ import separatorRouter from './server/routes/separator.js';
 import authRouter from './server/routes/auth.js';
 import usageRouter from './server/routes/usage.js';
 import billingRouter, { handleLemonSqueezyWebhook } from './server/routes/billing.js';
+import proPaymentsRouter from './server/routes/proPayments.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
 import { getDatabase } from './server/services/db.js';
@@ -46,6 +47,9 @@ app.use('/api/config/separator', separatorRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/usage', usageRouter);
 app.use('/api/billing', billingRouter);
+// Pro by bank transfer: the customer uploads a receipt of the QR payment and
+// the owner turns it into a Pro plan from the studio.
+app.use('/api/pro', proPaymentsRouter);
 
 async function startServer() {
   // Recover job history from object storage: hosts like Render free wipe the local

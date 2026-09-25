@@ -13,15 +13,21 @@ export interface StorageInfo {
   message?: string;
 }
 
+/**
+ * Where a stored file lives. `receipts` is private: payment screenshots are
+ * never served by the generic file route, only to the owner reviewing them.
+ */
+export type StorageCategory = 'uploads' | 'processing' | 'outputs' | 'receipts';
+
 export interface StorageProvider {
   name: string;
   isConfigured(): boolean;
   getInfo(): StorageInfo;
-  saveFile(category: 'uploads' | 'processing' | 'outputs', filename: string, bufferOrPath: Buffer | string): Promise<string>;
-  getFilePath(category: 'uploads' | 'processing' | 'outputs', filename: string): string;
-  ensureFileAvailable(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<string | null>;
-  getFileStream(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<Readable>;
-  deleteFile(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<void>;
+  saveFile(category: StorageCategory, filename: string, bufferOrPath: Buffer | string): Promise<string>;
+  getFilePath(category: StorageCategory, filename: string): string;
+  ensureFileAvailable(category: StorageCategory, filename: string): Promise<string | null>;
+  getFileStream(category: StorageCategory, filename: string): Promise<Readable>;
+  deleteFile(category: StorageCategory, filename: string): Promise<void>;
   cleanProcessingDir(jobId: string): Promise<void>;
   /**
    * Small text state (e.g. the job database snapshot) kept next to the media so
@@ -103,7 +109,7 @@ export class LocalStorageProvider implements StorageProvider {
   }
 
   private ensureDirs() {
-    ['uploads', 'processing', 'outputs'].forEach((sub) => {
+    (['uploads', 'processing', 'outputs', 'receipts'] as StorageCategory[]).forEach((sub) => {
       const dir = path.join(this.baseDir, sub);
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
@@ -124,16 +130,16 @@ export class LocalStorageProvider implements StorageProvider {
     };
   }
 
-  getFilePath(category: 'uploads' | 'processing' | 'outputs', filename: string): string {
+  getFilePath(category: StorageCategory, filename: string): string {
     return path.join(this.baseDir, category, filename);
   }
 
-  async ensureFileAvailable(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<string | null> {
+  async ensureFileAvailable(category: StorageCategory, filename: string): Promise<string | null> {
     const target = this.getFilePath(category, filename);
     return fs.existsSync(target) ? target : null;
   }
 
-  async saveFile(category: 'uploads' | 'processing' | 'outputs', filename: string, bufferOrPath: Buffer | string): Promise<string> {
+  async saveFile(category: StorageCategory, filename: string, bufferOrPath: Buffer | string): Promise<string> {
     const target = this.getFilePath(category, filename);
     const parent = path.dirname(target);
     if (!fs.existsSync(parent)) {
@@ -150,7 +156,7 @@ export class LocalStorageProvider implements StorageProvider {
     return target;
   }
 
-  async getFileStream(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<Readable> {
+  async getFileStream(category: StorageCategory, filename: string): Promise<Readable> {
     const target = this.getFilePath(category, filename);
     if (!fs.existsSync(target)) {
       throw new Error(`File not found: ${target}`);
@@ -158,7 +164,7 @@ export class LocalStorageProvider implements StorageProvider {
     return fs.createReadStream(target);
   }
 
-  async deleteFile(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<void> {
+  async deleteFile(category: StorageCategory, filename: string): Promise<void> {
     const target = this.getFilePath(category, filename);
     if (fs.existsSync(target)) {
       try {
@@ -287,11 +293,11 @@ export class S3StorageProvider implements StorageProvider {
     };
   }
 
-  getFilePath(category: 'uploads' | 'processing' | 'outputs', filename: string): string {
+  getFilePath(category: StorageCategory, filename: string): string {
     return this.localFallback.getFilePath(category, filename);
   }
 
-  async ensureFileAvailable(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<string | null> {
+  async ensureFileAvailable(category: StorageCategory, filename: string): Promise<string | null> {
     const localTarget = this.localFallback.getFilePath(category, filename);
     if (fs.existsSync(localTarget)) {
       return localTarget;
@@ -330,7 +336,7 @@ export class S3StorageProvider implements StorageProvider {
     return null;
   }
 
-  async saveFile(category: 'uploads' | 'processing' | 'outputs', filename: string, bufferOrPath: Buffer | string): Promise<string> {
+  async saveFile(category: StorageCategory, filename: string, bufferOrPath: Buffer | string): Promise<string> {
     // Always persist to local high-speed cache first
     const localPath = await this.localFallback.saveFile(category, filename, bufferOrPath);
 
@@ -368,7 +374,7 @@ export class S3StorageProvider implements StorageProvider {
     return localPath;
   }
 
-  async getFileStream(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<Readable> {
+  async getFileStream(category: StorageCategory, filename: string): Promise<Readable> {
     const localTarget = this.localFallback.getFilePath(category, filename);
     if (fs.existsSync(localTarget)) {
       return fs.createReadStream(localTarget);
@@ -386,7 +392,7 @@ export class S3StorageProvider implements StorageProvider {
     throw new Error(`File not found: ${category}/${filename}`);
   }
 
-  async deleteFile(category: 'uploads' | 'processing' | 'outputs', filename: string): Promise<void> {
+  async deleteFile(category: StorageCategory, filename: string): Promise<void> {
     await this.localFallback.deleteFile(category, filename);
     if (this.s3 && this.config.bucket) {
       try {
@@ -463,7 +469,7 @@ let storageInstance: StorageProvider | null = null;
  */
 export async function resolveStoredArtifact(
   storedPath?: string,
-  category: 'uploads' | 'processing' | 'outputs' = 'outputs'
+  category: StorageCategory = 'outputs'
 ): Promise<string | null> {
   if (!storedPath) return null;
   if (fs.existsSync(storedPath)) return storedPath;

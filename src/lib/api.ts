@@ -321,6 +321,91 @@ export interface Entitlement {
   plan: Plan;
   status: string;
   renewsAt?: string | null;
+  /** Set when the Pro came from an approved bank transfer, not a subscription. */
+  proExpiresAt?: string | null;
+  pendingRequest?: ProPaymentRequest | null;
+}
+
+// ------------------------------------------------- Pro by bank transfer (QR)
+
+export type ProRequestStatus = 'pending' | 'approved' | 'rejected';
+
+export interface ProPaymentRequest {
+  id: string;
+  email: string;
+  name?: string;
+  amount: number;
+  transactionRef?: string;
+  note?: string;
+  status: ProRequestStatus;
+  submittedAt: string;
+  reviewedAt?: string | null;
+  reviewNote?: string | null;
+  proExpiresAt?: string | null;
+}
+
+export interface ProRequestsResponse {
+  requests: ProPaymentRequest[];
+  proDays: number;
+  priceUsd: number;
+}
+
+/** Send the screenshot of a QR payment for the owner to check. */
+export async function submitProPayment(input: {
+  amount: number;
+  transactionRef?: string;
+  note?: string;
+  receipt: File;
+}): Promise<ProPaymentRequest> {
+  const form = new FormData();
+  form.append('receipt', input.receipt);
+  form.append('amount', String(input.amount));
+  if (input.transactionRef) form.append('transactionRef', input.transactionRef);
+  if (input.note) form.append('note', input.note);
+
+  const res = await fetch(`${API_BASE}/pro/requests`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  });
+  if (!res.ok) throw await separatorError(res, 'មិនអាចផ្ញើវិក្កយបត្របានទេ។');
+  const data = (await res.json()) as { request: ProPaymentRequest };
+  return data.request;
+}
+
+/** This account's own payments. */
+export async function getMyProRequests(): Promise<ProRequestsResponse> {
+  const res = await fetch(`${API_BASE}/pro/requests/mine`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch payment history');
+  return (await res.json()) as ProRequestsResponse;
+}
+
+/** Every payment, for the owner. */
+export async function listProRequests(): Promise<ProRequestsResponse> {
+  const res = await fetch(`${API_BASE}/pro/requests`, { headers: authHeaders() });
+  if (!res.ok) throw new Error('Failed to fetch payment requests');
+  return (await res.json()) as ProRequestsResponse;
+}
+
+/** The owner accepts the payment (the account turns Pro) or turns it down. */
+export async function decideProRequest(
+  id: string,
+  decision: 'approve' | 'reject',
+  note?: string
+): Promise<ProPaymentRequest> {
+  const res = await fetch(`${API_BASE}/pro/requests/${id}/decision`, {
+    method: 'POST',
+    headers: { ...authHeaders(), 'Content-Type': 'application/json' },
+    body: JSON.stringify({ decision, note }),
+  });
+  if (!res.ok) throw new Error('Failed to save the decision');
+  const data = (await res.json()) as { request: ProPaymentRequest };
+  return data.request;
+}
+
+/** The receipt image — served only to the customer who sent it and the owner. */
+export function getProReceiptUrl(id: string): string {
+  return withToken(`${API_BASE}/pro/requests/${id}/receipt`);
 }
 
 /** Cached briefly: the checkout URL only changes when the product changes. */

@@ -7,6 +7,7 @@ import { ResultPanel } from './components/ResultPanel';
 import { JobHistory } from './components/JobHistory';
 import { PricingPage } from './components/PricingPage';
 import { DemucsPanel } from './components/DemucsPanel';
+import { ProRequestsPanel } from './components/ProRequestsPanel';
 import { WelcomePage } from './components/WelcomePage';
 import { JobRecord, JobSettings } from './types';
 import {
@@ -379,6 +380,9 @@ export function App() {
                 {/* Admin only: which Demucs/stem service does the separation. */}
                 <DemucsPanel visible={usageStats.admin} />
 
+                {/* Admin only: check the QR payment receipts and open Pro. */}
+                <ProRequestsPanel visible={usageStats.admin} />
+
                 {/* Upload Panel */}
                 <UploadPanel
                   onFileSelect={handleFileSelect}
@@ -436,8 +440,13 @@ export function App() {
           <div className="animate-in fade-in duration-300">
             <PricingPage
               onSelectPlan={(plan) => {
-                if (plan === 'free') setActiveTab('studio');
-                // The Pro button opens the LemonSqueezy checkout itself.
+                // Pro: re-read the plan (an approved receipt may have landed) and
+                // take the customer straight into the studio.
+                if (plan === 'pro') {
+                  void refreshPlan(false).then(() => setActiveTab('studio'));
+                  return;
+                }
+                setActiveTab('studio');
               }}
             />
           </div>

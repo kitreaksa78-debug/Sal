@@ -8,6 +8,7 @@ import {
   GoogleProfile,
   SessionRecord,
   UsageRecord,
+  ProPaymentRequest,
 } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { getStorage } from './storage.js';
@@ -28,7 +29,15 @@ export interface DatabaseProvider {
    */
   upsertUser(profile: GoogleProfile): Promise<UserRecord>;
   getUser(id: string): Promise<UserRecord | null>;
+  /** Change one account (used when the owner approves a payment receipt). */
+  updateUser(id: string, patch: Partial<UserRecord>): Promise<UserRecord | null>;
   listUsers(limit?: number): Promise<UserRecord[]>;
+  /** Manual bank-QR payments: a customer uploads a receipt, the owner decides. */
+  createProRequest(request: ProPaymentRequest): Promise<ProPaymentRequest>;
+  getProRequest(id: string): Promise<ProPaymentRequest | null>;
+  listProRequests(limit?: number): Promise<ProPaymentRequest[]>;
+  listProRequestsForUser(userId: string): Promise<ProPaymentRequest[]>;
+  updateProRequest(id: string, patch: Partial<ProPaymentRequest>): Promise<ProPaymentRequest | null>;
   /** Mint a session token for a signed-in account. */
   createSession(user: UserRecord): Promise<SessionRecord>;
   getSession(token: string): Promise<SessionRecord | null>;
@@ -51,6 +60,7 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
   private segments: Map<string, DialogueSegment[]> = new Map();
   private users: Map<string, UserRecord> = new Map();
   private sessions: Map<string, SessionRecord> = new Map();
+  private proRequests: Map<string, ProPaymentRequest> = new Map();
   /** Keyed by account id; the record itself carries the day it belongs to. */
   private usage: Map<string, UsageRecord> = new Map();
 
@@ -90,6 +100,9 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
         if (parsed.sessions && Array.isArray(parsed.sessions)) {
           parsed.sessions.forEach((s: SessionRecord) => this.sessions.set(s.token, s));
         }
+        if (parsed.proRequests && Array.isArray(parsed.proRequests)) {
+          parsed.proRequests.forEach((r: ProPaymentRequest) => this.proRequests.set(r.id, r));
+        }
         if (parsed.usage && typeof parsed.usage === 'object') {
           Object.entries(parsed.usage).forEach(([userId, record]) =>
             this.usage.set(userId, record as UsageRecord)
@@ -111,6 +124,7 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
         segments: Object.fromEntries(this.segments.entries()),
         users: Array.from(this.users.values()),
         sessions: Array.from(this.sessions.values()),
+        proRequests: Array.from(this.proRequests.values()),
         usage: Object.fromEntries(this.usage.entries()),
       },
       null,
@@ -196,6 +210,16 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
       for (const session of (parsed.sessions || []) as SessionRecord[]) {
         if (!this.sessions.has(session.token)) {
           this.sessions.set(session.token, session);
+          added++;
+        }
+      }
+      // A receipt the owner has not seen yet must survive a restart, or a paid
+      // customer would have to be asked for the screenshot again.
+      for (const request of (parsed.proRequests || []) as ProPaymentRequest[]) {
+        const local = this.proRequests.get(request.id);
+        // A decision the owner already made wins over an older "pending" copy.
+        if (!local || local.status === 'pending') {
+          this.proRequests.set(request.id, request);
           added++;
         }
       }
@@ -303,6 +327,52 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
 
   async getUser(id: string): Promise<UserRecord | null> {
     return this.users.get(id) || null;
+  }
+
+  async updateUser(id: string, patch: Partial<UserRecord>): Promise<UserRecord | null> {
+    const existing = this.users.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...patch };
+    this.users.set(id, updated);
+    this.persist();
+    return updated;
+  }
+
+  async createProRequest(request: ProPaymentRequest): Promise<ProPaymentRequest> {
+    this.proRequests.set(request.id, { ...request });
+    this.persist();
+    return request;
+  }
+
+  async getProRequest(id: string): Promise<ProPaymentRequest | null> {
+    return this.proRequests.get(id) || null;
+  }
+
+  async listProRequests(limit: number = 100): Promise<ProPaymentRequest[]> {
+    return Array.from(this.proRequests.values())
+      .sort(
+        (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+      )
+      .slice(0, limit);
+  }
+
+  async listProRequestsForUser(userId: string): Promise<ProPaymentRequest[]> {
+    const mine = Array.from(this.proRequests.values()).filter((r) => r.userId === userId);
+    return mine.sort(
+      (a, b) => new Date(b.submittedAt).getTime() - new Date(a.submittedAt).getTime()
+    );
+  }
+
+  async updateProRequest(
+    id: string,
+    patch: Partial<ProPaymentRequest>
+  ): Promise<ProPaymentRequest | null> {
+    const existing = this.proRequests.get(id);
+    if (!existing) return null;
+    const updated = { ...existing, ...patch };
+    this.proRequests.set(id, updated);
+    this.persist();
+    return updated;
   }
 
   async createSession(user: UserRecord): Promise<SessionRecord> {
