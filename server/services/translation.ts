@@ -1,9 +1,8 @@
-import { GoogleGenAI, Type } from '@google/genai';
+import { Type } from '@google/genai';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
-import { withRetry } from '../utils/retry.js';
-import { getGeminiApiKey } from '../utils/aiKeys.js';
 import { groqChatJson, isGroqConfigured, sleep } from '../utils/groq.js';
+import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
 
 export interface TranslationResult {
   segments: DialogueSegment[];
@@ -24,6 +23,35 @@ export type TranslationProgressCallback = (
 export type TranslationProviderName = 'groq' | 'gemini';
 
 const DEFAULT_CHUNK_SIZE = 20;
+
+/**
+ * The JSON shape every model answers with. Declared once so the schema a model
+ * is constrained by is exactly the one the caller parses.
+ */
+const TRANSLATION_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    segments: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          id: { type: Type.STRING },
+          khmer: {
+            type: Type.STRING,
+            description: 'Natural spoken Cambodian Khmer translation',
+          },
+          emotion: {
+            type: Type.STRING,
+            description: 'Detected emotion (e.g. neutral, energetic, calm, dramatic)',
+          },
+        },
+        required: ['id', 'khmer', 'emotion'],
+      },
+    },
+  },
+  required: ['segments'],
+};
 
 /** Groq's free tier allows 8k tokens/minute; stay just under it to avoid 429s. */
 const TOKEN_BUDGET_PER_MINUTE = Number(process.env.GROQ_TOKENS_PER_MINUTE || '7800');
@@ -162,30 +190,17 @@ const SOURCE_LANGUAGE_NAMES: Record<string, string> = {
 };
 
 export class KhmerDubTranslationService {
-  private client: GoogleGenAI | null = null;
   private modelName: string;
   private provider: TranslationProviderName;
 
   constructor() {
     this.provider = resolveTranslationProvider();
+    // Gemini's clients are created per request inside the rotation, because a
+    // block may end up on any model and any key.
     this.modelName =
       this.provider === 'groq'
         ? process.env.GROQ_TRANSLATION_MODEL || 'openai/gpt-oss-120b'
-        : process.env.GEMINI_MODEL || 'gemini-3.8-flash';
-
-    if (this.provider === 'gemini') {
-      const apiKey = getGeminiApiKey();
-      if (apiKey) {
-        this.client = new GoogleGenAI({
-          apiKey,
-          httpOptions: {
-            headers: {
-              'User-Agent': 'aistudio-build',
-            },
-          },
-        });
-      }
-    }
+        : getGeminiModels()[0];
   }
 
   public getProviderName(): TranslationProviderName {
@@ -197,7 +212,12 @@ export class KhmerDubTranslationService {
   }
 
   public isConfigured(): boolean {
-    return this.provider === 'groq' ? isGroqConfigured() : Boolean(getGeminiApiKey());
+    return this.provider === 'groq' ? isGroqConfigured() : isGeminiConfigured();
+  }
+
+  /** Every model the Gemini rotation may use, best first. */
+  public getFallbackModelNames(): string[] {
+    return this.provider === 'gemini' ? getGeminiModels() : [];
   }
 
   /** How many dialogue lines go into a single model request. */
@@ -454,50 +474,23 @@ Return JSON containing exactly ${
       });
     }
 
-    const content = await withRetry(
-      async () => {
-        const response = await this.client!.models.generateContent({
-          model: this.modelName,
-          contents: userPrompt,
-          config: {
-            systemInstruction,
-            temperature: 0.3,
-            responseMimeType: 'application/json',
-            responseSchema: {
-              type: Type.OBJECT,
-              properties: {
-                segments: {
-                  type: Type.ARRAY,
-                  items: {
-                    type: Type.OBJECT,
-                    properties: {
-                      id: { type: Type.STRING },
-                      khmer: {
-                        type: Type.STRING,
-                        description: 'Natural spoken Cambodian Khmer translation',
-                      },
-                      emotion: {
-                        type: Type.STRING,
-                        description: 'Detected emotion (e.g. neutral, energetic, calm, dramatic)',
-                      },
-                    },
-                    required: ['id', 'khmer', 'emotion'],
-                  },
-                },
-              },
-              required: ['segments'],
-            },
-          },
-        });
-
-        return response.text?.trim() || '';
-      },
-      { operationName: 'Gemini Khmer dubbing translation', maxAttempts: 2 }
-    );
+    // The rotation lives in `utils/gemini.ts`: it walks the free-tier models and
+    // then the configured keys, so one model whose quota is spent (or one key
+    // that is rejected) cannot stop a job — the next block simply asks the next
+    // model for the same JSON.
+    const answer = await geminiGenerateJson({
+      systemInstruction,
+      userPrompt,
+      temperature: 0.3,
+      operationName: 'Khmer dubbing translation',
+      responseSchema: TRANSLATION_SCHEMA as unknown as Record<string, unknown>,
+    });
 
     return {
-      content,
-      totalTokens: estimateTokens(systemInstruction + userPrompt) + 400,
+      content: answer.content,
+      // Gemini reports real usage; the estimate is only a fallback for the rare
+      // answer that comes back without it (the caller uses this to pace blocks).
+      totalTokens: answer.totalTokens || estimateTokens(systemInstruction + userPrompt) + 400,
     };
   }
 

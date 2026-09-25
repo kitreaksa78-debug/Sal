@@ -167,7 +167,8 @@ export interface GoogleProfile {
 }
 
 export interface SystemConfigStatus {
-  gemini: { configured: boolean; model: string };
+  /** `keys`/`models` describe the free-tier rotation the translator walks. */
+  gemini: { configured: boolean; model: string; keys?: number; models?: string[] };
   translation: { configured: boolean; provider: string; model: string; fallbackModels?: string[] };
   stt: { configured: boolean; provider: string; model: string };
   tts: { configured: boolean; provider: string; model: string };

@@ -7,7 +7,8 @@ import { getTTSProvider } from '../services/tts.js';
 import { getAudioSeparationProvider } from '../services/audioSeparation.js';
 import { getSeparatorConnection } from '../services/separatorSettings.js';
 import { SystemConfigStatus } from '../types.js';
-import { getGeminiApiKey } from '../utils/aiKeys.js';
+import { getGeminiApiKeys } from '../utils/aiKeys.js';
+import { getGeminiModels } from '../utils/gemini.js';
 
 const router = express.Router();
 
@@ -16,8 +17,12 @@ router.get('/status', async (req: Request, res: Response) => {
   const storage = getStorage();
   const storageInfo = storage.getInfo();
 
-  const geminiConfigured = Boolean(getGeminiApiKey());
-  const geminiModel = process.env.GEMINI_MODEL || 'gemini-3.8-flash';
+  // Translation survives the free tier by rotating models and then keys, so both
+  // counts are reported: "why is it slower today" has an answer on this screen.
+  const geminiKeys = getGeminiApiKeys();
+  const geminiModels = getGeminiModels();
+  const geminiConfigured = geminiKeys.length > 0;
+  const geminiModel = geminiModels[0];
 
   const sttInstance = getTranscriptionProvider();
   const sttConfigured = sttInstance.isConfigured();
@@ -30,10 +35,13 @@ router.get('/status', async (req: Request, res: Response) => {
       : process.env.STT_MODEL || 'gemini-3.5-transcribe';
 
   const translationService = getTranslationService();
-  const translationFallbackModels = (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || 'openai/gpt-oss-20b,qwen/qwen3.8-27b')
-    .split(',')
-    .map(m => m.trim())
-    .filter(m => m && m !== translationService.getModelName());
+  const translationFallbackModels =
+    translationService.getProviderName() === 'gemini'
+      ? translationService.getFallbackModelNames().slice(1)
+      : (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || 'openai/gpt-oss-20b,qwen/qwen3.8-27b')
+          .split(',')
+          .map((m) => m.trim())
+          .filter((m) => m && m !== translationService.getModelName());
 
   const ttsInstance = getTTSProvider();
   const ttsConfigured = ttsInstance.isConfigured();
@@ -55,6 +63,8 @@ router.get('/status', async (req: Request, res: Response) => {
     gemini: {
       configured: geminiConfigured,
       model: geminiModel,
+      keys: geminiKeys.length,
+      models: geminiModels,
     },
     translation: {
       configured: translationService.isConfigured(),
