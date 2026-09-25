@@ -6,10 +6,13 @@
 #   curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux/phone-start.sh | sh
 #
 # វាធ្វើឲ្យអ្នកទាំងអស់៖
-#   ១. ពិនិត្យថា API រត់រួចហើយឬអត់
-#   ២. បើអត់ — ទាញឯកសារ API, ដំឡើង Demucs បើខ្វះ (តាម install-demucs.sh), រួចបើកវា
+#   ១. ពិនិត្យថា API រត់រួចហើយឬអត់ — បើរត់តែជាជំនាន់ចាស់ វាបិទរួចបើកជំនាន់ថ្មី
+#   ២. បើអត់រត់ — ទាញឯកសារ API, ដំឡើង Demucs បើខ្វះ (តាម install-demucs.sh), រួចបើកវា
 #   ៣. ដំឡើង cloudflared បើខ្វះ
 #   ៤. បើក tunnel, រង់ចាំ URL, រួច **ពិនិត្យដោយខ្លួនឯង** ថា URL នោះដើរឬអត់
+#
+# ប្រើ **cloudflared តែមួយប៉ុណ្ណោះ** — គ្មានវិធីបម្រុងផ្សេងទេ ដូច្នេះអ្វីដែលអ្នកឃើញនៅ
+# ចុងក្រោយគឺ URL របស់ cloudflared ១០០%។
 #
 # ចំណាំ៖ API និង tunnel រត់នៅ background ដូច្នេះអ្នកអាចបិទអេក្រង់បាន។
 # បិទទាំងពីរ៖ pkill -f demucs_api.py ; pkill -f 'cloudflared tunnel'
@@ -26,6 +29,9 @@ TERMUX_URL_FILE="${TERMUX_URL_FILE:-/data/data/com.termux/files/home/demucs-tunn
 
 say() { printf '\n===== %s =====\n' "$1"; }
 api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; }
+# ជំនាន់ថ្មីបន្ថែម `version`/`model`/`busy` ក្នុងចម្លើយ `/` ហើយ `/separate` ត្រឡប់ path របស់
+# vocals/instrumental ដែលគេហទំព័រត្រូវការ។ ជំនាន់ចាស់គ្មានទាំងនេះ ដូច្នេះយើងស្គាល់វាបាន។
+api_current() { curl -s --max-time 5 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"version"'; }
 
 # ---- បើអ្នកវាយបញ្ជានេះក្នុង Termux ដើម ស្គ្រីបនឹងចូល Ubuntu (proot) ជំនួស ----
 # មូលហេតុ៖ Termux ដើមដំឡើង Demucs មិនបានទេ — pip ត្រូវសង់ `pydantic-core` (ត្រូវការ
@@ -83,17 +89,34 @@ mkdir -p "$DIR" 2>/dev/null || true
 cd "$DIR" || { echo "មិនអាចចូលថត $DIR បានទេ"; exit 1; }
 
 say "១/៤  ពិនិត្យ API"
+NEED_START=no
 if api_up; then
-  echo "API កំពុងរត់រួចហើយ ✅"
-  curl -s "http://127.0.0.1:$PORT/"; echo
+  if api_current; then
+    echo "API កំពុងរត់រួចហើយ ✅"
+    curl -s "http://127.0.0.1:$PORT/"; echo
+  else
+    # API ជំនាន់ចាស់ (គ្មាន version/model ក្នុងចម្លើយ `/`) នឹងធ្វើឲ្យគេហទំព័របរាជ័យ ព្រោះវា
+    # មិនត្រឡប់ path របស់ vocals/instrumental។ ដូច្នេះយើងបិទវា រួចបើកជំនាន់ថ្មីជំនួស។
+    # (tunnel មិនប៉ះពាល់ទេ ដូច្នេះ URL ដដែលនៅបន្តប្រើបាន។)
+    echo "API កំពុងរត់ តែជាជំនាន់ចាស់ — កំពុងធ្វើបច្ចុប្បន្នភាព..."
+    pkill -f demucs_api.py 2>/dev/null || true
+    sleep 2
+    NEED_START=yes
+  fi
 else
   echo "API មិនរត់ — កំពុងបើកវា..."
+  NEED_START=yes
+fi
+
+if [ "$NEED_START" = yes ]; then
 
   say "២/៤  ទាញឯកសារ API"
-  if ! curl -fsSL -o demucs_api.py "$RAW/demucs_api.py"; then
+  # ទាញទៅឯកសារបណ្ដោះអាសន្នមុន ដើម្បីកុំឲ្យការទាញដែលបរាជ័យបំផ្លាញឯកសារដែលកំពុងប្រើ។
+  if ! curl -fsSL -o demucs_api.py.new "$RAW/demucs_api.py"; then
     echo "❌ ទាញឯកសារមិនបាន — ពិនិត្យ internet រួចសាកម្តងទៀត"
     exit 1
   fi
+  mv demucs_api.py.new demucs_api.py
   ls -l demucs_api.py
   # ជំនួយតូច៖ បង្ហាញ និងផ្ទៀងផ្ទាត់ URL របស់ tunnel ដែលកំពុងរស់ (មិនចាំបាច់ទេ បើ​ទាញមិនបាន)
   curl -fsSL -o tunnel-url.sh "$RAW/tunnel-url.sh" 2>/dev/null || true
@@ -153,32 +176,51 @@ else
   fi
 fi
 
-say "៤/៤  បើក tunnel (ទ្វារចេញអ៊ីនធឺណិត)"
-if ! command -v cloudflared >/dev/null 2>&1; then
-  case "$(uname -m)" in
-    aarch64|arm64) A=arm64 ;;
-    armv7l|armv8l) A=arm ;;
-    x86_64|amd64) A=amd64 ;;
-    *) A=arm64 ;;
-  esac
-  echo "ដំឡើង cloudflared ($A)..."
-  curl -fsSL -o /usr/local/bin/cloudflared \
-    "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$A" \
-    || { echo "❌ ដំឡើង cloudflared មិនបាន"; exit 1; }
-  chmod +x /usr/local/bin/cloudflared
-fi
+say "៤/៤  បើក tunnel (Cloudflare) តែមួយប៉ុណ្ណោះ"
 
 LOG="$DIR/cloudflared.log"
-SSHLOG="$DIR/ssh-tunnel.log"
-: > "$LOG"
-pkill -f "cloudflared tunnel" 2>/dev/null || true
-sleep 1
 
-CF="cloudflared tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate --url http://localhost:$PORT"
-if command -v setsid >/dev/null 2>&1; then
-  setsid $CF > "$LOG" 2>&1 < /dev/null &
+# ---- បើ tunnel ចាស់នៅដើរ និង URL របស់វានៅឆ្លើយតប — ប្រើវាបន្ត ----
+# Quick tunnel ទទួលបាន URL ថ្មី **រាល់ពេលបើកឡើងវិញ** ហើយ URL ចាស់ស្លាប់ភ្លាម។ ការរក្សា URL
+# ដដែលមានន័យថាគេហទំព័រមិនត្រូវកែអ្វីទេ — ដូច្នេះយើងសាកប្រើវាមុន។
+REUSE=""
+if [ -f "$DIR/tunnel-url.txt" ]; then
+  PREV=$(head -n 1 "$DIR/tunnel-url.txt" 2>/dev/null | tr -d ' \r\n')
+  if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -q '"status"'; then
+    REUSE="$PREV"
+  fi
+fi
+
+if [ -z "$REUSE" ]; then
+  # ដំឡើង cloudflared តែពេលត្រូវបើក tunnel ថ្មីប៉ុណ្ណោះ (បើចាស់នៅដើរ វាមានរួចហើយ)។
+  if ! command -v cloudflared >/dev/null 2>&1; then
+    case "$(uname -m)" in
+      aarch64|arm64) A=arm64 ;;
+      armv7l|armv8l) A=arm ;;
+      x86_64|amd64) A=amd64 ;;
+      *) A=arm64 ;;
+    esac
+    echo "ដំឡើង cloudflared ($A)..."
+    curl -fsSL -o /usr/local/bin/cloudflared \
+      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$A" \
+      || { echo "❌ ទាញ cloudflared មិនបាន"; exit 1; }
+    chmod +x /usr/local/bin/cloudflared 2>/dev/null || true
+    command -v cloudflared >/dev/null 2>&1 || { echo "❌ cloudflared មិនដំឡើងទេ"; exit 1; }
+  fi
+
+  : > "$LOG"
+  pkill -f "cloudflared tunnel" 2>/dev/null || true
+  sleep 1
+
+  CF="cloudflared tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate --url http://localhost:$PORT"
+  if command -v setsid >/dev/null 2>&1; then
+    setsid $CF > "$LOG" 2>&1 < /dev/null &
+  else
+    nohup $CF > "$LOG" 2>&1 < /dev/null &
+  fi
 else
-  nohup $CF > "$LOG" 2>&1 < /dev/null &
+  echo "Tunnel ចាស់នៅដើរទេ — ប្រើ URL ដដែល ដើម្បីកុំប្តូរវា ✅"
+  echo "$REUSE"
 fi
 
 # ចំណុចខាងក្រោមមានន័យថា «កំពុងរង់ចាំពិតៗ» — មិនមែនគាំងទេ។ Cloudflare
@@ -215,62 +257,21 @@ check_url() { # $1=URL — ពិនិត្យថាហៅពីខាងក�
   return 1
 }
 
-# បើ cloudflared បរាជ័យ (ញឹកញាប់លើបណ្តាញទូរស័ព្ទ) យើងទាញ tunnel តាម SSH ជំនួស។
-start_ssh_tunnel() { # $1 = port របស់ SSH (22 ឬ 443)
-  if ! command -v ssh >/dev/null 2>&1; then
-    echo "ដំឡើង openssh-client (ចាំបាច់សម្រាប់វិធី SSH)..."
-    (apt-get update -qq && apt-get install -y -qq openssh-client) >/dev/null 2>&1 || true
-  fi
-  command -v ssh >/dev/null 2>&1 || return 1
-  : > "$SSHLOG"
-  pkill -f 'nokey@localhost.run' 2>/dev/null || true
-  sleep 1
-  SSHCMD="ssh -p ${1:-22} -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ServerAliveInterval=30 -R 80:localhost:$PORT nokey@localhost.run"
-  if command -v setsid >/dev/null 2>&1; then
-    setsid $SSHCMD > "$SSHLOG" 2>&1 < /dev/null &
-  else
-    nohup $SSHCMD > "$SSHLOG" 2>&1 < /dev/null &
-  fi
-  return 0
-}
-
-# សាក port 22 មុន រួច port 443 — បណ្តាញទូរស័ព្ទជាច្រើនទប់ port 22 ប៉ុន្តែ 443 ត្រូវអនុញ្ញាត។
-try_ssh_tunnel() {
-  for p in 22 443; do
-    printf '  SSH តាម port %s... ' "$p" >&2
-    if ! start_ssh_tunnel "$p" >&2; then
-      printf 'គ្មាន ssh ទេ\n' >&2
-      return 1
-    fi
-    u=$(wait_url "$SSHLOG" 'https://[a-zA-Z0-9.-]*\.\(lhr\.life\|localhost\.run\)' 30 || true)
-    printf '\n' >&2
-    if [ -n "$u" ]; then
-      printf '%s' "$u"
-      return 0
-    fi
-    printf '  port %s មិនចេញ — សាក port បន្ទាប់\n' "$p" >&2
-  done
-  return 1
-}
-
-echo "រង់ចាំ URL ពី Cloudflare (រហូត ៦០ វិនាទី, ចំណុច = កំពុងដំណើរការ)"
-printf '  '
-URL=$(wait_url "$LOG" 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' 60 || true)
-printf '\n'
+if [ -n "$REUSE" ]; then
+  URL="$REUSE"
+else
+  echo "រង់ចាំ URL ពី Cloudflare (រហូត ៦០ វិនាទី, ចំណុច = កំពុងដំណើរការ)"
+  printf '  '
+  URL=$(wait_url "$LOG" 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' 60 || true)
+  printf '\n'
+fi
 
 if [ -z "$URL" ]; then
-  echo "❌ Cloudflare មិនចេញ URL ក្នុង ៦០ វិនាទី។ log ចុងក្រោយ៖"
+  echo "❌ Cloudflare មិនចេញ URL ក្នុង ៦០ វិនាទីទេ។ log ចុងក្រោយ៖"
   tail -8 "$LOG"
   echo
-  echo "→ សាកបើក tunnel វិធី SSH (localhost.run) ជំនួសវិញ..."
-  pkill -f "cloudflared tunnel" 2>/dev/null || true
-  URL=$(try_ssh_tunnel || true)
-  if [ -z "$URL" ]; then
-    echo "❌ ទាំងពីរវិធីមិនចេញ URL ទេ។ log ចុងក្រោយ (SSH)៖"
-    tail -8 "$SSHLOG" 2>/dev/null || true
-    echo "សាក៖ ប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data រួចបើកស្គ្រីបនេះម្តងទៀត"
-    exit 1
-  fi
+  echo "សាក៖ ប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data រួចបើកស្គ្រីបនេះម្តងទៀត"
+  exit 1
 fi
 
 # ទុក URL ទៅឯកសារមួយ ដើម្បីឲ្យរកមើលវាបានយូរក្រោយមក ដោយមិនចាំបាច់ប្រើស្គ្រីប៖
@@ -287,27 +288,6 @@ echo "កំពុងពិនិត្យថា URL នោះដើរពិត
 ok=0
 check_url "$URL" && ok=1
 
-# URL ចេញ តែមិនឆ្លើយតបពីខាងក្រៅ? សាកវិធី SSH ផង។
-if [ "$ok" != "1" ]; then
-  echo
-  echo "→ URL នោះមិនឆ្លើយតប — សាកបើក tunnel វិធី SSH (localhost.run)..."
-  pkill -f "cloudflared tunnel" 2>/dev/null || true
-  URL_SSH=$(try_ssh_tunnel || true)
-  if [ -n "$URL_SSH" ]; then
-    URL="$URL_SSH"
-    echo "URL (SSH): $URL"
-    check_url "$URL" && ok=1
-  fi
-fi
-
-# ទុក URL ចុងក្រោយទៅឯកសារ (សរសេរម្តងទៀត បើប្តូរទៅវិធី SSH)
-if [ "$ok" = "1" ]; then
-  printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
-  if [ -d "$(dirname "$TERMUX_URL_FILE")" ]; then
-    printf '%s\n' "$URL" > "$TERMUX_URL_FILE" 2>/dev/null || true
-  fi
-fi
-
 echo
 if [ "$ok" = "1" ]; then
   printf '✅ ✅ ✅  TUNNEL ដំណើរការហើយ!  ចម្លង URL នេះទៅដាក់ក្នុងកាត «ញែកភ្លេង · Demucs API» លើគេហទំព័រ៖\n\n    %s\n\n' "$URL"
@@ -315,7 +295,7 @@ if [ "$ok" = "1" ]; then
 else
   echo "❌ TUNNEL នៅមិនដើរទេ (URL នោះទទេពីខាងក្រៅ)។"
   echo "មូលហេតុញឹកញាប់៖ ថ្មជិតអស់ (Android កាត់ process) ឬបណ្តាញដាច់ម្តងម្កាល។"
-  echo "សាកម្តងទៀត៖ pkill -f 'cloudflared tunnel' រួចបើកស្គ្រីបនេះម្តងទៀត (ឬសាកវិធី SSH ក្នុង README)។"
+  echo "សាកម្តងទៀត៖ pkill -f 'cloudflared tunnel' រួចបើកស្គ្រីបនេះម្តងទៀត។"
   echo
   echo "log ចុងក្រោយរបស់ cloudflared៖"
   tail -12 "$LOG"
@@ -328,6 +308,6 @@ if [ -f "$TERMUX_URL_FILE" ]; then
   echo "URL ដដែល មើលពី Termux បានផង៖  cat ~/demucs-tunnel-url.txt"
 fi
 echo "មើល URL និងផ្ទៀងផ្ទាត់៖  sh tunnel-url.sh"
-echo "មើល log ផ្ទាល់៖   tail -f $LOG   (បើប្រើវិធី SSH៖ tail -f $SSHLOG)"
-echo "បិទ tunnel៖        pkill -f 'cloudflared tunnel' ; pkill -f 'nokey@localhost.run'"
+echo "មើល log ផ្ទាល់៖   tail -f $LOG"
+echo "បិទ tunnel៖        pkill -f 'cloudflared tunnel'"
 echo "បិទ API៖           pkill -f demucs_api.py"

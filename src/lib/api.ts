@@ -198,8 +198,11 @@ export interface SeparatorConnectionView {
   model: string;
   path: string;
   hasApiKey: boolean;
-  /** `app` = saved from this panel, `env` = the deployment's variables. */
-  source: 'app' | 'env' | 'none';
+  /**
+   * `pinned` = baked into the app code (it cannot be changed from here),
+   * `app` = saved from this panel, `env` = the deployment's variables.
+   */
+  source: 'pinned' | 'app' | 'env' | 'none';
   updatedAt: string | null;
   provider: string;
   configured: boolean;

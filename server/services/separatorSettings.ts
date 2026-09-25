@@ -10,16 +10,20 @@ import { getStorage } from './storage.js';
  * `audio-separator` sidecar all speak the same HTTP contract, so the app only
  * needs the base URL, an optional key, and which model to ask for.
  *
- * The connection can come from two places, in this order:
+ * The connection can come from three places. The first one that is set wins:
  *
- *  1. what the app owner typed into the website (`/api/config/separator`) —
+ *  1. `PINNED_SEPARATOR_URL` — a single service baked into the code, which is
+ *     what this deployment normally uses so the pipeline can never drift back
+ *     to an old, dead tunnel URL;
+ *  2. what the app owner typed into the website (`/api/config/separator`) —
  *     saved here and mirrored to object storage, so it survives a restart;
- *  2. the deployment's own environment (`AUDIO_SEPARATOR_URL` and friends),
+ *  3. the deployment's own environment (`AUDIO_SEPARATOR_URL` and friends),
  *     which is what `render.yaml` / Render env vars use.
  *
- * The stored value wins: a phone tunnel URL changes every time the tunnel is
- * reopened, and the owner should be able to paste the new one without a
- * redeploy.
+ * The website value wins over the environment: a phone tunnel URL changes every
+ * time the tunnel is reopened, and the owner should be able to paste the new one
+ * without a redeploy. Clearing `PINNED_SEPARATOR_URL` hands the choice back to
+ * the website panel.
  */
 export interface SeparatorConnection {
   /** Base URL of the service, e.g. `https://xxxx.trycloudflare.com`. */
@@ -38,10 +42,24 @@ export interface ResolvedSeparatorConnection {
   apiKey: string;
   model: string;
   path: string;
-  /** Where the resolved values came from — the website, the env, or nowhere. */
-  source: 'app' | 'env' | 'none';
+  /** Where the resolved values came from: the pinned code value, the website,
+   * the env, or nowhere. */
+  source: 'pinned' | 'app' | 'env' | 'none';
   updatedAt?: string;
 }
+
+/**
+ * The Demucs service this deployment talks to, pinned in code.
+ *
+ * The phone's Cloudflare quick tunnel is the only thing that can separate
+ * stems, so the whole pipeline points at it. Baking the address in means a job
+ * can never be sent to a stale tunnel URL that some earlier session left behind
+ * in the saved settings or in the deployment's env vars.
+ *
+ * To hand the choice back to the website's stem panel, set this to an empty
+ * string.
+ */
+export const PINNED_SEPARATOR_URL = 'https://audio-backed-protecting-like.trycloudflare.com';
 
 const SETTINGS_FILE = path.join(process.cwd(), 'data', 'separator.json');
 const STATE_KEY = 'separator.json';
@@ -51,6 +69,11 @@ let loaded = false;
 
 function emptyConnection(): SeparatorConnection {
   return { url: '', apiKey: '', model: '', path: '' };
+}
+
+/** Trim a URL and drop any trailing slashes, so two spellings compare equal. */
+function normaliseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
 }
 
 function normalise(input: Partial<SeparatorConnection>): SeparatorConnection {
@@ -92,6 +115,22 @@ export function getStoredSeparatorConnection(): SeparatorConnection | null {
  */
 export function getSeparatorConnection(): ResolvedSeparatorConnection {
   const saved = getStoredSeparatorConnection();
+  const env = (name: string) => (process.env[name] || '').trim();
+
+  const pinned = normaliseUrl(PINNED_SEPARATOR_URL);
+  if (pinned) {
+    return {
+      url: pinned,
+      // The key and the model belong to the service, not to the address, so a
+      // pinned URL keeps whatever was saved for it.
+      apiKey: saved?.apiKey || env('AUDIO_SEPARATOR_API_KEY'),
+      model: saved?.model || env('AUDIO_SEPARATOR_MODEL'),
+      path: saved?.path || env('AUDIO_SEPARATOR_PATH'),
+      source: 'pinned',
+      updatedAt: saved?.updatedAt,
+    };
+  }
+
   if (saved?.url) {
     return {
       url: saved.url,
@@ -105,13 +144,13 @@ export function getSeparatorConnection(): ResolvedSeparatorConnection {
     };
   }
 
-  const envUrl = (process.env.AUDIO_SEPARATOR_URL || '').trim().replace(/\/+$/, '');
+  const envUrl = normaliseUrl(env('AUDIO_SEPARATOR_URL'));
   if (envUrl) {
     return {
       url: envUrl,
-      apiKey: (process.env.AUDIO_SEPARATOR_API_KEY || '').trim(),
-      model: (process.env.AUDIO_SEPARATOR_MODEL || '').trim(),
-      path: (process.env.AUDIO_SEPARATOR_PATH || '').trim(),
+      apiKey: env('AUDIO_SEPARATOR_API_KEY'),
+      model: env('AUDIO_SEPARATOR_MODEL'),
+      path: env('AUDIO_SEPARATOR_PATH'),
       source: 'env',
     };
   }

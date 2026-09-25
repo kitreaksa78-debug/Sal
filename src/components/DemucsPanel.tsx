@@ -280,7 +280,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
             <button
               type="button"
               onClick={handleSave}
-              disabled={busy !== null || !url}
+              disabled={busy !== null || !url || connection?.source === 'pinned'}
               className="flex-1 min-w-[130px] min-h-[44px] px-4 rounded-xl text-xs font-semibold bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 hover:bg-cyan-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
               {busy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
@@ -335,6 +335,13 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
             <p className="text-[10px] text-slate-500 leading-relaxed">
               បច្ចុប្បន្នកំពុងប្រើ <code className="text-slate-400">AUDIO_SEPARATOR_URL</code> ពី environment។
               ការរក្សាទុកខាងលើនឹងជំនួសវា។
+            </p>
+          )}
+
+          {connection?.source === 'pinned' && (
+            <p className="text-[10px] text-cyan-200/80 leading-relaxed">
+              URL នេះកំណត់ជាប់ក្នុងកូដកម្មវិធី (pinned) ដូច្នេះប្រព័ន្ធប្រើវាជាដាច់ខាត —  
+              ការរក្សាទុកក្នុងផ្ទាំងនេះមិនជំនួសវាទេ។ បើត្រូវការប្តូរ URL សូមប្រាប់អ្នកអភិវឌ្ឍ។
             </p>
           )}
         </div>

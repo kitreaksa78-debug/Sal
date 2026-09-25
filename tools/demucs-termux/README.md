@@ -110,28 +110,16 @@ sh test-demucs.sh "$(cat ~/demucs-api/tunnel-url.txt)"
 
 ## ជំហាន ២ — បើក tunnel (URL សាធារណៈ)
 
-**ជម្រើសស្វ័យប្រវត្តិ (ណែនាំ)៖** `phone-start.sh` ធ្វើវាទាំងពីរជំនួសអ្នក — វាសាក
-**Cloudflare** មុន ហើយបើគ្មាន URL ចេញ ឬ URL នោះមិនឆ្លើយតបក្នុង ~១ នាទី
-វាប្តូរទៅ **SSH (localhost.run)** ដោយស្វ័យប្រវត្តិ។ ដូច្នេះជាធម្មតាអ្នកមិនត្រូវធ្វើ
-អ្វីខាងក្រោមនេះដោយដៃទេ — ចាំឲ្យវាបញ្ចប់ រួចយក URL តាមជំហាន ៣។
+**វិធីតែមួយគត់ — Cloudflare (`cloudflared`)**។ `phone-start.sh` ដំឡើង cloudflared បើខ្វះ
+រួចបើក tunnel ដោយ `--protocol http2 --edge-ip-version 4` (ជៀសវាង QUIC ដាច់ញាត់លើ
+បណ្តាញទូរស័ព្ទ)។ គ្មានវិធីបម្រុងផ្សេងទេ — អ្វីដែលអ្នកឃើញនៅចុងក្រោយគឺ URL របស់
+cloudflared ១០០%។
+
+> **បើ tunnel ចាស់នៅដើរ** (URL ក្នុង `tunnel-url.txt` នៅឆ្លើយតប) `phone-start.sh`
+> **រក្សា URL ដដែល** ហើយមិនបង្កើតថ្មីទេ — ដូច្នេះគេហទំព័រមិនត្រូវកែអ្វី។ វាបើក
+> tunnel ថ្មីតែពេលចាស់ស្លាប់ប៉ុណ្ណោះ។
+
 វិធីដោយដៃ (ក្នុង Ubuntu នៃ proot)៖
-
-**ជម្រើស A — SSH (មិនត្រូវដំឡើងអ្វីបន្ថែម)។** Termux គ្មាន `cloudflared` ដូច្នេះប្រើ `openssh`៖
-
-```bash
-ssh -R 80:localhost:8000 nokey@localhost.run
-```
-
-វានឹងបោះពុម្ព URL ដូច `https://xxxxxxxx.lhr.life`។ **ចម្លង URL នោះ។**
-
-> បើបណ្តាញទូរស័ព្ទទប់ **port 22** (ញឹកញាប់លើ 4G) សូមប្រើ port 443៖
-> `ssh -p 443 -R 80:localhost:8000 nokey@localhost.run` —
-> `phone-start.sh` សាកទាំង port 22 និង 443 ដោយស្វ័យប្រវត្តិ។
-(ជម្រើសផ្សេងទៀត៖ `ssh -R 80:localhost:8000 serveo.net` ឬ
-`ssh -p 443 -R0:localhost:8000 a.pinggy.io`។)
-
-**ជម្រើស B — cloudflared (ស្ថិតស្ថេរជាងលើ 4G)។** ដំឡើង binary ក្នុង `proot-distro ubuntu`
-រួចឲ្យស្គ្រីបរក URL ឲ្យ៖
 
 ```bash
 sh ./tools/demucs-termux/tunnel-cloudflared.sh
@@ -149,6 +137,14 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 * បើកឡើងវិញ **URL ថ្មី** — paste ថ្មីម្តងទៀតនៅជំហាន ៣ (វាលតែ ១ ប្រអប់)។
 
 ## ជំហាន ៣ — ប្រាប់គេហទំព័រ
+
+> **សំខាន់៖** កម្មវិធីនេះកំណត់ URL របស់ Demucs **ជាប់ក្នុងកូដ** (constant
+> `PINNED_SEPARATOR_URL` ក្នុង `server/services/separatorSettings.ts`) — វាឈ្នះលើទាំង
+> តម្លៃដែលរក្សាទុកក្នុងកាត និង `AUDIO_SEPARATOR_URL`។ ដូច្នេះកាតនោះបង្ហាញ URL
+> ជា **read-only** (ប៊ូតុង «រក្សាទុក» បិទ) ហើយជំហានខាងក្រោមគ្រាន់តែសម្រាប់ពិនិត្យ។
+>
+> បើ URL របស់ tunnel ប្តូរ (tunnel ថ្មី) ត្រូវ **កែ constant នោះរួច push** ទើបគេហទំព័រប្រើ
+> URL ថ្មី។ បើចង់ឲ្យកាតគ្រប់គ្រងវាវិញ សូមកំណត់ `PINNED_SEPARATOR_URL = ''`។
 
 1. ចូលគេហទំព័រដោយគណនី **Admin** (`OWNER_EMAILS`)។
 2. ក្នុងផ្ទាំង **ស្ទូឌីយោ** បើកកាត **«ញែកភ្លេង · Demucs API»**។
@@ -171,7 +167,7 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 |---|---|
 | ០. Demucs ដើរពិត | `sh test-demucs.sh` — វាញែកសំឡេងសាកល្បងពិតៗ រួចរាយទំហំ vocals/instrumental |
 | ១. API រត់ | `curl -s http://127.0.0.1:8000/` → `{"status":"ok","service":"Demucs API"}` |
-| ២. tunnel បើក | SSH បង្ហាញ URL `https://…` |
+| ២. tunnel បើក | `sh tunnel-url.sh` បង្ហាញ URL `https://…trycloudflare.com` |
 | ៣. គេហទំព័រដឹង | កាត «ញែកភ្លេង» បង្ហាញ **ភ្ជាប់រួច** |
 | ៤. សាកល្បងជោគជ័យ | ចុច «សាកល្បង» → បង្ហាញ vocals + instrumental ជា KB |
 | ៥. ការងារពិត | បកប្រែវីដេអូ → ភ្លេងដើមលែងដាច់ |
@@ -180,7 +176,8 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 
 | រោគសញ្ញា | មូលហេតុ / ដំណោះស្រាយ |
 |---|---|
-| tunnel មិនចេញ URL | ស្គ្រីបសាក Cloudflare រួច SSH ជំនួសស្វ័យប្រវត្តិ។ បើទាំងពីរដួល សាកប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data |
+| tunnel មិនចេញ URL | Cloudflare មិនចេញ URL ក្នុង ៦០ វិនាទី — សាកប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data រួចបើកស្គ្រីបម្តងទៀត |
+| គេហទំព័រនិយាយថាបរាជ័យ តែ `test-demucs.sh` ជោគជ័យ | API ជំនាន់ចាស់ ឬ URL ចាស់៖ បើក `sh phone-start.sh` ម្តងទៀត — វាធ្វើបច្ចុប្បន្នភាព API ដោយស្វ័យប្រវត្តិ |
 | URL ចេញ តែ «fetch failed» លើគេហទំព័រ | URL ចាស់ (tunnel មុន) — យក URL ថ្មីពី `cat ~/demucs-tunnel-url.txt` រួច paste ម្តងទៀត | | `tunnel បានបិទ` ឬ URL ថ្មី — បើក `sh tunnel-url.sh` វានឹងបង្ហាញ URL ដែលកំពុងរស់ រួច paste ថ្មី (URL ចាស់បាត់ពី DNS ទាំងស្រុង) |
 | ការងារឈប់នៅជំហានញែកភ្លេង | គ្មាន Demucs ភ្ជាប់ទេ — បើក API + tunnel រួចពិនិត្យកាតជាមួយ «សាកល្បង» |
 | បង្ហាញឈ្មោះ service តែបរាជ័យ | API មិនស្គាល់ endpoint នេះទេ — កំណត់ `AUDIO_SEPARATOR_PATH` ឬប្រើ `demucs_api.py` |
