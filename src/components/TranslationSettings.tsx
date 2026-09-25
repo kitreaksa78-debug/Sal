@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sliders, Sparkles, Mic, Music, Subtitles, Video, Languages, Globe } from 'lucide-react';
+import { Sliders, Sparkles, Mic, Music, Video, Languages, Globe } from 'lucide-react';
 import { JobSettings, SOURCE_LANGUAGES } from '../types';
 
 interface TranslationSettingsProps {
@@ -208,43 +208,6 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
                 <span className="text-[10px] text-slate-400 opacity-80">{m.en}</span>
               </button>
             ))}
-          </div>
-        </div>
-
-        {/* Subtitles Option */}
-        <div className="space-y-2">
-          <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-            <Subtitles className="w-3.5 h-3.5 text-emerald-400" />
-            <span>អក្សររត់ខ្មែរ (Khmer Subtitles)</span>
-          </label>
-          <div className="grid grid-cols-2 gap-2">
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => update('subtitle', true)}
-              className={`px-3 py-2.5 rounded-xl text-xs font-medium border text-center transition-all min-h-[44px] flex flex-col justify-center items-center ${
-                settings.subtitle
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                  : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:border-slate-700'
-              }`}
-            >
-              <span className="font-bold text-[13px]">បើក (ON)</span>
-              <span className="text-[10px] text-slate-400 opacity-80">SRT / VTT</span>
-            </button>
-
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => update('subtitle', false)}
-              className={`px-3 py-2.5 rounded-xl text-xs font-medium border text-center transition-all min-h-[44px] flex flex-col justify-center items-center ${
-                !settings.subtitle
-                  ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                  : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:border-slate-700'
-              }`}
-            >
-              <span className="font-bold text-[13px]">បិទ (OFF)</span>
-              <span className="text-[10px] text-slate-400 opacity-80">No Subs</span>
-            </button>
           </div>
         </div>
 

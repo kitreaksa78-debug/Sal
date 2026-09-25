@@ -103,13 +103,15 @@ export class JobProcessor {
     extraUpdates: Partial<JobRecord> = {}
   ): Promise<JobRecord | null> {
     const db = getDatabase();
-    const progress = STATUS_PROGRESS[status] ?? 50;
+    // A failed or cancelled run keeps the percentage it had when it stopped.
+    // Jumping to 100% would tell the user a red bar finished the whole job.
+    const progress = status === 'failed' ? undefined : STATUS_PROGRESS[status] ?? 50;
     const khmerMessage = customKhmerMsg || KHMER_STEP_MESSAGES[status] || status;
     const englishMessage = ENGLISH_STEP_MESSAGES[status] || status;
 
     const updated = await db.updateJob(jobId, {
       status,
-      progress,
+      ...(progress !== undefined ? { progress } : {}),
       message: englishMessage,
       khmerMessage,
       ...extraUpdates,

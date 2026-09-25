@@ -280,12 +280,12 @@ export async function clearSeparatorConnection(): Promise<SeparatorConnectionVie
 }
 
 /**
- * Send a short test tone through the saved service and report what came back.
- * This is a real separation, not a ping: a reachable server with the wrong
- * endpoint still fails here.
+ * Check the saved service URL. The default is a short probe that answers in
+ * about a second; `full = true` sends a real six-second tone through the whole
+ * separation, which is slower and proves the endpoint actually separates.
  */
-export async function testSeparatorConnection(): Promise<SeparatorTestResult> {
-  const res = await fetch(`${API_BASE}/config/separator/test`, {
+export async function testSeparatorConnection(full = false): Promise<SeparatorTestResult> {
+  const res = await fetch(`${API_BASE}/config/separator/test${full ? '?full=1' : ''}`, {
     method: 'POST',
     headers: authHeaders(),
   });

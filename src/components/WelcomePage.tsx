@@ -9,7 +9,6 @@ import {
   Languages,
   Music4,
   RefreshCw,
-  ShieldCheck,
   Sparkles,
   Upload,
   Zap,
@@ -65,7 +64,6 @@ const STEPS = [
 const FEATURES = [
   { icon: Music4, label: 'រក្សាភ្លេងដើម' },
   { icon: Languages, label: 'សំឡេងខ្មែរធម្មជាតិ' },
-  { icon: ShieldCheck, label: 'ទិន្នន័យដាច់ដោយឡែកតាមគណនី' },
 ];
 
 export const WelcomePage: React.FC<WelcomePageProps> = ({ onEnterApp, user, onSignedIn }) => {

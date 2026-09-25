@@ -54,7 +54,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
   const [connection, setConnection] = useState<SeparatorConnectionView | null>(null);
   const [url, setUrl] = useState('');
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState<'load' | 'save' | 'test' | 'clear' | null>('load');
+  const [busy, setBusy] = useState<'load' | 'save' | 'test' | 'full' | 'clear' | null>('load');
   const [status, setStatus] = useState<{ tone: 'ok' | 'warn' | 'error'; text: string } | null>(null);
 
   const apply = (next: SeparatorConnectionView) => {
@@ -108,8 +108,8 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
     }
   };
 
-  const handleTest = async () => {
-    setBusy('test');
+  const handleTest = async (full = false) => {
+    setBusy(full ? 'full' : 'test');
     setStatus(null);
     try {
       // Pasting the new tunnel URL and pressing this button is the whole job, so
@@ -119,14 +119,21 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
       if (typed && typed !== connection?.url) {
         apply(await saveSeparatorConnection({ url: typed }));
       }
-      const result: SeparatorTestResult = await testSeparatorConnection();
-      if (result.ok && result.stems) {
-        setStatus({
-          tone: 'ok',
-          text: `ដំណើរការល្អ! ${result.service ? `${result.service} · ` : ''}${result.latencyMs} ms · vocals ${formatBytes(
-            result.stems.vocalsBytes
-          )} · instrumental ${formatBytes(result.stems.instrumentalBytes)}`,
-        });
+      const result: SeparatorTestResult = await testSeparatorConnection(full);
+      if (result.ok) {
+        // The quick probe has no stem sizes; the full test does. Report whichever
+        // facts this run actually produced, never a bare "ok".
+        const facts = [
+          'ដំណើរការល្អ!',
+          result.service || null,
+          `${result.latencyMs} ms`,
+          result.stems
+            ? `vocals ${formatBytes(result.stems.vocalsBytes)} · instrumental ${formatBytes(
+                result.stems.instrumentalBytes
+              )}`
+            : null,
+        ].filter(Boolean);
+        setStatus({ tone: 'ok', text: facts.join(' · ') });
       } else {
         setStatus({
           tone: 'error',
@@ -207,8 +214,11 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
                 ៣. បើគេហទំព័រនិយាយថាបរាជ័យ តែការសាកល្បងក្នុងទូរស័ព្ទជោគជ័យ (API ជំនាន់ចាស់)៖{' '}
                 <code className="text-cyan-300">sh restart-api.sh</code>
               </p>
-              <p>៤. paste URL នោះក្នុងប្រអប់ខាងក្រោម (ជំនួសឈ្មោះចាស់)។</p>
-              <p>៥. ចុច «រក្សាទុក និងសាកល្បង» — វារក្សាទុក URL នោះជាប់ ហើយផ្ញើសំឡេងសាកល្បងពិតៗទៅទូរស័ព្ទ។ ជោគជ័យ = គេហទំព័រប្រើវាភ្លាម។</p>
+              <p>៤. paste URL នោះក្នុងប្រអប់ខាងក្រោម (ជំនួសឈ្មោះចាស់)។</p>              <p>
+                ៥. ចុច «រក្សាទុក និងសាកល្បង» — វារក្សាទុក URL នោះជាប់ រួចឆាប់ៗនេះឆ្លើយភ្លាម
+                (ប៉ុន្មានវិនាទី) ថាតើទូរស័ព្ទឆ្លើយតបឬអត់។ បើចង់បញ្ជាក់ពិតៗថាអាចញែកសំឡេងបាន
+                ជាមួយសំឡេងសាកល្បងពិត ចុច «តេស្សពេញ (Full test)» ជំនួស។
+              </p>
               <p>
                 ៦. ការងារបកប្រែត្រូវការ Demucs នេះជាចាំបាច់ (គ្មានការជំនួសទេ) — ដូច្នេះពេល tunnel
                 ប្តូរ URL ថ្មី គ្រាន់តែ paste ថ្មីម្តងទៀតនៅទីនេះ។
@@ -261,12 +271,23 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
 
             <button
               type="button"
-              onClick={handleTest}
+              onClick={() => handleTest()}
               disabled={busy !== null || !url.trim()}
               className="flex-1 min-w-[130px] min-h-[44px] px-4 rounded-xl text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
               {busy === 'test' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
               រក្សាទុក និងសាកល្បង
+            </button>
+
+            <button
+              type="button"
+              onClick={() => handleTest(true)}
+              disabled={busy !== null || !url.trim()}
+              title="ផ្ញើសំឡេងសាកល្បងពិតៗ ៦ វិនាទី តាម tunnel ទៅញែកពិត (slow but conclusive)"
+              className="min-h-[44px] px-4 rounded-xl text-xs font-semibold bg-slate-900/60 text-slate-300 border border-slate-800 hover:border-cyan-500/40 hover:text-cyan-200 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+            >
+              {busy === 'full' ? <Loader2 className="w-4 h-4 animate-spin" /> : <AudioWaveform className="w-4 h-4" />}
+              តេស្សពេញ (Full test)
             </button>
 
             {connection?.source === 'app' && (

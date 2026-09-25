@@ -112,13 +112,8 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
     return 'pending';
   };
 
-  // Generate ASCII-style bar [████████████░░░░]
-  const renderAsciiBar = (pct: number) => {
-    const totalBlocks = 20;
-    const filledBlocks = Math.round((pct / 100) * totalBlocks);
-    const emptyBlocks = totalBlocks - filledBlocks;
-    return `[${'█'.repeat(filledBlocks)}${'░'.repeat(emptyBlocks)}]`;
-  };
+  /** Overall progress, clamped: one number drives the bar below. */
+  const progressPct = Math.max(0, Math.min(100, Math.round(Number(job.progress) || 0)));
 
   return (
     <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-7 shadow-2xl backdrop-blur-md space-y-5 sm:space-y-6">
@@ -163,21 +158,25 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
         <h2 className="text-lg sm:text-2xl font-bold text-white tracking-tight">
           {job.khmerMessage || job.message}
         </h2>
-        <p className="text-[11px] sm:text-sm text-slate-300 font-mono break-all">
-          {renderAsciiBar(job.progress)} <span className="font-bold text-emerald-400 ml-1">{job.progress}%</span>
-        </p>
       </div>
 
-      {/* Progress Bar Visual */}
-      <div className="w-full bg-slate-800/80 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/50">
-        <div
-          className={`h-full rounded-full transition-all duration-500 ${
-            isFailed
-              ? 'bg-rose-500'
-              : 'bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400 shadow-sm shadow-emerald-500/50'
-          }`}
-          style={{ width: `${Math.max(4, job.progress)}%` }}
-        />
+      {/* One number, one bar — both read the same job.progress, so they can never
+          disagree the way the old ASCII bar did on a phone's font. */}
+      <div className="space-y-1.5">
+        <div className="flex items-center justify-between gap-3 text-[11px] sm:text-xs text-slate-400">
+          <span>ការរីកចម្រើនសរុប (Overall progress)</span>
+          <span className="font-bold text-emerald-400">{progressPct}%</span>
+        </div>
+        <div className="w-full bg-slate-800/80 rounded-full h-3 overflow-hidden p-0.5 border border-slate-700/50">
+          <div
+            className={`h-full rounded-full transition-all duration-500 ${
+              isFailed
+                ? 'bg-rose-500'
+                : 'bg-gradient-to-r from-emerald-500 via-teal-400 to-emerald-400 shadow-sm shadow-emerald-500/50'
+            }`}
+            style={{ width: `${progressPct}%` }}
+          />
+        </div>
       </div>
 
       {/* Warning Notice if partial separation occurred */}

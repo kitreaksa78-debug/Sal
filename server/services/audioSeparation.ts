@@ -997,13 +997,21 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
  * Ask a stem service what it is. Reports the `service`/`name`/`status` fields of
  * its root or `/health` answer, which is how the connection screen can tell
  * "Demucs API on the phone" apart from "something else is on this URL".
+ *
+ * `timeoutMs` is short by default in the connection test: a phone tunnel that is
+ * up answers in well under a second, and one that is down should say so just as
+ * quickly instead of holding the button for half a minute.
  */
-export async function describeRemoteService(base: string, apiKey: string): Promise<string | null> {
+export async function describeRemoteService(
+  base: string,
+  apiKey: string,
+  timeoutMs = 5_000
+): Promise<string | null> {
   const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
 
   for (const path of ['/', '/health']) {
     try {
-      const res = await fetch(`${base}${path}`, { headers, signal: AbortSignal.timeout(10_000) });
+      const res = await fetch(`${base}${path}`, { headers, signal: AbortSignal.timeout(timeoutMs) });
       if (!res.ok) continue;
       const text = (await res.text()).slice(0, 2000);
       try {

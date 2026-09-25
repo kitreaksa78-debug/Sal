@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
 import { Download, CheckCircle2, RefreshCw } from 'lucide-react';
 import { JobRecord } from '../types';
-import { getDownloadUrl, getSubtitlesUrl } from '../lib/api';
+import { getDownloadUrl } from '../lib/api';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -12,9 +12,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   const dubbedVideoRef = useRef<HTMLVideoElement>(null);
 
   const finalVideoUrl = getDownloadUrl(job.id);
-  // Subtitles follow the choice made before dubbing: the VTT track is attached
-  // when they were turned on, and the player's own captions button toggles it.
-  const vttUrl = getSubtitlesUrl(job.id, 'vtt');
 
   return (
     <div className="space-y-6">
@@ -67,17 +64,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
               controls
               playsInline
               className="w-full h-full object-contain"
-            >
-              {(job.settings.subtitle ?? true) && (
-                <track
-                  kind="subtitles"
-                  src={vttUrl}
-                  srcLang="km"
-                  label="Khmer"
-                  default
-                />
-              )}
-            </video>
+            />
           </div>
         </div>
       </div>

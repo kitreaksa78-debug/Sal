@@ -144,12 +144,15 @@ async function createTestTone(targetDir: string): Promise<string> {
 }
 
 /**
- * POST /api/config/separator/test
- * Send a six-second tone through the saved connection and report what came back.
+ * POST /api/config/separator/test[?full=1]
  *
- * This runs the real thing — probe the service, upload, download both stems —
- * because that is the only answer worth showing: "the phone is reachable but the
- * endpoint is wrong" is exactly the kind of failure a plain ping hides.
+ * Default: one short probe of the saved URL — the answer arrives in about a
+ * second when the phone's tunnel is up, and gives up in a few when it is not.
+ * That is what the owner wants when they just pasted a new tunnel URL.
+ *
+ * `?full=1` keeps the end-to-end run: a six-second tone through the real
+ * separation, because "reachable but the endpoint is wrong" is exactly the kind
+ * of failure a plain probe hides.
  */
 router.post('/test', async (req: Request, res: Response) => {
   const session = await requireAdmin(req, res);
@@ -159,6 +162,41 @@ router.post('/test', async (req: Request, res: Response) => {
   if (!connection.url) {
     return res.status(400).json({
       error: 'មិនទាន់បានដាក់ URL ទេ។ (Save a service URL first.)',
+    });
+  }
+
+  const full = req.query.full === '1' || req.query.full === 'true';
+
+  if (!full) {
+    const startedAt = Date.now();
+    const service = await describeRemoteService(connection.url, connection.apiKey, 4_000).catch(
+      () => null
+    );
+    const latencyMs = Date.now() - startedAt;
+
+    if (!service) {
+      logger.info(
+        `Stem service quick test by ${session.email}: unreachable (${latencyMs}ms) ${connection.url}`
+      );
+      return res.json({
+        ok: false,
+        service: null,
+        latencyMs,
+        detail:
+          'មិនអាចទាក់ទង Demucs API បានទេ។ សូមបើក tunnel លើទូរស័ព្ទ ឬ paste URL ថ្មី រួចសាកល្បងម្តងទៀត។ (No answer within 4 seconds.)',
+        url: connection.url,
+      });
+    }
+
+    logger.info(
+      `Stem service quick test by ${session.email}: ok (${latencyMs}ms) ${service} — ${connection.url}`
+    );
+    return res.json({
+      ok: true,
+      service,
+      latencyMs,
+      detail: `APIឆ្លើយតបក្នុង ${latencyMs} ms។ (Quick probe only — use the full test to send real audio.)`,
+      url: connection.url,
     });
   }
 
