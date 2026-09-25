@@ -1,9 +1,122 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
+import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
 import { getSeparatorConnection } from './separatorSettings.js';
+
+/**
+ * How much audio one request may carry.
+ *
+ * A quick Cloudflare tunnel cuts a request off after roughly 100 seconds (HTTP
+ * 524) and a phone separating on CPU runs several times slower than realtime, so
+ * sending a whole video's audio in one request always ended in 524 and a failed
+ * job. The audio is therefore cut into short pieces, each separated by its own
+ * request, and the stems are joined back in order — the timeline is unchanged
+ * because the pieces are cut at exact offsets and each piece's two stems come
+ * from the same separation.
+ */
+const CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_CHUNK_SECONDS || '15');
+/** Never split below this: a shorter piece costs more in overhead than it saves. */
+const MIN_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_MIN_CHUNK_SECONDS || '3');
+/** What one tunnel request may take before it counts as "too much audio". */
+const TUNNEL_REQUEST_TIMEOUT_MS = Number(
+  process.env.AUDIO_SEPARATOR_TUNNEL_TIMEOUT_MS || '110000'
+);
+const LONG_REQUEST_TIMEOUT_MS = 1_800_000;
+/** How many times one piece is sent before its failure is believed. */
+const MAX_ATTEMPTS = Math.max(1, Number(process.env.AUDIO_SEPARATOR_MAX_ATTEMPTS || '3'));
+/** Wait before retrying a dropped request; it grows with the attempt number. */
+const RETRY_DELAY_MS = Math.max(0, Number(process.env.AUDIO_SEPARATOR_RETRY_DELAY_MS || '6000'));
+/** Tries to download one finished stem, and the wait between them. */
+const STEM_ATTEMPTS = 3;
+const STEM_RETRY_DELAY_MS = 3000;
+
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * The largest piece the service has actually finished in time.
+ *
+ * The first request that times out teaches every later piece — in this job and
+ * the next — how much audio this phone can take, so the oversized attempt is
+ * paid once instead of once per piece. It only ever shrinks, and never below
+ * `MIN_CHUNK_SECONDS`.
+ */
+let learnedChunkSeconds = Number.POSITIVE_INFINITY;
+
+/** Remember that `length` seconds of audio could not be finished in time. */
+function notePieceTooLong(length: number): void {
+  const smaller = Math.max(MIN_CHUNK_SECONDS, Number((length / 2).toFixed(3)));
+  if (smaller < learnedChunkSeconds) learnedChunkSeconds = smaller;
+}
+
+/**
+ * The service did not answer inside the time a request is allowed — on a quick
+ * tunnel that is Cloudflare's ~100 second cutoff. It means "this much audio is
+ * too much", which is answered by sending a smaller piece, not by failing.
+ */
+export class SlowSeparationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'SlowSeparationError';
+  }
+}
+
+/**
+ * The request died before the service had a chance to answer: a quick tunnel
+ * dropping its connection, a 502/530 gateway page, a reset socket. A tunnel like
+ * that comes back on its own within seconds, so this is retried with the same
+ * audio instead of being answered by sending less of it.
+ */
+class TransientSeparationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'TransientSeparationError';
+  }
+}
+
+/** Cloudflare's own timeout page means the request ran out of time. */
+function isTooSlowStatus(status: number): boolean {
+  return status === 504 || status === 524;
+}
+
+/** Cloudflare's gateway pages for "the tunnel is not connected right now". */
+function isTunnelDownStatus(status: number): boolean {
+  return status === 502 || status === 503 || status === 530;
+}
+
+/** A Cloudflare page saying the tunnel itself is down, whatever the status was. */
+function isTunnelDownBody(body: string): boolean {
+  return /Error 1033|Error 1016|Cloudflare Tunnel error|cloudflared/i.test(body);
+}
+
+/**
+ * A connection that was lost is `too slow` when it lasted most of the time a
+ * request is allowed — Cloudflare cuts a tunnel at about 100 seconds — and a
+ * tunnel blip when it died early.
+ */
+function classifyLostRequest(detail: string, elapsedMs: number, timeoutMs: number): Error {
+  const earlyLimit = Math.min(60_000, timeoutMs * 0.6);
+  return elapsedMs < earlyLimit
+    ? new TransientSeparationError(detail)
+    : new SlowSeparationError(detail);
+}
+
+/**
+ * Service failures can arrive as whole HTML documents (a 524 is a full page),
+ * which is unreadable inside a job error. Keep the first meaningful line.
+ */
+function summariseServiceBody(body: string): string {
+  const withoutNoise = body
+    .replace(/<script[\s\S]*?<\/script>/gi, ' ')
+    .replace(/<style[\s\S]*?<\/style>/gi, ' ');
+  const text = /<[a-z][\s\S]*>/i.test(withoutNoise)
+    ? withoutNoise.replace(/<[^>]+>/g, ' ')
+    : withoutNoise;
+  return text.replace(/\s+/g, ' ').trim().slice(0, 160);
+}
 
 export interface SeparationResult {
   vocalsPath: string;
@@ -189,6 +302,10 @@ function connectionHint(err: unknown): string {
     return ' អស់ពេលរង់ចាំ — ម៉ាស៊ីនញែកភ្លេងយឺត ឬបណ្តាញទូរស័ព្ទដាច់។ សាកល្បងវីដេអូខ្លី ឬពិនិត្យបណ្តាញ។ (It timed out: the phone is slow or its network dropped.)';
   }
 
+  if (/Error 1033|Cloudflare Tunnel error|cloudflared|\b530\b/i.test(text)) {
+    return ' tunnel នេះបានដាច់ពី Cloudflare (Error 1033) — cloudflared លើទូរស័ព្ទឈប់ ឬបណ្តាញដាច់។ សូមបើក cloudflared ឡើងវិញ រួច paste URL ថ្មីក្នុងកាត «ញែកភ្លេង»។ (The tunnel is no longer connected to Cloudflare: restart cloudflared on the phone and paste the new URL.)';
+  }
+
   if (/fetch failed|UND_ERR/i.test(text)) {
     return ' សូមពិនិត្យថា Demucs API និង tunnel កំពុងរត់នៅលើទូរស័ព្ទ រួចចុច «សាកល្បងការតភ្ជាប់» ម្តងទៀត។ (Check that the Demucs API and its tunnel are still running on the phone.)';
   }
@@ -263,18 +380,54 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     // not exist yet on the "test connection" path.
     fs.mkdirSync(outputDir, { recursive: true });
 
-    try {
-      const stems = await this.requestStems(inputWavPath, connection.url, connection.apiKey, connection.path);
+    // Cut pieces and their stems live here; the finished pair is what the
+    // caller keeps.
+    const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stem-pieces-'));
 
-      await this.writeStem(connection.url, stems.vocals, vocalsPath, connection.apiKey);
-      await this.writeStem(connection.url, stems.instrumental, noVocalsPath, connection.apiKey);
+    try {
+      const duration = await FFmpegHelper.getAudioDuration(inputWavPath).catch(() => 0);
+      const pieces = this.planPieces(duration, this.pieceLimit());
+
+      const vocalsPieces: string[] = [];
+      const instrumentalPieces: string[] = [];
+      let model = '';
+
+      for (let i = 0; i < pieces.length; i++) {
+        const label = `p${String(i + 1).padStart(4, '0')}`;
+        const piece = await this.separatePiece(
+          connection.url,
+          connection.apiKey,
+          connection.path,
+          inputWavPath,
+          pieces[i],
+          workDir,
+          label
+        );
+
+        vocalsPieces.push(piece.vocalsPath);
+        instrumentalPieces.push(piece.noVocalsPath);
+        model = piece.model || model;
+
+        if (pieces.length > 1) {
+          logger.info(
+            `Stem piece ${i + 1}/${pieces.length} done (from ${pieces[i].start.toFixed(1)}s, ${pieces[i].length.toFixed(1)}s long).`
+          );
+        }
+      }
+
+      await this.joinPieces(vocalsPieces, vocalsPath);
+      await this.joinPieces(instrumentalPieces, noVocalsPath);
 
       const usable = (p: string) => fs.existsSync(p) && fs.statSync(p).size > 1024;
       if (!usable(vocalsPath) || !usable(noVocalsPath)) {
         throw new Error('the service answered without usable stems');
       }
 
-      logger.info(`Stem service finished (${connection.url}, model: ${stems.model || this.getModelName() || 'default'})`);
+      logger.info(
+        `Stem service finished (${connection.url}, ${pieces.length} piece(s), model: ${
+          model || this.getModelName() || 'default'
+        })`
+      );
       return {
         vocalsPath,
         noVocalsPath,
@@ -286,9 +439,306 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       logger.warn(`Stem separation via ${connection.url} failed:`, reason);
       // No substitute separation: the job stops here with the real reason, which
       // is what makes a dead tunnel obvious instead of silently degraded.
+      const slowHint =
+        err instanceof SlowSeparationError
+          ? ' ការភ្ជាប់ត្រូវបានកាត់ដោយ tunnel (ប្រហែល ១០០ វិនាទី) ទោះបានបែងចែកជាកំណាត់តូចរួចហើយ។ សូមសាកល្បងវីដេអូខ្លីជាង ឬបិទកម្មវិធីផ្សេងលើទូរស័ព្ទ។ (The tunnel cut the request even after the audio was split; the phone needs a shorter video or fewer apps running.)'
+          : '';
       throw new Error(
-        `ញែកភ្លេងដោយ Demucs បរាជ័យ៖ ${reason} (Demucs stem separation failed.)${connectionHint(err)}`
+        `ញែកភ្លេងដោយ Demucs បរាជ័យ៖ ${reason} (Demucs stem separation failed.)${connectionHint(
+          err
+        )}${slowHint}`
       );
+    } finally {
+      fs.rmSync(workDir, { recursive: true, force: true });
+    }
+  }
+
+  /** How long one piece may be, in seconds. */
+  private getChunkSeconds(): number {
+    return Number.isFinite(CHUNK_SECONDS) && CHUNK_SECONDS > 0 ? CHUNK_SECONDS : 15;
+  }
+
+  /**
+   * How long a piece may be on this service right now: what was configured,
+   * lowered to what this phone has proved it can finish in one request.
+   */
+  private pieceLimit(): number {
+    return Math.min(this.getChunkSeconds(), learnedChunkSeconds);
+  }
+
+  /**
+   * The exact, gap-free windows that cover the whole track. A track that already
+   * fits in one piece (or whose duration could not be read) yields a single
+   * window with `length: 0`, which means "separate the file as it is".
+   */
+  private planPieces(duration: number, chunkSeconds: number): { start: number; length: number }[] {
+    if (!Number.isFinite(duration) || duration <= 0 || duration <= chunkSeconds) {
+      return [{ start: 0, length: 0 }];
+    }
+
+
+    const pieces: { start: number; length: number }[] = [];
+    for (let start = 0; start < duration - 0.001; start += chunkSeconds) {
+      pieces.push({
+        start: Number(start.toFixed(3)),
+        length: Number(Math.min(chunkSeconds, duration - start).toFixed(3)),
+      });
+    }
+    return pieces;
+  }
+
+  /**
+   * One piece, with the fallback that makes long videos work: if the phone could
+   * not finish it inside the tunnel's request window, the same piece is split in
+   * half and each half is sent on its own. Unfinished work only ever shrinks —
+   * the amount of audio sent never grows — so this always terminates. A piece
+   * that was the whole file (length 0) is measured first so it can shrink too.
+   */
+  private async separatePiece(
+    base: string,
+    apiKey: string,
+    configuredPath: string,
+    source: string,
+    piece: { start: number; length: number },
+    workDir: string,
+    label: string
+  ): Promise<{ vocalsPath: string; noVocalsPath: string; model?: string }> {
+    // This much audio already timed out once, so it is halved before it is sent:
+    // the wasted request is paid once per job instead of once per piece.
+    if (piece.length > this.pieceLimit()) {
+      return this.splitPiece(base, apiKey, configuredPath, source, piece, workDir, label);
+    }
+
+    const dir = path.join(workDir, label);
+    fs.mkdirSync(dir, { recursive: true });
+
+    const input = piece.length > 0 ? path.join(dir, 'piece.wav') : source;
+    if (piece.length > 0) await this.cutPiece(source, piece, input);
+
+    try {
+      return await this.separateWithRetries(base, apiKey, configuredPath, input, dir);
+    } catch (err) {
+      if (!(err instanceof SlowSeparationError)) throw err;
+
+      // A piece of length 0 means "the file as it is": the track was shorter
+      // than one piece, or its duration could not be read when the split was
+      // planned. Read the duration now, so even that piece can be answered by
+      // sending less audio instead of failing the whole job.
+      let start = piece.start;
+      let length = piece.length;
+      if (length <= 0) {
+        const duration = await FFmpegHelper.getAudioDuration(source).catch(() => 0);
+        if (duration <= 0) throw err;
+        start = 0;
+        length = duration;
+      }
+
+      // Even the smallest piece times out: nothing is left to shrink, so this is
+      // a real failure and it is reported with the service's own words.
+      if (length <= MIN_CHUNK_SECONDS) throw err;
+
+      notePieceTooLong(length);
+      return this.splitPiece(
+        base,
+        apiKey,
+        configuredPath,
+        source,
+        { start, length },
+        workDir,
+        label
+      );
+    }
+  }
+
+  /**
+   * One upload, retried while the failure was the tunnel rather than the audio.
+   *
+   * A quick tunnel drops requests on its own schedule — Error 1033, a 530, a
+   * reset socket — and normally reconnects by itself, so the same audio is sent
+   * again a couple of times before the job is told the service is down.
+   */
+  private async separateWithRetries(
+    base: string,
+    apiKey: string,
+    configuredPath: string,
+    input: string,
+    dir: string
+  ): Promise<{ vocalsPath: string; noVocalsPath: string; model?: string }> {
+    let lastError: unknown = new Error('the stem service was never asked');
+
+    for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+      try {
+        return await this.separateFile(base, apiKey, configuredPath, input, path.join(dir, 'raw'));
+      } catch (err) {
+        lastError = err;
+        if (!(err instanceof TransientSeparationError) || attempt >= MAX_ATTEMPTS) break;
+
+        const waitMs = RETRY_DELAY_MS * attempt;
+        logger.warn(
+          `The stem service dropped that request (${err.message}); sending the same piece again in ${(
+            waitMs / 1000
+          ).toFixed(0)}s.`
+        );
+        await delay(waitMs);
+      }
+    }
+
+    throw lastError;
+  }
+
+  /** Send one window as two halves and join their stems back in order. */
+  private async splitPiece(
+    base: string,
+    apiKey: string,
+    configuredPath: string,
+    source: string,
+    piece: { start: number; length: number },
+    workDir: string,
+    label: string
+  ): Promise<{ vocalsPath: string; noVocalsPath: string; model?: string }> {
+    const half = Number((piece.length / 2).toFixed(3));
+    if (half <= 0) throw new Error(`cannot split ${piece.length.toFixed(1)}s any further`);
+
+    logger.warn(
+      `The stem service could not finish ${piece.length.toFixed(1)}s of audio from ${piece.start.toFixed(
+        1
+      )}s in time; sending it as two halves instead.`
+    );
+
+    const first = await this.separatePiece(
+      base,
+      apiKey,
+      configuredPath,
+      source,
+      { start: piece.start, length: half },
+      workDir,
+      `${label}a`
+    );
+    const second = await this.separatePiece(
+      base,
+      apiKey,
+      configuredPath,
+      source,
+      { start: Number((piece.start + half).toFixed(3)), length: Number((piece.length - half).toFixed(3)) },
+      workDir,
+      `${label}b`
+    );
+
+    const dir = path.join(workDir, label);
+    fs.mkdirSync(dir, { recursive: true });
+    const vocalsPath = path.join(dir, 'vocals.wav');
+    const noVocalsPath = path.join(dir, 'no_vocals.wav');
+    await this.joinPieces([first.vocalsPath, second.vocalsPath], vocalsPath);
+    await this.joinPieces([first.noVocalsPath, second.noVocalsPath], noVocalsPath);
+
+    return { vocalsPath, noVocalsPath, model: first.model || second.model };
+  }
+
+  /** Upload one file and download both of its stems into `targetDir`. */
+  private async separateFile(
+    base: string,
+    apiKey: string,
+    configuredPath: string,
+    inputWavPath: string,
+    targetDir: string
+  ): Promise<{ vocalsPath: string; noVocalsPath: string; model?: string }> {
+    fs.mkdirSync(targetDir, { recursive: true });
+    const vocalsPath = path.join(targetDir, 'vocals.wav');
+    const noVocalsPath = path.join(targetDir, 'no_vocals.wav');
+    const timeoutMs = this.requestTimeoutMs(base);
+
+    const stems = await this.requestStems(inputWavPath, base, apiKey, configuredPath, timeoutMs);
+    await this.writeStem(base, stems.vocals, vocalsPath, apiKey, timeoutMs);
+    await this.writeStem(base, stems.instrumental, noVocalsPath, apiKey, timeoutMs);
+
+    return { vocalsPath, noVocalsPath, model: stems.model };
+  }
+
+  /** Cut `length` seconds starting at `piece.start` out of the source audio. */
+  private async cutPiece(
+    source: string,
+    piece: { start: number; length: number },
+    target: string
+  ): Promise<void> {
+    await FFmpegHelper.execute([
+      '-y',
+      '-v',
+      'error',
+      '-i',
+      source,
+      '-ss',
+      String(piece.start),
+      '-t',
+      String(piece.length),
+      '-acodec',
+      'pcm_s16le',
+      '-ar',
+      '44100',
+      '-ac',
+      '2',
+      target,
+    ]);
+  }
+
+  /** Put the separated pieces back together, in order, as one stem. */
+  private async joinPieces(parts: string[], target: string): Promise<void> {
+    if (parts.length === 0) throw new Error('no separated pieces to join');
+
+    if (parts.length === 1) {
+      if (path.resolve(parts[0]) !== path.resolve(target)) fs.copyFileSync(parts[0], target);
+      return;
+    }
+
+    const listPath = path.join(
+      path.dirname(target),
+      `concat-${path.basename(target, path.extname(target))}.txt`
+    );
+    fs.writeFileSync(
+      listPath,
+      parts.map((part) => `file '${part.replace(/'/g, "'\\''")}'`).join('\n'),
+      'utf8'
+    );
+
+    // Re-encoded rather than stream-copied: a concatenated WAV written straight
+    // to a pipe keeps the first chunk's header, and some players honour that
+    // length over the real file size.
+    await FFmpegHelper.execute([
+      '-y',
+      '-v',
+      'error',
+      '-f',
+      'concat',
+      '-safe',
+      '0',
+      '-i',
+      listPath,
+      '-acodec',
+      'pcm_s16le',
+      '-ar',
+      '44100',
+      '-ac',
+      '2',
+      target,
+    ]);
+  }
+
+  /**
+   * How long one request may take. A quick tunnel closes the connection at about
+   * 100 seconds, so on a tunnel the timeout sits just past that: the request then
+   * fails in our own words instead of as a Cloudflare 524 page, and the caller
+   * splits the piece. Anywhere else (a LAN server, a local sidecar) the generous
+   * default stands, because those requests are allowed to be slow.
+   */
+  private requestTimeoutMs(base: string): number {
+    const configured = Number(process.env.AUDIO_SEPARATOR_TIMEOUT_MS);
+    if (Number.isFinite(configured) && configured > 0) return configured;
+
+    try {
+      return /\.trycloudflare\.com$/i.test(new URL(base).hostname)
+        ? TUNNEL_REQUEST_TIMEOUT_MS
+        : LONG_REQUEST_TIMEOUT_MS;
+    } catch {
+      return LONG_REQUEST_TIMEOUT_MS;
     }
   }
 
@@ -303,9 +753,9 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     inputWavPath: string,
     base: string,
     apiKey: string,
-    configuredPath: string
+    configuredPath: string,
+    timeoutMs: number
   ): Promise<{ vocals: StemLocation; instrumental: StemLocation; model?: string }> {
-    const timeoutMs = Number(process.env.AUDIO_SEPARATOR_TIMEOUT_MS || '1800000');
     const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
     const endpoints = this.separateEndpoints(base, configuredPath);
     const model = this.getModelName();
@@ -326,12 +776,26 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
         if (model) form.append('model', model);
 
         logger.info(`Uploading audio to ${endpoint} (field: ${field})...`);
-        const upload = await fetch(endpoint, {
-          method: 'POST',
-          headers,
-          body: form,
-          signal: AbortSignal.timeout(timeoutMs),
-        });
+
+        const attemptStarted = Date.now();
+        let upload: Response;
+        try {
+          upload = await fetch(endpoint, {
+            method: 'POST',
+            headers,
+            body: form,
+            signal: AbortSignal.timeout(timeoutMs),
+          });
+        } catch (err) {
+          const text = fetchErrorText(err);
+          const detail = describeFetchError(err);
+          failures.push(`${endpoint} → ${detail}`);
+          // An address that no longer resolves says nothing about the audio.
+          if (/ENOTFOUND|EAI_AGAIN|Could not resolve|getaddrinfo/i.test(text)) throw err;
+          // A lost connection is retried, or answered with less audio — never by
+          // giving up on the job.
+          throw classifyLostRequest(detail, Date.now() - attemptStarted, timeoutMs);
+        }
 
         if (upload.status === 404 || upload.status === 405) {
           failures.push(`${endpoint} → ${upload.status}`);
@@ -339,11 +803,17 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
         }
 
         if (!upload.ok) {
-          const detail = await upload.text().catch(() => '');
-          failures.push(`${endpoint} → ${upload.status} ${detail.slice(0, 160)}`);
+          const raw = await upload.text().catch(() => '');
+          const detail = summariseServiceBody(raw);
+          const failure = `${endpoint} → ${upload.status}${detail ? ` ${detail}` : ''}`;
+          failures.push(failure);
+          if (isTooSlowStatus(upload.status)) throw new SlowSeparationError(failure);
+          if (isTunnelDownStatus(upload.status) || isTunnelDownBody(raw)) {
+            throw new TransientSeparationError(failure);
+          }
           // 400/415/422 usually mean the field name was wrong; try the next one.
           if ([400, 401, 403, 415, 422].includes(upload.status)) continue;
-          throw new Error(failures[failures.length - 1]);
+          throw new Error(failure);
         }
 
         const contentType = upload.headers.get('content-type') || '';
@@ -355,8 +825,9 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
         const instrumental = pickStemLocation(payload, 'instrumental');
 
         if (!vocals || !instrumental) {
+          const shape = summariseServiceBody(JSON.stringify(payload));
           failures.push(
-            `${endpoint} answered without both stems (${JSON.stringify(payload).slice(0, 200)})${oldServiceHint(payload)}`
+            `${endpoint} answered without both stems (${shape.slice(0, 200)})${oldServiceHint(payload)}`
           );
           throw new Error(failures[failures.length - 1]);
         }
@@ -409,23 +880,42 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     base: string,
     stem: StemLocation,
     target: string,
-    apiKey: string
+    apiKey: string,
+    timeoutMs: number
   ): Promise<void> {
-    const timeoutMs = Number(process.env.AUDIO_SEPARATOR_TIMEOUT_MS || '1800000');
-
     if (stem.base64 || stem.value.startsWith('data:')) {
       fs.writeFileSync(target, decodeBase64Audio(stem.value));
       return;
     }
 
-    const res = await fetch(this.resolveStemUrl(base, stem.value), {
-      headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
-      signal: AbortSignal.timeout(timeoutMs),
-    });
-    if (!res.ok || !res.body) {
-      throw new Error(`stem download failed (${res.status}) for ${stem.value}`);
+    // The stems travel back over the same tunnel as the upload, so a blip here is
+    // retried too: downloading a finished stem again is cheap, where failing
+    // would throw away a separation that already ran.
+    let lastError: unknown = new Error(`stem download never ran for ${stem.value}`);
+
+    for (let attempt = 1; attempt <= STEM_ATTEMPTS; attempt++) {
+      try {
+        const res = await fetch(this.resolveStemUrl(base, stem.value), {
+          headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+          signal: AbortSignal.timeout(timeoutMs),
+        });
+        if (!res.ok || !res.body) {
+          // A 4xx is the service saying the stem is gone; repeating cannot help.
+          throw Object.assign(new Error(`stem download failed (${res.status}) for ${stem.value}`), {
+            retryable: res.status >= 500,
+          });
+        }
+        await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(target));
+        return;
+      } catch (err) {
+        lastError = err;
+        const retryable = (err as { retryable?: boolean }).retryable ?? true;
+        if (!retryable || attempt >= STEM_ATTEMPTS) throw err;
+        await delay(STEM_RETRY_DELAY_MS * attempt);
+      }
     }
-    await pipeline(Readable.fromWeb(res.body as any), fs.createWriteStream(target));
+
+    throw lastError;
   }
 }
 

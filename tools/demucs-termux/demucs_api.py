@@ -34,7 +34,15 @@ DEMUCS_API_KEY   key សម្រាប់ការពារ (បើទទេ = 
 DEMUCS_TTL_HOURS លុប stems ចាស់ក្រោយប៉ុន្មានម៉ោង (default 12)
 DEMUCS_MAX_MB    បដិសេធឯកសារធំជាងនេះ (default 1024)
 DEMUCS_HOST      interface ដែលនឹងស្តាប់ (default 127.0.0.1 = តែម៉ាស៊ីននេះ)
+DEMUCS_WARM      `0` = ប្រើ CLI ដូចមុន (default `1` = ទុកម៉ូឌែលក្នុងមេម៉ូរី)
 PORT             port (default 8000)
+
+ហេតុអ្វីទុកម៉ូឌែលក្នុងមេម៉ូរី?
+--------------------------------
+ការហៅ `python -m demucs` ម្តងៗ ត្រូវចាប់ python + torch ថ្មី ហើយ load ម៉ូឌែលម្តងទៀត —
+លើទូរស័ព្ទនេះស៊ីពេល **~៣០ វិនាទី ក្នុងមួយ request**។ ដោយសារ Cloudflare tunnel កាត់ request
+នៅ ~១០០ វិនាទី ការចំណាយនោះកាត់ចំនួនអូឌីយ៉ូដែលអាចញែកបានក្នុងមួយដង។ ទុកម៉ូឌែលក្នុងមេម៉ូរី
+ធ្វើឲ្យ request បន្ទាប់លឿនជាងមុនច្រើនដង។ បើអ្វីមួយខុស វានឹងត្រឡប់ទៅ CLI ដោយស្វ័យប្រវត្តិ។
 """
 from __future__ import annotations
 
@@ -64,6 +72,8 @@ PORT = int(os.environ.get("PORT", "8000"))
 # ស្តាប់តែលើ loopback តាម default៖ tunnel ភ្ជាប់មក `localhost:8000` បានដូចគ្នា ប៉ុន្តែ
 # គ្មានអ្នកណាក្នុង Wi-Fi តែមួយអាចហៅ CPU របស់អ្នកបានដោយផ្ទាល់។
 HOST = os.environ.get("DEMUCS_HOST", "127.0.0.1").strip() or "127.0.0.1"
+# ទុកម៉ូឌែលក្នុងមេម៉ូរី (default)។ កំណត់ `DEMUCS_WARM=0` បើទូរស័ព្ទមាន RAM តិច។
+WARM = os.environ.get("DEMUCS_WARM", "1").strip() not in {"0", "false", "no"}
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -128,8 +138,80 @@ async def _save_upload(upload: UploadFile, target: Path) -> int:
     return written
 
 
+# ម៉ូឌែលដែលបាន load រួច — រក្សាទុកក្នុងមេម៉ូរី ដើម្បីកុំឲ្យ request បន្ទាប់ចាប់ torch ថ្មី។
+_WARM: dict = {"model": None, "error": None}
+
+
+def _load_model():
+    """Load Demucs ម្តងគត់ រួចទុកប្រើរាល់ request."""
+    if _WARM["model"] is not None:
+        return _WARM["model"]
+    if _WARM["error"] is not None:
+        raise _WARM["error"]
+
+    from demucs.pretrained import get_model
+
+    started = time.time()
+    model = get_model(MODEL)
+    model.eval()
+    _WARM["model"] = model
+    log.info("Model %s kept warm (loaded in %.1fs)", MODEL, time.time() - started)
+    return model
+
+
+def _run_demucs_warm(source: Path, out_dir: Path) -> bool:
+    """ញែកដោយប្រើម៉ូឌែលដែល load រួច។ ត្រឡប់ False បើត្រូវប្រើ CLI ជំនួស។"""
+    try:
+        import torch
+        from demucs.apply import apply_model
+        from demucs.audio import AudioFile, save_audio
+    except Exception as err:  # កំណែ demucs ចាស់/ខ្វះ torch — ប្រើ CLI វិញ
+        log.warning("In-process separation is unavailable (%s); using the CLI.", err)
+        return False
+
+    model = _load_model()
+    started = time.time()
+
+    audio = AudioFile(str(source)).read(
+        streams=0, samplerate=model.samplerate, channels=model.audio_channels
+    )
+    reference = audio.mean(0)
+    normalized = (audio - reference.mean()) / (reference.std() + 1e-8)
+
+    with torch.no_grad():
+        separated = apply_model(
+            model, normalized[None], device="cpu", split=True, overlap=0.25, progress=False
+        )[0]
+    separated = separated * reference.std() + reference.mean()
+
+    names = list(model.sources)
+    if "vocals" not in names:
+        log.warning("Model %s has no vocals stem (%s); using the CLI.", MODEL, names)
+        return False
+
+    target = out_dir / MODEL / source.stem
+    target.mkdir(parents=True, exist_ok=True)
+
+    vocals = separated[names.index("vocals")]
+    # `--two-stems=vocals` សរសេរ stem សំឡេងច្បាស់ និងផលបូកនៃ stem ដទៃទៀត។
+    others = [separated[i] for i in range(len(names)) if names[i] != "vocals"]
+    instrumental = torch.stack(others).sum(0) if others else torch.zeros_like(vocals)
+
+    save_audio(vocals, str(target / "vocals.wav"), model.samplerate)
+    save_audio(instrumental, str(target / "no_vocals.wav"), model.samplerate)
+    log.info("Separated %s in process (%.1fs)", source.name, time.time() - started)
+    return True
+
+
 def _run_demucs(source: Path, out_dir: Path) -> None:
-    """ហៅ CLI របស់ demucs (ស្ថេរភាពជាង API ខាងក្នុងរបស់វាឆ្លង version)."""
+    """ញែក stems៖ ប្រើម៉ូឌែលក្នុងមេម៉ូរីជាមុនសិន រួច CLI ជា fallback។"""
+    if WARM:
+        try:
+            if _run_demucs_warm(source, out_dir):
+                return
+        except Exception as err:
+            log.warning("In-process separation failed (%s); falling back to the CLI.", err)
+
     cmd = [
         sys.executable,
         "-m",
