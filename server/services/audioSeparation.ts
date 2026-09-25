@@ -476,7 +476,6 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       return [{ start: 0, length: 0 }];
     }
 
-
     const pieces: { start: number; length: number }[] = [];
     for (let start = 0; start < duration - 0.001; start += chunkSeconds) {
       pieces.push({
