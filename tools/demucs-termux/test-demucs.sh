@@ -34,8 +34,10 @@ echo
 import json
 import math
 import os
+import shutil
 import struct
 import sys
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -77,10 +79,21 @@ print(
     f"model={info.get('model', '?')} · busy={info.get('busy')}"
 )
 
+# ចម្លើយដែលគ្មាន version/model គឺជា demucs_api.py ជំនាន់ចាស់ — គេហទំព័រ​ប្រើមិនបានទេ
+# ព្រោះ `/separate` របស់វាមិនត្រប់ប return path របស់ vocals/instrumental។
+if "version" not in info:
+    print(
+        "⚠️  ចម្លើយ `/` គ្មាន version/model — នេះជា **demucs_api.py ជំនាន់ចាស់**\n"
+        "   ដំណោះស្រាយ៖ ក្នុង proot Ubuntu រត់  sh phone-start.sh  ម្តងទៀត — វាធ្វើបច្ចុប្បន្នភាពឲ្យស្វ័យប្រវត្តិ"
+    )
+
 # ---- ២. ញែកភ្លេងពិតៗលើសំឡេងសាកល្បង ---------------------------------------
 rate = 22050
 seconds = 2
-tmp = os.path.join("/tmp", f"demucs-selftest-{uuid.uuid4().hex[:8]}.wav")
+# ប្រើថតបណ្ដោះអាសន្នរបស់ប្រព័ន្ធ — Termux ដើមគ្មាន `/tmp` ទេ ដូច្នេះការសរសេរចូល `/tmp`
+# ដោយផ្ទាល់នឹងដួលភ្លាមជាមួយ FileNotFoundError មុនពេលបានសាកល្បងអ្វី។
+tmpdir = tempfile.mkdtemp(prefix="demucs-selftest-")
+tmp = os.path.join(tmpdir, f"selftest-{uuid.uuid4().hex[:8]}.wav")
 with wave.open(tmp, "wb") as handle:
     handle.setnchannels(1)
     handle.setsampwidth(2)
@@ -93,7 +106,7 @@ with wave.open(tmp, "wb") as handle:
 
 with open(tmp, "rb") as handle:
     payload = handle.read()
-os.unlink(tmp)
+shutil.rmtree(tmpdir, ignore_errors=True)
 
 boundary = uuid.uuid4().hex
 head = (

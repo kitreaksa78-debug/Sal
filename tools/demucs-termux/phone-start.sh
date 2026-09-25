@@ -184,11 +184,17 @@ LOG="$DIR/cloudflared.log"
 # Quick tunnel ទទួលបាន URL ថ្មី **រាល់ពេលបើកឡើងវិញ** ហើយ URL ចាស់ស្លាប់ភ្លាម។ ការរក្សា URL
 # ដដែលមានន័យថាគេហទំព័រមិនត្រូវកែអ្វីទេ — ដូច្នេះយើងសាកប្រើវាមុន។
 REUSE=""
+PREV=""
 if [ -f "$DIR/tunnel-url.txt" ]; then
   PREV=$(head -n 1 "$DIR/tunnel-url.txt" 2>/dev/null | tr -d ' \r\n')
-  if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -q '"status"'; then
-    REUSE="$PREV"
-  fi
+fi
+# បើឯកសារនោះគ្មាន (ឧ. ប្រើស្គ្រីស្គ្រីបជំនាន់ចាស់ពីមុន) សូមអាន URL ពី log ផ្ទាល់វិញ —
+# cloudflared សរសេរ URL របស់វានៅទីនោះ ដូច្នេះ URL ដែលកំពុងរស់មិនបាត់បង់ទេ។
+if [ -z "$PREV" ] && [ -f "$LOG" ]; then
+  PREV=$(grep -o 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' "$LOG" 2>/dev/null | tail -1 || true)
+fi
+if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -q '"status"'; then
+  REUSE="$PREV"
 fi
 
 if [ -z "$REUSE" ]; then
