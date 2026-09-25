@@ -69,11 +69,13 @@ export function isPro(): boolean {
 }
 
 /**
- * An admin account (the address listed in the server's `OWNER_EMAILS`).
+ * An admin account: an address listed in the server's `OWNER_EMAILS`, or — when
+ * that is unset — the account that signed up first.
  *
  * The server decides this — it reports the flag on every usage sync — and this
  * device only remembers the answer for the signed-in account. Admin is a
- * superset of Pro: no daily cap and no 2-minute limit on the owner's own app.
+ * superset of Pro: no daily cap and no 2-minute limit on the owner's own app,
+ * and it is what shows the stem-separation card in the studio.
  */
 export function isAdmin(): boolean {
   return readLocal(scoped(ADMIN_BASE)) === 'true';

@@ -3,7 +3,7 @@ import fs from 'fs';
 import os from 'os';
 import path from 'path';
 import { requireSession } from '../middleware/session.js';
-import { isAdminEmail } from '../services/accounts.js';
+import { isAppOwner } from '../services/accounts.js';
 import { SessionRecord } from '../types.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
@@ -23,13 +23,19 @@ const router = express.Router();
 
 /**
  * The stem service is infrastructure, not a per-account feature: only the app
- * owner (the addresses in `OWNER_EMAILS`) may look at it or change where the
- * pipeline sends audio.
+ * owner may look at it or change where the pipeline sends audio.
+ *
+ * `isAppOwner` is the right check here, not the bare `OWNER_EMAILS` allowlist:
+ * it is the same answer the account already gets from `/api/usage`, and a
+ * deployment that never set `OWNER_EMAILS` still has exactly one owner (the
+ * first account) — otherwise the panel would be visible but every request from
+ * it would come back 403, which is precisely the setup the owner needs to be
+ * able to do alone.
  */
 async function requireAdmin(req: Request, res: Response): Promise<SessionRecord | null> {
   const session = await requireSession(req, res);
   if (!session) return null;
-  if (!isAdminEmail(session.email)) {
+  if (!(await isAppOwner(session))) {
     res.status(403).json({
       error: 'តែគណនី Admin ទេដែលអាចកំណត់ម៉ាស៊ីនញែកភ្លេងបាន។ (Admin only.)',
     });

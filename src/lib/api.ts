@@ -417,7 +417,10 @@ export interface UsageSummary {
   date: string;
   count: number;
   totalDuration: number;
-  /** Server-side admin list (`OWNER_EMAILS`) — the account owns the app. */
+  /**
+   * The server says this account owns the app (`OWNER_EMAILS`, or the first
+   * account when that is unset). It is what unlocks the stem-separation card.
+   */
   admin?: boolean;
 }
 

@@ -112,6 +112,13 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
     setBusy('test');
     setStatus(null);
     try {
+      // Pasting the new tunnel URL and pressing this button is the whole job, so
+      // whatever is in the field is saved first — no separate save step to
+      // forget, and no developer needed when the phone's tunnel is reopened.
+      const typed = url.trim().replace(/\/+$/, '');
+      if (typed && typed !== connection?.url) {
+        apply(await saveSeparatorConnection({ url: typed }));
+      }
       const result: SeparatorTestResult = await testSeparatorConnection();
       if (result.ok && result.stems) {
         setStatus({
@@ -200,8 +207,12 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
                 ៣. បើគេហទំព័រនិយាយថាបរាជ័យ តែការសាកល្បងក្នុងទូរស័ព្ទជោគជ័យ (API ជំនាន់ចាស់)៖{' '}
                 <code className="text-cyan-300">sh restart-api.sh</code>
               </p>
-              <p>៤. URL ដែលទទួលបាន ត្រូវដាក់ក្នុងប្រអប់ខាងក្រោម (បើវាកំណត់ក្នុងកូដរួច គ្មានអ្វីត្រូវធ្វើ)។</p>
-              <p>៥. ចុច «សាកល្បងការតភ្ជាប់» — ការងារបកប្រែត្រូវការ Demucs នេះជាចាំបាច់ (គ្មានការជំនួស)។</p>
+              <p>៤. paste URL នោះក្នុងប្រអប់ខាងក្រោម (ជំនួសឈ្មោះចាស់)។</p>
+              <p>៥. ចុច «រក្សាទុក និងសាកល្បង» — វារក្សាទុក URL នោះជាប់ ហើយផ្ញើសំឡេងសាកល្បងពិតៗទៅទូរស័ព្ទ។ ជោគជ័យ = គេហទំព័រប្រើវាភ្លាម។</p>
+              <p>
+                ៦. ការងារបកប្រែត្រូវការ Demucs នេះជាចាំបាច់ (គ្មានការជំនួសទេ) — ដូច្នេះពេល tunnel
+                ប្តូរ URL ថ្មី គ្រាន់តែ paste ថ្មីម្តងទៀតនៅទីនេះ។
+              </p>
             </div>
           </div>
 
@@ -251,11 +262,11 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
             <button
               type="button"
               onClick={handleTest}
-              disabled={busy !== null || !connected}
+              disabled={busy !== null || !url.trim()}
               className="flex-1 min-w-[130px] min-h-[44px] px-4 rounded-xl text-xs font-semibold bg-emerald-500/20 text-emerald-200 border border-emerald-500/40 hover:bg-emerald-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
             >
               {busy === 'test' ? <Loader2 className="w-4 h-4 animate-spin" /> : <CheckCircle2 className="w-4 h-4" />}
-              សាកល្បងការតភ្ជាប់
+              រក្សាទុក និងសាកល្បង
             </button>
 
             {connection?.source === 'app' && (

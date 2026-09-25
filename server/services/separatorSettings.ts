@@ -49,17 +49,21 @@ export interface ResolvedSeparatorConnection {
 }
 
 /**
- * The Demucs service this deployment talks to, pinned in code.
+ * A Demucs service baked into the code, for a deployment that wants one.
  *
- * The phone's Cloudflare quick tunnel is the only thing that can separate
- * stems, so the whole pipeline points at it. Baking the address in means a job
- * can never be sent to a stale tunnel URL that some earlier session left behind
- * in the saved settings or in the deployment's env vars.
+ * It is deliberately empty. A Cloudflare quick tunnel is handed a brand-new
+ * hostname every time it is reopened, so the address has to be something the
+ * app owner can paste into the website's stem panel — no redeploy, no code
+ * change, nothing to ask a developer for. With this empty:
  *
- * To hand the choice back to the website's stem panel, set this to an empty
- * string.
+ *  1. the address saved from the website's stem panel is used;
+ *  2. otherwise `AUDIO_SEPARATOR_URL` from the deployment's environment is.
+ *
+ * Setting it to a full URL pins one service for every deployment and makes the
+ * panel read-only, which is only worth doing when the service has a permanent
+ * address.
  */
-export const PINNED_SEPARATOR_URL = 'https://maintained-supplements-handbook-thoughts.trycloudflare.com';
+export const PINNED_SEPARATOR_URL = '';
 
 const SETTINGS_FILE = path.join(process.cwd(), 'data', 'separator.json');
 const STATE_KEY = 'separator.json';

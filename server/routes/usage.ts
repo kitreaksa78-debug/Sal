@@ -1,6 +1,6 @@
 import express, { Request, Response } from 'express';
 import { getDatabase } from '../services/db.js';
-import { isAdminEmail } from '../services/accounts.js';
+import { isAppOwner } from '../services/accounts.js';
 import { requireSession } from '../middleware/session.js';
 import { logger } from '../utils/logger.js';
 
@@ -20,10 +20,13 @@ router.get('/', async (req: Request, res: Response) => {
   try {
     const usage = await getDatabase().getDailyUsage(session.userId);
     // `admin` travels with the usage because this is the call every signed-in
-    // browser already makes: an admin account lifts its own daily/plan limits.
+    // browser already makes: an admin account lifts its own daily/plan limits,
+    // and the browser uses the same flag to decide whether to show the owner's
+    // stem-separation panel. `isAppOwner` (not the bare allowlist) is what makes
+    // that flag true for the first account even when `OWNER_EMAILS` is unset.
     res.json({
       ...usage,
-      admin: isAdminEmail(session.email),
+      admin: await isAppOwner(session),
       account: { id: session.userId, email: session.email },
     });
   } catch (err) {
