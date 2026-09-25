@@ -95,6 +95,16 @@ const throttledUntil = new Map<string, number>();
 const THROTTLE_COOLDOWN_MS = Number(process.env.GEMINI_THROTTLE_COOLDOWN_MS || '60000');
 
 /**
+ * How long one model call may take before the rotation moves on.
+ *
+ * A free-tier endpoint that stalls instead of answering keeps the block waiting
+ * for as long as the socket stays open — one production job lost 76 seconds to a
+ * single call that never returned — and while it waits the sweep cannot reach a
+ * model that would have answered in a second.
+ */
+const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || '45000');
+
+/**
  * The model that answered last, tried first from then on. Without it every block
  * starts at the top of the list and walks the same unavailable models again.
  */
@@ -278,6 +288,10 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
               temperature: request.temperature ?? 0.3,
               responseMimeType: 'application/json',
               responseSchema: request.responseSchema as never,
+              // Bounded per call; the abort signal is the hard stop in case the
+              // SDK's own timeout is not applied to this request.
+              httpOptions: { timeout: GEMINI_REQUEST_TIMEOUT_MS },
+              abortSignal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS + 5_000),
             },
           });
 

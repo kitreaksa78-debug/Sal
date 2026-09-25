@@ -37,19 +37,87 @@ const STEM_RETRY_DELAY_MS = 3000;
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 /**
- * The largest piece the service has actually finished in time.
+ * About one Demucs window. The model processes a piece in whole ~7.8 second
+ * windows, so a piece this long costs one window while a piece twice as long
+ * costs three — which is why the first shrink is aimed here instead of at the
+ * smallest size. A phone that cannot finish 15s almost always finishes 7.5s,
+ * and 7.5s pieces carry two and a half times more audio per request than 3s
+ * pieces do. That difference is the whole throughput of the stage.
+ */
+const ONE_WINDOW_SECONDS = Math.max(
+  MIN_CHUNK_SECONDS,
+  Number(process.env.AUDIO_SEPARATOR_WINDOW_SECONDS || '7.5')
+);
+/** A piece that used under this share of the request budget has room to grow. */
+const GROW_FRACTION = 0.35;
+/** Successful full-size pieces in a row before more audio is asked for. */
+const GROW_AFTER = 3;
+/** How much more audio to try then. */
+const GROW_STEP_SECONDS = 2;
+
+/**
+ * The largest piece the service has proved it can finish in time.
  *
- * The first request that times out teaches every later piece — in this job and
- * the next — how much audio this phone can take, so the oversized attempt is
- * paid once instead of once per piece. It only ever shrinks, and never below
- * `MIN_CHUNK_SECONDS`.
+ * A phone's speed is not a constant: it drops when the battery is low or the
+ * device is warm and comes back once it is charged and cool, and a busy phone
+ * (a connection test running alongside the job) looks slow for a minute. So the
+ * remembered size both falls and rises:
+ *
+ *  - a piece that times out halves it, but the first shrink lands on one model
+ *    window rather than the smallest size, so the oversized attempt is paid once
+ *    and the pieces stay big enough to be efficient;
+ *  - pieces that finish with the budget to spare grow it back, so a job that ran
+ *    while the phone was hot does not leave every later job crippled.
+ *
+ * `pieceLimit()` still caps the result at the configured size, and nothing below
+ * `MIN_CHUNK_SECONDS` is ever attempted.
  */
 let learnedChunkSeconds = Number.POSITIVE_INFINITY;
+/** Consecutive full-size pieces that finished with the budget to spare. */
+let fastPieceRun = 0;
 
 /** Remember that `length` seconds of audio could not be finished in time. */
-function notePieceTooLong(length: number): void {
-  const smaller = Math.max(MIN_CHUNK_SECONDS, Number((length / 2).toFixed(3)));
-  if (smaller < learnedChunkSeconds) learnedChunkSeconds = smaller;
+function notePieceTimedOut(length: number): void {
+  fastPieceRun = 0;
+
+  const halved = Math.max(MIN_CHUNK_SECONDS, Number((length / 2).toFixed(3)));
+  const smaller =
+    length > ONE_WINDOW_SECONDS && halved < ONE_WINDOW_SECONDS ? ONE_WINDOW_SECONDS : halved;
+
+  if (smaller < learnedChunkSeconds) {
+    learnedChunkSeconds = smaller;
+    logger.warn(
+      `The stem service could not finish ${length.toFixed(1)}s of audio in time; pieces are now capped at ${smaller.toFixed(1)}s.`
+    );
+  }
+}
+
+/**
+ * Remember how long one finished piece took, and ask for more audio when the
+ * service keeps finishing them early. Only a piece that actually used the
+ * current limit counts: a short tail piece proves nothing about what fits.
+ */
+function notePieceFinished(
+  length: number,
+  limit: number,
+  elapsedMs: number,
+  budgetMs: number
+): void {
+  if (length < limit * 0.8 || elapsedMs > budgetMs * GROW_FRACTION) {
+    fastPieceRun = 0;
+    return;
+  }
+
+  fastPieceRun++;
+  if (fastPieceRun < GROW_AFTER) return;
+
+  fastPieceRun = 0;
+  if (!Number.isFinite(learnedChunkSeconds)) return;
+
+  learnedChunkSeconds = Number((learnedChunkSeconds + GROW_STEP_SECONDS).toFixed(3));
+  logger.info(
+    `The stem service finished ${length.toFixed(1)}s pieces well inside the request window; pieces may now go up to ${learnedChunkSeconds.toFixed(1)}s.`
+  );
 }
 
 /**
@@ -489,9 +557,10 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
   /**
    * One piece, with the fallback that makes long videos work: if the phone could
    * not finish it inside the tunnel's request window, the same piece is split in
-   * half and each half is sent on its own. Unfinished work only ever shrinks —
-   * the amount of audio sent never grows — so this always terminates. A piece
-   * that was the whole file (length 0) is measured first so it can shrink too.
+   * half and each half is sent on its own. A piece is never sent again at a size
+   * that already timed out inside the same job, so splitting always terminates.
+   * A piece that was the whole file (length 0) is measured first so it can shrink
+   * too.
    */
   private async separatePiece(
     base: string,
@@ -514,8 +583,14 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     const input = piece.length > 0 ? path.join(dir, 'piece.wav') : source;
     if (piece.length > 0) await this.cutPiece(source, piece, input);
 
+    const budgetMs = this.requestTimeoutMs(base);
+    const startedAt = Date.now();
+
     try {
-      return await this.separateWithRetries(base, apiKey, configuredPath, input, dir);
+      const result = await this.separateWithRetries(base, apiKey, configuredPath, input, dir);
+      // Evidence that this phone can take this much audio per request.
+      notePieceFinished(piece.length, this.pieceLimit(), Date.now() - startedAt, budgetMs);
+      return result;
     } catch (err) {
       if (!(err instanceof SlowSeparationError)) throw err;
 
@@ -536,7 +611,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       // a real failure and it is reported with the service's own words.
       if (length <= MIN_CHUNK_SECONDS) throw err;
 
-      notePieceTooLong(length);
+      notePieceTimedOut(length);
       return this.splitPiece(
         base,
         apiKey,
