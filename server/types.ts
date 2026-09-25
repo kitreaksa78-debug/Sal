@@ -114,6 +114,10 @@ export interface JobRecord {
   warning?: string;
   error?: string;
   technicalError?: string;
+  /** Set by the owner to stop a run that is still processing. */
+  cancelRequested?: boolean;
+  /** True when the run ended because it was cancelled, not because it failed. */
+  cancelled?: boolean;
   createdAt: string;
   completedAt?: string;
 }

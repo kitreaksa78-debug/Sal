@@ -123,6 +123,29 @@ export async function deleteAllJobs(): Promise<number> {
   return data.deleted ?? 0;
 }
 
+/**
+ * Ask the server to stop a job that is still processing. The pipeline checks
+ * the flag between steps, so the response may arrive while the run is winding
+ * down — the SSE stream then reports the final cancelled state.
+ */
+export async function cancelJob(
+  jobId: string
+): Promise<{ ok: boolean; status?: string; cancelling?: boolean; cancelled?: boolean }> {
+  const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: 'POST',
+    headers: authHeaders(),
+  });
+  const data = (await res.json().catch(() => ({}))) as {
+    ok?: boolean;
+    status?: string;
+    cancelling?: boolean;
+    cancelled?: boolean;
+    error?: string;
+  };
+  if (!res.ok) throw new ApiError(data.error || 'Failed to cancel job', res.status);
+  return { ok: Boolean(data.ok), status: data.status, cancelling: data.cancelling, cancelled: data.cancelled };
+}
+
 export async function listJobs(): Promise<JobRecord[]> {
   const res = await fetch(`${API_BASE}/jobs`, { headers: authHeaders() });
   if (!res.ok) {

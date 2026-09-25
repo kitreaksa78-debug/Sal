@@ -17,6 +17,21 @@ import { mapWithConcurrency } from '../utils/concurrency.js';
 
 export const jobEvents = new EventEmitter();
 
+/**
+ * Raised at a pipeline checkpoint once the owner asked the run to stop. It is
+ * caught before the generic failure handler so a cancelled job reads as
+ * "cancelled by the user", not as an error the user must investigate.
+ */
+export class JobCancelledError extends Error {
+  constructor() {
+    super('Job cancelled by the user');
+    this.name = 'JobCancelledError';
+  }
+}
+
+export const KHMER_CANCELLED_MESSAGE =
+  'បានបោះបង់ការងារដោយអ្នកប្រើ។ (Cancelled by user)';
+
 // Khmer status messages matching pipeline steps
 export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
   queued: 'កំពុងស្ថិតក្នុងជួររង់ចាំ...',
@@ -73,6 +88,11 @@ const STATUS_PROGRESS: Record<JobStatus, number> = {
 export class JobProcessor {
   private static activeJobs = new Set<string>();
 
+  /** Whether a pipeline is still running this job in this process. */
+  public static isActive(jobId: string): boolean {
+    return this.activeJobs.has(jobId);
+  }
+
   /**
    * Update job status in database and broadcast via SSE
    */
@@ -114,6 +134,18 @@ export class JobProcessor {
   }
 
   /**
+   * Stop at the next checkpoint when the owner asked to cancel this run.
+   *
+   * The database flag is the source of truth: the cancel request and the
+   * pipeline may run on different processes after a deploy, and a flag in
+   * memory would be lost exactly when it matters.
+   */
+  private static async throwIfCancelled(jobId: string): Promise<void> {
+    const fresh = await getDatabase().getJob(jobId);
+    if (fresh?.cancelRequested) throw new JobCancelledError();
+  }
+
+  /**
    * Main asynchronous pipeline processor
    */
   public static async processJob(jobId: string): Promise<void> {
@@ -148,6 +180,9 @@ export class JobProcessor {
     try {
       logger.info(`Starting asynchronous processing for job ${jobId}`);
 
+      // A cancel that landed while the job sat in the queue stops it here.
+      await this.throwIfCancelled(jobId);
+
       // STEP 1: VALIDATE VIDEO
       await this.updateJobState(jobId, 'extracting_audio');
 
@@ -169,6 +204,7 @@ export class JobProcessor {
       await FFmpegHelper.extractAudio(videoFilePath, rawAudioPath, 44100);
 
       // STEP 3: VOICE / MUSIC SEPARATION
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'separating_audio');
       const separationProvider = getAudioSeparationProvider();
       const separationResult = await separationProvider.separate(rawAudioPath, jobTempDir);
@@ -177,6 +213,7 @@ export class JobProcessor {
       const noVocalsTrack = separationResult.noVocalsPath; // music/background track
 
       // STEP 4: SPEECH-TO-TEXT & DETECTION
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'transcribing');
       const transcriptionProvider = getTranscriptionProvider();
 
@@ -219,11 +256,13 @@ export class JobProcessor {
       }
 
       // STEP 5: SPEAKER IDENTIFICATION
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'detecting_speakers');
       const speakerProfiles = SpeakerDetector.identifySpeakers(dialogueSegments);
       await db.updateJob(jobId, { speakers: speakerProfiles });
 
       // STEP 6: CONTEXT ANALYSIS & KHMER TRANSLATION
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'translating');
       const translationService = getTranslationService();
 
@@ -234,6 +273,9 @@ export class JobProcessor {
           dialogueSegments,
           job.settings,
           async (completedLines, totalLines) => {
+            // Translation is the longest stage: honour a cancel between blocks
+            // so a two-minute video does not keep burning quota after the stop.
+            await this.throwIfCancelled(jobId);
             const pct = 58 + Math.round((completedLines / Math.max(1, totalLines)) * 10);
             await this.updateJobState(
               jobId,
@@ -249,6 +291,8 @@ export class JobProcessor {
           await addWarning(warning);
         }
       } catch (translationErr: any) {
+        // A cancel is a deliberate stop — never paper over it with a warning.
+        if (translationErr instanceof JobCancelledError) throw translationErr;
         // A translator hiccup should not discard a good transcription: keep the
         // original lines and tell the user the subtitles stay in the source language.
         logger.warn(`Translation failed for job ${jobId}, keeping original dialogue:`, translationErr);
@@ -260,6 +304,7 @@ export class JobProcessor {
       await db.saveSegments(jobId, dialogueSegments);
 
       // STEP 7: KHMER TTS SPEECH SYNTHESIS & TIMING MATCH
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'generating_voice');
       const ttsProvider = getTTSProvider();
 
@@ -284,6 +329,9 @@ export class JobProcessor {
         let voicedSoFar = 0;
 
         await mapWithConcurrency(dialogueSegments, ttsConcurrency, async (seg, i) => {
+          // Stop asking for new lines as soon as the cancel arrives; the lines
+          // already synthesised are simply discarded with the temp folder.
+          await this.throwIfCancelled(jobId);
           const segOutPath = path.join(segmentsDir, `segment_${i + 1}.wav`);
           const originalDuration = Math.max(0.5, seg.end - seg.start);
 
@@ -353,6 +401,7 @@ export class JobProcessor {
 
       if (canDub) {
         // STEP 8: SYNC & ASSEMBLE DIALOGUE TRACK
+        await this.throwIfCancelled(jobId);
         await this.updateJobState(jobId, 'syncing');
         const masterSpeechTrack = path.join(jobTempDir, 'master_khmer_speech.wav');
         await AudioMixingService.assembleDialogueTrack(
@@ -363,6 +412,7 @@ export class JobProcessor {
         );
 
         // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
+        await this.throwIfCancelled(jobId);
         await this.updateJobState(jobId, 'mixing');
         await AudioMixingService.mixDubbedWithBackground(
           masterSpeechTrack,
@@ -386,6 +436,7 @@ export class JobProcessor {
       const savedAudioPath = await storage.saveFile('outputs', audioOutputFilename, finalMixedAudioTrack);
 
       // STEP 10: RENDER FINAL MP4 VIDEO (H.264 / AAC)
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'rendering');
       const tempFinalMp4 = path.join(jobTempDir, `khmer-dubbed-${jobId}.mp4`);
       await VideoRenderingService.renderMp4(
@@ -405,6 +456,7 @@ export class JobProcessor {
       const savedVttPath = await storage.saveFile('outputs', vttFilename, Buffer.from(vttContent, 'utf8'));
 
       // STEP 11: QUALITY CHECK
+      await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'quality_check');
       const qualityResult = await FFmpegHelper.verifyOutputQuality(tempFinalMp4);
       if (!qualityResult.valid) {
@@ -429,6 +481,21 @@ export class JobProcessor {
       // Clean up temporary processing folder
       await storage.cleanProcessingDir(jobId);
     } catch (err: any) {
+      // The owner pressed cancel: stop cleanly, keep the entry readable in the
+      // history, and free the half-written temp files.
+      if (err instanceof JobCancelledError) {
+        logger.info(`Job ${jobId} cancelled by the user`);
+        await this.updateJobState(jobId, 'failed', KHMER_CANCELLED_MESSAGE, {
+          error: KHMER_CANCELLED_MESSAGE,
+          cancelled: true,
+          completedAt: new Date().toISOString(),
+        });
+        try {
+          await storage.cleanProcessingDir(jobId);
+        } catch {}
+        return;
+      }
+
       logger.error(`Job ${jobId} processing failed with error:`, err);
 
       // Friendly Khmer error messages

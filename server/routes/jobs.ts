@@ -6,7 +6,7 @@ import { getDatabase } from '../services/db.js';
 import { getStorage, resolveStoredArtifact } from '../services/storage.js';
 import { requireSession } from '../middleware/session.js';
 import { isAppOwner } from '../services/accounts.js';
-import { JobProcessor, jobEvents } from '../services/jobProcessor.js';
+import { JobProcessor, jobEvents, KHMER_CANCELLED_MESSAGE } from '../services/jobProcessor.js';
 import { JobRecord, JobSettings, SOURCE_LANGUAGES } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
@@ -408,6 +408,58 @@ router.delete('/', async (req: Request, res: Response) => {
   } catch (err: any) {
     logger.error('Failed to clear history:', err);
     return res.status(500).json({ error: 'មិនអាចសម្អាតប្រវត្តិបានទេ។ សូមព្យាយាមម្តងទៀត។' });
+  }
+});
+
+/**
+ * POST /api/jobs/:id/cancel
+ * Stop a run that is still processing.
+ *
+ * The flag lives in the database because the pipeline checks it at every step
+ * boundary — a job may be running in another process after a deploy, and an
+ * in-memory flag would not reach it. A job nobody is running (queued before the
+ * server restarted, for example) is finished right here so the button never
+ * appears to do nothing.
+ */
+router.post('/:id/cancel', async (req: Request, res: Response) => {
+  try {
+    const session = await requireSession(req, res);
+    if (!session) return;
+
+    const db = getDatabase();
+    const job = await db.getJob(req.params.id);
+    if (!job || (job.ownerId && job.ownerId !== session.userId)) {
+      return res.status(404).json({ error: 'រកមិនឃើញការងារនេះទេ។ (Job not found)' });
+    }
+    if (!isBusy(job)) {
+      return res.json({ ok: true, status: job.status });
+    }
+
+    const flagged = await db.updateJob(job.id, { cancelRequested: true });
+    jobEvents.emit(`job:${job.id}`, flagged);
+
+    // Nothing is running this job in any process: mark it cancelled now instead
+    // of leaving a forever-spinning entry in the history.
+    if (!JobProcessor.isActive(job.id)) {
+      const cancelled = await db.updateJob(job.id, {
+        status: 'failed',
+        progress: 100,
+        message: 'Cancelled by user',
+        khmerMessage: KHMER_CANCELLED_MESSAGE,
+        error: KHMER_CANCELLED_MESSAGE,
+        cancelled: true,
+        completedAt: new Date().toISOString(),
+      });
+      await getStorage().cleanProcessingDir(job.id);
+      jobEvents.emit(`job:${job.id}`, cancelled);
+      return res.json({ ok: true, status: 'failed', cancelled: true });
+    }
+
+    logger.info(`Cancel requested for job ${job.id} by ${session.email}`);
+    return res.json({ ok: true, cancelling: true });
+  } catch (err: any) {
+    logger.error('Failed to cancel job:', err);
+    return res.status(500).json({ error: 'មិនអាចបោះបង់ការងារនេះបានទេ។' });
   }
 });
 

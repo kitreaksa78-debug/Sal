@@ -1,6 +1,7 @@
-import React from 'react';
-import { CheckCircle2, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
+import React, { useState } from 'react';
+import { CheckCircle2, Loader2, AlertCircle, RefreshCw, XCircle } from 'lucide-react';
 import { JobRecord, JobStatus } from '../types';
+import { cancelJob } from '../lib/api';
 
 interface ProcessingProgressProps {
   job: JobRecord;
@@ -75,6 +76,29 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
   const currentStatus = job.status;
   const isFailed = currentStatus === 'failed';
   const isCompleted = currentStatus === 'completed';
+  // The stop request is sent once; until the pipeline reaches its next
+  // checkpoint the button stays disabled instead of looking broken.
+  const [cancelling, setCancelling] = useState(false);
+  const cancelPending = cancelling || Boolean(job.cancelRequested && !isFailed && !isCompleted);
+
+  const handleCancel = async () => {
+    if (
+      !window.confirm(
+        'បោះបង់ការងារនេះ?\n\nវីដេអូដែលកំពុងដំណើរការនឹងឈប់ ហើយមិនទទួលបានលទ្ធផលទេ។'
+      )
+    ) {
+      return;
+    }
+    setCancelling(true);
+    try {
+      await cancelJob(job.id);
+    } catch (err: any) {
+      alert(err?.message || 'មិនអាចបោះបង់ការងារនេះបានទេ');
+      setCancelling(false);
+    }
+    // On success the server keeps the flag and the SSE stream reports the
+    // final cancelled state, which clears this button by itself.
+  };
 
   // Determine stage state: 'completed' | 'active' | 'pending'
   const getStageState = (stage: StepItem): 'completed' | 'active' | 'pending' => {
@@ -100,17 +124,40 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
     <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-7 shadow-2xl backdrop-blur-md space-y-5 sm:space-y-6">
       {/* Header & Current Status Banner */}
       <div className="text-center space-y-2">
-        <div className="inline-flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] sm:text-xs font-semibold text-center">
-          {!isFailed && !isCompleted && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-          {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
-          {isFailed && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
-          <span>
-            {isCompleted
-              ? 'ការបញ្ចូលសំឡេងរួចរាល់ (Dubbing Finished)'
-              : isFailed
-              ? 'ការដំណើរការបរាជ័យ (Processing Failed)'
-              : 'ដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរ (Active Dubbing)'}
-          </span>
+        <div className="flex flex-col items-center gap-3">
+          <div className="inline-flex flex-wrap items-center justify-center gap-2 px-3 py-1.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 text-[11px] sm:text-xs font-semibold text-center">
+            {!isFailed && !isCompleted && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+            {isCompleted && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />}
+            {isFailed && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
+            <span>
+              {isCompleted
+                ? 'ការបញ្ចូលសំឡេងរួចរាល់ (Dubbing Finished)'
+                : isFailed
+                ? job.cancelled
+                  ? 'បានបោះបង់ (Cancelled)'
+                  : 'ការដំណើរការបរាជ័យ (Processing Failed)'
+                : cancelPending
+                ? 'កំពុងបោះបង់... (Cancelling)'
+                : 'ដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរ (Active Dubbing)'}
+            </span>
+          </div>
+
+          {/* Stop the run: the pipeline checks the flag between steps. */}
+          {!isFailed && !isCompleted && (
+            <button
+              type="button"
+              onClick={handleCancel}
+              disabled={cancelPending}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-slate-900/70 hover:bg-rose-500/15 text-slate-300 hover:text-rose-300 border border-slate-700 hover:border-rose-500/40 text-xs font-semibold transition-colors min-h-[40px] disabled:opacity-60 disabled:cursor-not-allowed"
+            >
+              {cancelPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <XCircle className="w-4 h-4" />
+              )}
+              <span>{cancelPending ? 'កំពុងបោះបង់…' : 'បោះបង់ (Cancel)'}</span>
+            </button>
+          )}
         </div>
 
         <h2 className="text-lg sm:text-2xl font-bold text-white tracking-tight">
@@ -144,18 +191,39 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
         </div>
       )}
 
-      {/* Error Card */}
+      {/* Error Card — a cancelled run is a decision, not a failure to investigate */}
       {isFailed && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-200 text-xs leading-relaxed space-y-3">
+        <div
+          className={`p-4 rounded-xl text-xs leading-relaxed space-y-3 border ${
+            job.cancelled
+              ? 'bg-slate-900/70 border-slate-700 text-slate-300'
+              : 'bg-rose-500/10 border-rose-500/30 text-rose-200'
+          }`}
+        >
           <div className="flex items-start gap-2.5">
-            <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            {job.cancelled ? (
+              <XCircle className="w-5 h-5 text-slate-400 shrink-0 mt-0.5" />
+            ) : (
+              <AlertCircle className="w-5 h-5 text-rose-400 shrink-0 mt-0.5" />
+            )}
             <div>
-              <div className="font-bold text-sm text-rose-300">
-                {job.error || 'មានបញ្ហាក្នុងការដំណើរការសំឡេង'}
+              <div
+                className={`font-bold text-sm ${job.cancelled ? 'text-slate-200' : 'text-rose-300'}`}
+              >
+                {job.cancelled
+                  ? 'បានបោះបង់ការងារនេះរួច (Job Cancelled)'
+                  : job.error || 'មានបញ្ហាក្នុងការដំណើរការសំឡេង'}
               </div>
-              <p className="mt-1 text-slate-300">
-                មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត ឬពិនិត្យការកំណត់សេវាកម្ម AI។
-              </p>
+              {!job.cancelled && (
+                <p className="mt-1 text-slate-300">
+                  មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត ឬពិនិត្យការកំណត់សេវាកម្ម AI។
+                </p>
+              )}
+              {job.cancelled && (
+                <p className="mt-1 text-slate-400">
+                  ឯកសារផ្ទៃខាងក្រោយត្រូវបានសម្អាត។ សូមបញ្ចូលវីដេអូឡើងវិញ ដើម្បីចាប់ផ្តើមថ្មី។
+                </p>
+              )}
             </div>
           </div>
 
@@ -163,10 +231,14 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
             <button
               type="button"
               onClick={onRetry}
-              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-rose-600 hover:bg-rose-500 text-white font-medium text-xs shadow-md transition-colors"
+              className={`inline-flex items-center gap-1.5 px-4 py-2 rounded-lg text-white font-medium text-xs shadow-md transition-colors ${
+                job.cancelled
+                  ? 'bg-slate-700 hover:bg-slate-600'
+                  : 'bg-rose-600 hover:bg-rose-500'
+              }`}
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>សាកល្បងម្តងទៀត (Try Again)</span>
+              <span>{job.cancelled ? 'បញ្ចូលវីដេអូថ្មី (New Video)' : 'សាកល្បងម្តងទៀត (Try Again)'}</span>
             </button>
           )}
         </div>
