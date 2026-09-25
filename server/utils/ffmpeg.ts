@@ -153,24 +153,98 @@ export class FFmpegHelper {
     }
   }
 
+  /** Build a safe atempo chain for any factor using 0.5..2.0 steps. */
+  public static buildAtempoChain(factor: number): string {
+    const clamped = Math.max(0.25, Math.min(4.0, factor));
+    // Decompose into 0.5..2.0 pieces
+    let remaining = clamped;
+    const parts: string[] = [];
+    // Push 2.0s while >2
+    while (remaining > 2.0 + 1e-6) {
+      parts.push('atempo=2.000');
+      remaining /= 2.0;
+    }
+    while (remaining < 0.5 - 1e-6) {
+      parts.push('atempo=0.500');
+      remaining /= 0.5;
+    }
+    parts.push(`atempo=${remaining.toFixed(3)}`);
+    return parts.join(',');
+  }
+
   /**
-   * Adjust audio tempo/duration using atempo filter (from 0.5x to 2.0x) without altering pitch
+   * Adjust audio tempo/duration using atempo filter without altering pitch.
+   * Supports any factor via chained atempo (FFmpeg single atempo is 0.5..2.0).
    */
   public static async adjustTempo(
     inputAudioPath: string,
     outputAudioPath: string,
     tempoFactor: number
   ): Promise<void> {
-    // Clamp tempo factor between 0.5 and 2.0 (FFmpeg atempo constraint)
-    const factor = Math.max(0.5, Math.min(2.0, tempoFactor));
+    // Keep within broadly safe range; chain handles >2 or <0.5
+    const factor = Math.max(0.25, Math.min(4.0, tempoFactor));
+    const chain = this.buildAtempoChain(factor);
     const args = [
       '-y',
       '-i', inputAudioPath,
-      '-filter:a', `atempo=${factor.toFixed(3)}`,
+      '-filter:a', chain,
       '-vn',
       outputAudioPath,
     ];
     await this.execute(args);
+  }
+
+  /**
+   * Fit generated speech into the original slot exactly so lip-sync is 100%:
+   * - If duration is within 8% of slot -> keep natural (no tempo) to preserve voice.
+   * - If longer -> speed up capped at maxTempo, then hard-trim to slot so it never
+   *   bleeds into the next line. Trim is last resort; tempo cap keeps voice human.
+   * - If much shorter (<75% of slot) -> keep natural duration; the assembler will
+   *   leave silence for the rest of the slot (no artificial slow-down).
+   * Returns measured final duration.
+   */
+  public static async fitAudioToSlot(
+    inputAudioPath: string,
+    outputAudioPath: string,
+    slotDuration: number,
+    maxTempo: number = 1.25
+  ): Promise<number> {
+    const dur = await this.getAudioDuration(inputAudioPath);
+    if (!dur || !slotDuration || slotDuration < 0.35) {
+      fs.copyFileSync(inputAudioPath, outputAudioPath);
+      return await this.getAudioDuration(outputAudioPath);
+    }
+    const ratio = dur / slotDuration;
+    // Already fits within 8% tolerance - keep natural delivery
+    if (ratio <= 1.08 && ratio >= 0.92) {
+      fs.copyFileSync(inputAudioPath, outputAudioPath);
+      return dur;
+    }
+    // Too long: speed up (capped) then hard-trim to slot to guarantee sync
+    if (ratio > 1.08) {
+      const needed = Math.min(maxTempo, ratio);
+      const chain = this.buildAtempoChain(needed);
+      // atrim to slot after tempo ensures no overrun even if maxTempo still not enough
+      const filter = `${chain},atrim=end=${slotDuration.toFixed(3)},asetpts=PTS-STARTPTS`;
+      // Need aresample to keep valid wav length after trim
+      await this.execute([
+        '-y',
+        '-i', inputAudioPath,
+        '-filter:a', filter,
+        '-vn',
+        outputAudioPath,
+      ]);
+      const outDur = await this.getAudioDuration(outputAudioPath);
+      if (needed >= maxTempo && ratio > maxTempo * 1.02) {
+        logger.info(`Slot ${slotDuration.toFixed(2)}s: speech ${dur.toFixed(2)}s needed ${ratio.toFixed(2)}x but capped at ${maxTempo}x; trimmed to ${outDur.toFixed(2)}s to keep sync.`);
+      } else {
+        logger.info(`Slot ${slotDuration.toFixed(2)}s: fitted speech ${dur.toFixed(2)}s -> ${outDur.toFixed(2)}s (${needed.toFixed(2)}x)`);
+      }
+      return outDur;
+    }
+    // Short: keep natural duration, let timeline carry silence
+    fs.copyFileSync(inputAudioPath, outputAudioPath);
+    return dur;
   }
 
   /**
@@ -209,7 +283,7 @@ export class FFmpegHelper {
       // Real stereo: cancel the centre for the background. Bass is recovered from the
       // difference channel itself — never from the original mix, because feeding the
       // original back in re-injects the dialogue's own low frequencies (its vocal
-      // fundamentals) into the "music" track.
+      // fundamentals) into the \"music\" track.
       const noVocalsFilter = [
         '[0:a]pan=stereo|c0=c0-c1|c1=c1-c0,asplit=2[karaoke][bassfeed]',
         '[bassfeed]lowpass=f=150,bass=g=5:f=110[bass]',
@@ -243,7 +317,7 @@ export class FFmpegHelper {
     // signal is band-limited to the speech range (Whisper hears up to ~8 kHz, so the
     // old 4 kHz cut was throwing sibilants away), the steady background hiss/music
     // bed is reduced, and the level is evened out so quiet lines are not skipped.
-    // This is what turns "guessed" transcripts into the right words.
+    // This is what turns \"guessed\" transcripts into the right words.
     const enhanceSpeech = process.env.STT_SPEECH_ENHANCE !== '0';
     const vocalsFilter = [
       '[0:a]pan=mono|c0=0.5*c0+0.5*c1,' +
@@ -410,7 +484,7 @@ export class FFmpegHelper {
     // Duck the background inside each dialogue window instead of muting it.
     // A professional dub lowers the soundtrack a few dB under the voice and keeps
     // it playing; cutting it to silence every time somebody speaks is the single
-    // most obvious "this video was dubbed" give-away, and it is what a whole-band
+    // most obvious \"this video was dubbed\" give-away, and it is what a whole-band
     // -60 dB gate used to do. So:
     //   * centre-cancelled background (only bleed left) -> a light 6 dB dip, the
     //     music stays continuous and the Khmer voice simply sits on top of it;

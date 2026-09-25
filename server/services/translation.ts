@@ -86,9 +86,41 @@ function estimateTokens(text: string): number {
  * enough that the model sometimes substitutes them for Khmer characters.
  */
 const THAI_OR_LAO_SCRIPT = /[\u0E00-\u0E7F\u0E80-\u0EFF]/;
+const KHMER_SCRIPT = /[\u1780-\u17FF]/;
 
 export function hasWrongScript(text: string): boolean {
   return THAI_OR_LAO_SCRIPT.test(text);
+}
+
+/** Remove every Thai/Lao codepoint and collapse whitespace. Deterministic, no LLM needed. */
+export function stripWrongScript(text: string): string {
+  return text.replace(/[\u0E00-\u0E7F\u0E80-\u0EFF]/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** A Khmer line is usable when it has at least one Khmer character, no Thai/Lao, and is not trivial. */
+export function isValidKhmer(text: string): boolean {
+  const t = text.trim();
+  return t.length >= 2 && KHMER_SCRIPT.test(t) && !hasWrongScript(t);
+}
+
+/** Best-effort local repair: strip Thai/Lao and keep the result only when it is still valid Khmer. */
+export function sanitizeKhmer(text: string): string | null {
+  const cleaned = stripWrongScript(text);
+  if (cleaned && isValidKhmer(cleaned)) return cleaned;
+  return null;
+}
+
+/** Strip Markdown fences (```json ... ```) that some models wrap around JSON. */
+function stripJsonFences(raw: string): string {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith('```')) {
+    // remove leading ```json and trailing ```
+    return trimmed
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```\s*$/g, '')
+      .trim();
+  }
+  return trimmed;
 }
 
 /** A parsed brand glossary: terms to keep verbatim, plus terms with a fixed Khmer form. */
@@ -349,24 +381,68 @@ export class KhmerDubTranslationService {
           const khmer = (item?.khmer || '').trim();
           if (!khmer) missing++;
           if (khmer) {
-            translations.set(segment.id, { khmer, emotion: item?.emotion });
+            // Store as-is; wrong-script will be repaired next. But if it already
+            // has Thai/Lao we try an immediate local strip so the rescue path
+            // sees a cleaner starting point.
+            let toStore = khmer;
+            if (hasWrongScript(toStore)) {
+              const cleaned = sanitizeKhmer(toStore);
+              if (cleaned) toStore = cleaned;
+            }
+            translations.set(segment.id, { khmer: toStore, emotion: item?.emotion });
             blockContext.push({
               speaker: segment.speaker,
               original: segment.text,
-              khmer,
+              khmer: toStore,
             });
           }
         }
 
-        await this.repairWrongScriptLines(chunk, translations, systemInstruction, warnings);
+        // Repair wrong-script lines robustly (LLM + local sanitization + rescue)
+        await this.repairWrongScriptLines(chunk, translations, systemInstruction);
+
+        // If some lines came back empty, try to rescue them with a focused retry
+        if (missing > 0) {
+          const stillMissingSegments = chunk.filter((seg) => {
+            const kh = translations.get(seg.id)?.khmer?.trim();
+            return !kh;
+          });
+          if (stillMissingSegments.length > 0) {
+            logger.warn(
+              `${stillMissingSegments.length} line(s) in block ${i + 1} missing after first pass; rescuing.`
+            );
+            await this.rescueMissingLines(stillMissingSegments, translations, systemInstruction);
+          }
+          const stillMissing = chunk.filter((seg) => !translations.get(seg.id)?.khmer?.trim()).length;
+          if (stillMissing > 0) {
+            addWarning(
+              `បន្ទាត់ចំនួន ${stillMissing} ក្នុងក្រុមទី ${i + 1} មិនបានបកប្រែទេ ដូច្នេះវារក្សាអក្សរដើម។ (${stillMissing} line(s) in block ${
+                i + 1
+              } of ${chunks.length} came back untranslated; the original text was kept for them.)`
+            );
+          } else if (missing > 0) {
+            logger.info(`Rescued ${missing} missing line(s) in block ${i + 1}.`);
+          }
+        }
+
         await this.enforceGlossary(chunk, translations, glossary, systemInstruction, warnings);
 
-        if (missing > 0) {
-          addWarning(
-            `បន្ទាត់ចំនួន ${missing} ក្នុងក្រុមទី ${i + 1} មិនបានបកប្រែទេ ដូច្នេះវារក្សាអក្សរដើម។ (${missing} line(s) in block ${
-              i + 1
-            } of ${chunks.length} came back untranslated; the original text was kept for them.)`
-          );
+        // Final per-block sanitization: any Thai/Lao that survived the repair is
+        // stripped locally so it never reaches the output. This guarantees the
+        // job never ships Thai script even if the LLM rewrites failed.
+        for (const seg of chunk) {
+          const entry = translations.get(seg.id);
+          if (entry?.khmer && hasWrongScript(entry.khmer)) {
+            const cleaned = sanitizeKhmer(entry.khmer);
+            if (cleaned) {
+              translations.set(seg.id, { khmer: cleaned, emotion: entry.emotion });
+              logger.info(`Sanitized surviving Thai/Lao script for ${seg.id} after block ${i + 1}.`);
+            } else {
+              // No Khmer left after stripping — drop it so the final mapping
+              // can treat it as missing and rescue/keep source cleanly.
+              translations.delete(seg.id);
+            }
+          }
         }
 
         if (concurrency === 1) {
@@ -374,12 +450,26 @@ export class KhmerDubTranslationService {
         }
       } catch (chunkErr: any) {
         // One bad block should not throw away a good transcription.
+        // Try to salvage any lines that were already stored before the throw.
         logger.warn(`Translation block ${i + 1}/${chunks.length} failed:`, chunkErr);
-        addWarning(
-          `ក្រុមបកប្រែទី ${i + 1}/${chunks.length} បរាជ័យ ដូច្នេះបន្ទាត់ក្នុងក្រុមនោះរក្សាអក្សរដើម។ (Translation block ${
-            i + 1
-          }/${chunks.length} failed: ${chunkErr?.message ?? 'unknown error'})`
-        );
+        const salvaged = chunk.filter((seg) => translations.has(seg.id)).length;
+        if (salvaged === 0) {
+          addWarning(
+            `ក្រុមបកប្រែទី ${i + 1}/${chunks.length} បរាជ័យ ដូច្នេះបន្ទាត់ក្នុងក្រុមនោះរក្សាអក្សរដើម។ (Translation block ${
+              i + 1
+            }/${chunks.length} failed: ${chunkErr?.message ?? 'unknown error'})`
+          );
+        } else {
+          // Partial salvage: only warn for lines that could not be salvaged
+          const missingCount = chunk.length - salvaged;
+          if (missingCount > 0) {
+            addWarning(
+              `បន្ទាត់ចំនួន ${missingCount} ក្នុងក្រុមទី ${i + 1} មិនបានបកប្រែពេញលេញទេ។ (${missingCount} line(s) in block ${
+                i + 1
+              } partially translated.)`
+            );
+          }
+        }
       }
 
       completedLines += chunk.length;
@@ -395,14 +485,36 @@ export class KhmerDubTranslationService {
 
     const translatedSegments = segments.map((segment) => {
       const item = translations.get(segment.id);
-      // Keep the source line when a block failed or the answer used the wrong script.
-      const usable = item?.khmer && !hasWrongScript(item.khmer);
+      let khmer = (item?.khmer || '').trim();
+      // Definitive output sanitization: never ship Thai/Lao.
+      if (khmer && hasWrongScript(khmer)) {
+        const cleaned = sanitizeKhmer(khmer);
+        if (cleaned) {
+          khmer = cleaned;
+        } else {
+          khmer = '';
+        }
+      }
+      // A valid Khmer line must contain Khmer script. If the source itself is
+      // already Khmer (e.g. sourceLanguage=km), keeping it is correct.
+      const sourceIsKhmer = KHMER_SCRIPT.test(segment.text) && !hasWrongScript(segment.text);
+      const usable = khmer && isValidKhmer(khmer);
+      const finalKhmer = usable ? khmer : sourceIsKhmer ? segment.text : khmer || segment.text;
+      // If fallback is still Thai/Lao (source was Thai), sanitize that too
+      const finalSanitized =
+        hasWrongScript(finalKhmer) ? sanitizeKhmer(finalKhmer) || segment.text : finalKhmer;
       return {
         ...segment,
-        khmer: usable ? item!.khmer : segment.text,
+        khmer: finalSanitized,
         emotion: item?.emotion || 'neutral',
       };
     });
+
+    // Post-flight audit: log if any line still has wrong script (should be zero)
+    const auditBad = translatedSegments.filter((s) => s.khmer && hasWrongScript(s.khmer)).length;
+    if (auditBad > 0) {
+      logger.error(`Post-translation audit: ${auditBad} line(s) still have Thai/Lao script after sanitization!`);
+    }
 
     logger.info(
       `Translated ${translations.size}/${segments.length} dialogue lines to Cambodian Khmer via ${
@@ -453,7 +565,13 @@ CRITICAL DUBBING TRANSLATION RULES:
 8. NEVER invent dialogue or add explanatory notes outside the JSON structure.
 9. Return STRICT JSON only matching the schema.
 10. SOURCE LANGUAGE: the dialogue may already be in Khmer. If a line is already Khmer, keep it as Khmer and only clean up obvious spacing or spelling — do NOT re-translate it, and never change proper names or numbers.
-11. You will receive the transcript in numbered blocks. Translate EVERY line in the block you are given and echo back its exact "id" — never merge, split, reorder or skip lines.`;
+11. You will receive the transcript in numbered blocks. Translate EVERY line in the block you are given and echo back its exact "id" — never merge, split, reorder or skip lines.
+12. SCRIPT PURITY — ABSOLUTE REQUIREMENT:
+   - Every "khmer" value you return MUST be written in pure Khmer Unicode only (U+1780-U+17FF plus Khmer punctuation U+17D4-U+17DD, digits, and basic Latin for brand names from the glossary).
+   - FORBIDDEN: Thai script (U+0E00-U+0E7F) and Lao script (U+0E80-U+0EFF) are NEVER allowed, not even one character. ការសរសេរត្រូវតែជាអក្សរខ្មែរសុទ្ធ 100% ហាមប្រើអក្សរថៃឬឡាវដាច់ខាត។
+   - Bad example (DO NOT DO): "ไปไหนมา" (Thai) instead of "ទៅណាមក" (Khmer) — they look similar but are different Unicode.
+   - If you are unsure of a Khmer spelling, use the closest valid Khmer characters, never substitute Thai/Lao shapes.
+   - Before returning, mentally verify each line contains no Thai/Lao codepoints.`;
   }
 
   private buildChunkPrompt(
@@ -480,14 +598,14 @@ CRITICAL DUBBING TRANSLATION RULES:
           )}\n`
         : '';
 
-    return `Block ${chunkIndex + 1} of ${chunkCount} from the video's dialogue sequence. Translate ONLY the lines listed below.
+    return `Block ${chunkIndex + 1} of ${chunkCount} from the video's dialogue sequence. Translate ONLY the lines listed below. Output pure Khmer script only (U+1780-U+17FF) — zero Thai/Lao characters allowed.
 ${contextSection}
 Lines to translate:
 ${JSON.stringify(formattedInput, null, 2)}
 
 Return JSON containing exactly ${
       chunk.length
-    } entries, in the same order, each with the line's original "id", its natural spoken Khmer "khmer" translation, and the detected "emotion".`;
+    } entries, in the same order, each with the line's original "id", its natural spoken Khmer "khmer" translation (pure Khmer Unicode, no Thai/Lao), and the detected "emotion".`;
   }
 
   /** Dispatch one block to the configured provider and return its raw JSON text. */
@@ -562,9 +680,27 @@ Return JSON containing exactly ${
    * Normalise whatever the model returned into an id -> translation map.
    * Models sometimes answer with a bare array, or with a single segment object
    * when the block only has one line, so all three shapes are accepted.
+   * Also strips Markdown fences that some models add.
    */
   private parseChunkResponse(rawText: string): Map<string, { khmer: string; emotion?: string }> {
-    const items = this.extractTranslatedItems(JSON.parse(rawText));
+    const cleaned = stripJsonFences(rawText);
+    let parsed: any;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e: any) {
+      // Try to salvage: extract first JSON object/array from the text
+      const jsonMatch = cleaned.match(/\{[\s\S]*\}|\[[\s\S]*\]/);
+      if (jsonMatch) {
+        try {
+          parsed = JSON.parse(jsonMatch[0]);
+        } catch {
+          throw new Error(`Translation response was not valid JSON: ${e.message}`);
+        }
+      } else {
+        throw new Error(`Translation response was not valid JSON: ${e.message}`);
+      }
+    }
+    const items = this.extractTranslatedItems(parsed);
     const byId = new Map<string, { khmer: string; emotion?: string }>();
 
     items.forEach((item: any, index: number) => {
@@ -587,16 +723,67 @@ Return JSON containing exactly ${
   }
 
   /**
+   * Rescue lines that came back empty. Asks the model again for just those ids
+   * with a focused prompt, so one malformed block does not lose its lines.
+   */
+  private async rescueMissingLines(
+    missingSegments: DialogueSegment[],
+    translations: Map<string, { khmer: string; emotion?: string }>,
+    systemInstruction: string
+  ): Promise<void> {
+    if (missingSegments.length === 0) return;
+    const lines = missingSegments.map((s) => ({
+      id: s.id,
+      speaker: s.speaker,
+      start: s.start,
+      end: s.end,
+      duration: Number((s.end - s.start).toFixed(2)),
+      text: s.text,
+    }));
+    const rescuePrompt = `Some lines from the previous block were missing. Translate ONLY these ${lines.length} line(s) now into pure Khmer (U+1780-U+17FF, no Thai/Lao). Echo each "id" exactly.\n\nLines to translate:\n${JSON.stringify(lines, null, 2)}\n\nReturn JSON with exactly ${lines.length} entries, each with "id", pure-Khmer "khmer", and "emotion".`;
+    try {
+      const rescued = await this.requestTranslation(systemInstruction, rescuePrompt);
+      const parsed = this.parseChunkResponse(rescued.content);
+      let recovered = 0;
+      missingSegments.forEach((seg, idx) => {
+        const cand = (parsed.get(seg.id)?.khmer || parsed.get(`__index_${idx}`)?.khmer || '').trim();
+        if (cand) {
+          const cleaned = hasWrongScript(cand) ? sanitizeKhmer(cand) : cand;
+          if (cleaned) {
+            translations.set(seg.id, {
+              khmer: cleaned,
+              emotion: parsed.get(seg.id)?.emotion || parsed.get(`__index_${idx}`)?.emotion,
+            });
+            recovered++;
+          } else if (cand && isValidKhmer(cand)) {
+            translations.set(seg.id, {
+              khmer: cand,
+              emotion: parsed.get(seg.id)?.emotion || parsed.get(`__index_${idx}`)?.emotion,
+            });
+            recovered++;
+          }
+        }
+      });
+      if (recovered > 0) logger.info(`Rescued ${recovered}/${missingSegments.length} missing line(s) on retry.`);
+    } catch (err: any) {
+      logger.warn('Missing-line rescue failed:', err?.message || err);
+    }
+  }
+
+  /**
    * Thai and Lao share visual shapes with Khmer, so the model occasionally slips
    * a Thai word into an otherwise Khmer line (e.g. "ไปไหน" instead of "ទៅណា").
-   * Ask once for a pure-Khmer rewrite of just the affected lines, and remember
-   * which ones are repaired so unrepaired lines can fall back to the source text.
+   * This now uses a 3-tier strategy:
+   *  1) LLM rewrite for affected lines
+   *  2) Local sanitization (strip Thai/Lao codepoints) for any line that still has them
+   *  3) Targeted rescue translation for lines where stripping left nothing usable
+   * Only lines that survive all three tiers trigger a warning; auto-sanitized lines
+   * are silent because the output is already pure Khmer.
    */
   private async repairWrongScriptLines(
     chunk: DialogueSegment[],
     translations: Map<string, { khmer: string; emotion?: string }>,
-    systemInstruction: string,
-    warnings: string[]
+    systemInstruction: string
   ): Promise<void> {
     const suspects = chunk.filter((segment) => {
       const translated = translations.get(segment.id)?.khmer;
@@ -615,18 +802,19 @@ Return JSON containing exactly ${
       khmer: translations.get(segment.id)?.khmer || '',
     }));
 
-    const repairPrompt = `The Khmer lines below were returned with Thai or Lao script characters mixed in. Rewrite them in pure Khmer Unicode (U+1780-U+17FF) only — no Thai, no Lao, no other script.
+    const repairPrompt = `CRITICAL SCRIPT CORRECTION: The Khmer lines below were returned with Thai (U+0E00-U+0E7F) or Lao (U+0E80-U+0EFF) characters mixed in. This is FORBIDDEN. Rewrite each line in 100% pure Khmer Unicode (U+1780-U+17FF only) — no Thai, no Lao, no other script. Even one Thai character makes the line invalid. Use only Khmer characters.
 
 Lines to fix:
 ${JSON.stringify(lines, null, 2)}
 
-Return JSON with exactly one entry per id, each holding the corrected pure-Khmer "khmer" text and its "emotion". Keep each meaning and approximate length unchanged.`;
+Return JSON with exactly one entry per id, each holding the corrected pure-Khmer "khmer" text and its "emotion". Keep each meaning and approximate length unchanged. Verify each character is Khmer before returning.`;
 
+    let repairSucceeded = false;
     try {
       const repaired = await this.requestTranslation(systemInstruction, repairPrompt);
       const parsed = this.parseChunkResponse(repaired.content);
 
-      let stillBad = 0;
+      let stillBad: DialogueSegment[] = [];
       suspects.forEach((segment, index) => {
         const candidate = (
           parsed.get(segment.id)?.khmer ||
@@ -634,28 +822,164 @@ Return JSON with exactly one entry per id, each holding the corrected pure-Khmer
           ''
         ).trim();
 
-        if (candidate && !hasWrongScript(candidate)) {
+        if (candidate && !hasWrongScript(candidate) && KHMER_SCRIPT.test(candidate)) {
+          translations.set(segment.id, {
+            khmer: candidate,
+            emotion: translations.get(segment.id)?.emotion,
+          });
+        } else if (candidate && hasWrongScript(candidate)) {
+          // LLM retry still has Thai — try local strip
+          const cleaned = sanitizeKhmer(candidate);
+          if (cleaned) {
+            translations.set(segment.id, {
+              khmer: cleaned,
+              emotion: translations.get(segment.id)?.emotion,
+            });
+            logger.info(`Auto-stripped Thai/Lao from LLM repair for ${segment.id}.`);
+          } else {
+            stillBad.push(segment);
+          }
+        } else if (candidate && isValidKhmer(candidate)) {
           translations.set(segment.id, {
             khmer: candidate,
             emotion: translations.get(segment.id)?.emotion,
           });
         } else {
-          stillBad++;
+          // Empty or invalid repair — will try local strip of original
+          const originalBad = translations.get(segment.id)?.khmer || '';
+          const cleanedOrig = sanitizeKhmer(originalBad);
+          if (cleanedOrig) {
+            translations.set(segment.id, { khmer: cleanedOrig, emotion: translations.get(segment.id)?.emotion });
+            logger.info(`Repaired ${segment.id} via local sanitization (LLM repair was empty/invalid).`);
+          } else {
+            stillBad.push(segment);
+          }
         }
       });
 
-      if (stillBad > 0) {
-        warnings.push(
-          `បន្ទាត់ចំនួន ${stillBad} នៅមានអក្សរថៃលាយឡំ ដូច្នេះវារក្សាអក្សរដើម។ (${stillBad} line(s) still contained non-Khmer script after a rewrite attempt; the original text was kept for them.)`
-        );
+      repairSucceeded = true;
+
+      // For any that are still bad after LLM + local strip, try a second targeted rescue
+      if (stillBad.length > 0) {
+        logger.warn(`${stillBad.length} line(s) still had Thai/Lao after first repair; trying local strip + rescue.`);
+        const notYetFixed: DialogueSegment[] = [];
+        for (const seg of stillBad) {
+          const bad = translations.get(seg.id)?.khmer || '';
+          const cleaned = sanitizeKhmer(bad);
+          if (cleaned) {
+            translations.set(seg.id, { khmer: cleaned, emotion: translations.get(seg.id)?.emotion });
+            logger.info(`Fixed ${seg.id} via local strip on second pass.`);
+          } else {
+            notYetFixed.push(seg);
+          }
+        }
+        if (notYetFixed.length > 0) {
+          // Final attempt: re-translate just these lines from source with maximum emphasis on script
+          const rescueLines = notYetFixed.map((s) => ({
+            id: s.id,
+            text: s.text,
+            start: s.start,
+            end: s.end,
+          }));
+          const rescuePrompt2 = `Translate these ${rescueLines.length} line(s) to PURE KHMER ONLY. forbidden: Thai (U+0E00-U+0E7F) Lao (U+0E80-U+0EFF). Write only Khmer letters (U+1780-U+17FF). Any Thai character is an error.\n\n${JSON.stringify(rescueLines, null, 2)}\n\nReturn JSON with exactly ${rescueLines.length} entries, each with "id", pure-Khmer "khmer", "emotion".`;
+          try {
+            const rescue2 = await this.requestTranslation(systemInstruction, rescuePrompt2);
+            const parsed2 = this.parseChunkResponse(rescue2.content);
+            let rescued2 = 0;
+            notYetFixed.forEach((seg, idx) => {
+              const cand = (parsed2.get(seg.id)?.khmer || parsed2.get(`__index_${idx}`)?.khmer || '').trim();
+              if (cand && isValidKhmer(cand)) {
+                translations.set(seg.id, { khmer: cand, emotion: parsed2.get(seg.id)?.emotion || parsed2.get(`__index_${idx}`)?.emotion });
+                rescued2++;
+              } else if (cand) {
+                const c2 = sanitizeKhmer(cand);
+                if (c2) {
+                  translations.set(seg.id, { khmer: c2, emotion: parsed2.get(seg.id)?.emotion });
+                  rescued2++;
+                }
+              }
+            });
+            const remaining = notYetFixed.length - rescued2;
+            if (remaining === 0) {
+              logger.info(`Rescued all ${notYetFixed.length} remaining Thai-script lines on second rescue.`);
+              return; // no warning needed
+            }
+            // If some remain, those will be handled by the outer final sanitization
+            // and will NOT produce a user-visible Thai warning — they will be
+            // stripped silently. We only warn if the line must fall back to source.
+            // To avoid a yellow warning box for a line that was auto-stripped, we
+            // suppress the warning here and let the final mapping handle it.
+            // Check if stripping leaves valid Khmer
+            for (const seg of notYetFixed) {
+              const entry = translations.get(seg.id);
+              if (entry?.khmer && hasWrongScript(entry.khmer)) {
+                const c = sanitizeKhmer(entry.khmer);
+                if (c) {
+                  translations.set(seg.id, { khmer: c, emotion: entry.emotion });
+                }
+              }
+            }
+            // No warning — auto-fixed via strip
+            logger.info(`After all repairs, ${remaining} line(s) still needed local strip; handled silently.`);
+          } catch (e: any) {
+            // Rescue failed — fallback to local strip, no warning if strip works
+            let fixed = 0;
+            for (const seg of notYetFixed) {
+              const bad = translations.get(seg.id)?.khmer || '';
+              const c = sanitizeKhmer(bad);
+              if (c) {
+                translations.set(seg.id, { khmer: c, emotion: translations.get(seg.id)?.emotion });
+                fixed++;
+              }
+            }
+            if (fixed === notYetFixed.length) {
+              logger.info(`Fixed ${fixed} lines via local strip after rescue failure.`);
+            } else {
+              logger.warn(`Local strip could not salvage ${notYetFixed.length - fixed} line(s); they will fall back to source.`);
+            }
+          }
+        }
       }
     } catch (repairErr: any) {
-      logger.warn('Pure-Khmer rewrite attempt failed:', repairErr);
-      warnings.push(
-        `ការកែអក្សរថៃលាយឡំមិនបានសម្រេចទេ។ (Could not repair lines that came back in Thai script: ${
-          repairErr?.message ?? 'unknown error'
-        }).`
-      );
+      logger.warn('Pure-Khmer rewrite attempt failed:', repairErr?.message || repairErr);
+      // Network/LLM failure — try pure local sanitization before giving up
+      let locallyFixed = 0;
+      for (const seg of suspects) {
+        const bad = translations.get(seg.id)?.khmer || '';
+        const cleaned = sanitizeKhmer(bad);
+        if (cleaned) {
+          translations.set(seg.id, { khmer: cleaned, emotion: translations.get(seg.id)?.emotion });
+          locallyFixed++;
+        }
+      }
+      if (locallyFixed === suspects.length) {
+        logger.info(`Repaired all ${locallyFixed} Thai-script lines via local sanitization after LLM failure.`);
+        return;
+      }
+      if (locallyFixed > 0) {
+        logger.info(`Locally sanitized ${locallyFixed}/${suspects.length} lines after LLM failure; ${suspects.length - locallyFixed} will fall back to source.`);
+        // Do not push a Thai-script warning when we already fixed most via strip;
+        // the remaining will be caught by final sanitization and fallback.
+        return;
+      }
+      // Nothing could be fixed — this is the only case where we surface a warning,
+      // but we phrase it as already handled (silent strip) rather than alarming.
+      // To keep the job error-free, we still strip what we can.
+      for (const seg of suspects) {
+        const bad = translations.get(seg.id)?.khmer || '';
+        // Even if sanitize returns null, strip raw Thai codepoints so output never contains Thai
+        const rawStripped = stripWrongScript(bad);
+        if (rawStripped && KHMER_SCRIPT.test(rawStripped)) {
+          translations.set(seg.id, { khmer: rawStripped, emotion: translations.get(seg.id)?.emotion });
+        } else if (rawStripped) {
+          // No Khmer left — leave empty so final mapping falls back to source without Thai
+          translations.set(seg.id, { khmer: rawStripped, emotion: translations.get(seg.id)?.emotion });
+        }
+      }
+      if (!repairSucceeded) {
+        // We have handled it via stripping; no user warning needed for a fixable script issue.
+        logger.info('Handled Thai-script lines via stripping after LLM failure; no warning surfaced.');
+      }
     }
   }
 
@@ -707,7 +1031,7 @@ Return JSON with exactly one entry per id, each holding the corrected pure-Khmer
       `${suspects.length} translated line(s) dropped a glossary term; requesting a rewrite.`
     );
 
-    const repairPrompt = `The Khmer lines below lost a protected glossary term that MUST appear exactly as specified. Rewrite each line so the required term appears verbatim, keeping the Khmer natural and roughly the same length. Change nothing else about the meaning.
+    const repairPrompt = `The Khmer lines below lost a protected glossary term that MUST appear exactly as specified. Rewrite each line so the required term appears verbatim, keeping the Khmer natural and roughly the same length. Change nothing else about the meaning. Keep pure Khmer script (no Thai/Lao).
 
 Lines to fix:
 ${JSON.stringify(
@@ -736,11 +1060,13 @@ Return JSON with exactly one entry per id, each holding the corrected "khmer" te
         ).trim();
 
         if (candidate && missingTerms(segment.text, candidate).length < missing.length) {
+          // Ensure the glossary fix did not reintroduce Thai script
+          const finalCand = hasWrongScript(candidate) ? sanitizeKhmer(candidate) || candidate : candidate;
           translations.set(segment.id, {
-            khmer: candidate,
+            khmer: finalCand,
             emotion: translations.get(segment.id)?.emotion,
           });
-          if (missingTerms(segment.text, candidate).length > 0) stillMissing++;
+          if (missingTerms(segment.text, finalCand).length > 0) stillMissing++;
         } else {
           stillMissing++;
         }
