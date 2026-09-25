@@ -45,14 +45,14 @@ function formatBytes(bytes: number): string {
  *
  * The address lives here rather than only in environment variables because a
  * phone served over a quick tunnel gets a new URL every time the tunnel is
- * reopened — pasting it in should not need a redeploy.
+ * reopened — pasting it in should not need a redeploy. When the address is
+ * pinned in the app code the field is informational and only the test button
+ * does anything: there is no key and no model to choose, because the phone's
+ * Demucs service takes neither.
  */
 export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
   const [connection, setConnection] = useState<SeparatorConnectionView | null>(null);
   const [url, setUrl] = useState('');
-  const [apiKey, setApiKey] = useState('');
-  const [model, setModel] = useState('');
-  const [advanced, setAdvanced] = useState(false);
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<'load' | 'save' | 'test' | 'clear' | null>('load');
   const [status, setStatus] = useState<{ tone: 'ok' | 'warn' | 'error'; text: string } | null>(null);
@@ -60,9 +60,6 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
   const apply = (next: SeparatorConnectionView) => {
     setConnection(next);
     setUrl(next.url);
-    setModel(next.model);
-    // The stored key is never sent to the browser; an empty field keeps it.
-    setApiKey('');
   };
 
   useEffect(() => {
@@ -92,11 +89,13 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
 
   if (!visible) return null;
 
+  const pinned = connection?.source === 'pinned';
+
   const handleSave = async () => {
     setBusy('save');
     setStatus(null);
     try {
-      const next = await saveSeparatorConnection({ url, apiKey, model });
+      const next = await saveSeparatorConnection({ url });
       apply(next);
       setStatus({
         tone: 'ok',
@@ -188,11 +187,21 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
           <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-900/60 border border-slate-800">
             <Smartphone className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
             <div className="text-[11px] text-slate-300 leading-relaxed space-y-1">
-              <p className="font-semibold text-slate-200">របៀបភ្ជាប់ Demucs API ក្នុង Termux</p>
-              <p>១. បើក API ក្នុង Termux (port 8000) — ឧទាហរណ៍ <code className="text-cyan-300">python demucs_api.py</code></p>
-              <p>២. បើក tunnel ឲ្យចេញអ៊ីនធឺណិត៖ <code className="text-cyan-300">ssh -R 80:localhost:8000 nokey@localhost.run</code></p>
-              <p>៣. ចម្លង URL <code className="text-cyan-300">https://…</code> ដែលទទួលបាន មកដាក់ក្នុងប្រអប់ខាងក្រោម</p>
-              <p>៤. ចុច «រក្សាទុក» រួច «សាកល្បង» — ការងារបកប្រែប្រើ Demucs នេះជា​ការចាំបាច់ (គ្មានការជំនួស)។</p>
+              <p className="font-semibold text-slate-200">របៀបបើក Demucs API លើទូរស័ព្ទ</p>
+              <p>
+                ១. ក្នុង proot Ubuntu បើកទាំងអស់ដោយបន្ទាត់តែមួយ៖{' '}
+                <code className="text-cyan-300">sh phone-start.sh</code>
+              </p>
+              <p>
+                ២. បើ API រត់រួចហើយ ហើយខ្វះតែ tunnel៖{' '}
+                <code className="text-cyan-300">sh tunnel-cloudflared.sh</code>
+              </p>
+              <p>
+                ៣. បើគេហទំព័រនិយាយថាបរាជ័យ តែការសាកល្បងក្នុងទូរស័ព្ទជោគជ័យ (API ជំនាន់ចាស់)៖{' '}
+                <code className="text-cyan-300">sh restart-api.sh</code>
+              </p>
+              <p>៤. URL ដែលទទួលបាន ត្រូវដាក់ក្នុងប្រអប់ខាងក្រោម (បើវាកំណត់ក្នុងកូដរួច គ្មានអ្វីត្រូវធ្វើ)។</p>
+              <p>៥. ចុច «សាកល្បងការតភ្ជាប់» — ការងារបកប្រែត្រូវការ Demucs នេះជាចាំបាច់ (គ្មានការជំនួស)។</p>
             </div>
           </div>
 
@@ -206,86 +215,38 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
             </div>
           )}
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-            <div className="space-y-1.5 sm:col-span-2">
-              <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-                <Link2 className="w-3.5 h-3.5 text-cyan-400" />
-                <span>URL របស់ Demucs API</span>
-              </label>
-              <input
-                type="url"
-                inputMode="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://xxxx.lhr.life"
-                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/60 border border-slate-800 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
-                API Key (បើមាន)
-              </label>
-              <input
-                type="password"
-                value={apiKey}
-                onChange={(e) => setApiKey(e.target.value)}
-                placeholder={connection?.hasApiKey ? '•••••••• (រក្សាទុកដើម)' : 'មិនចាំបាច់'}
-                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/60 border border-slate-800 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20"
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
-                Model
-              </label>
-              <input
-                type="text"
-                value={model}
-                onChange={(e) => setModel(e.target.value)}
-                placeholder="htdemucs"
-                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/60 border border-slate-800 text-slate-200 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20"
-              />
-            </div>
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <Link2 className="w-3.5 h-3.5 text-cyan-400" />
+              <span>URL របស់ Demucs API</span>
+            </label>
+            <input
+              type="url"
+              inputMode="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              readOnly={pinned}
+              placeholder="https://xxxx.trycloudflare.com"
+              className={`w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs border border-slate-800 placeholder:text-slate-600 focus:outline-none ${
+                pinned
+                  ? 'bg-slate-900/40 text-slate-400'
+                  : 'bg-slate-900/60 text-slate-200 focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20'
+              }`}
+            />
           </div>
 
-          <button
-            type="button"
-            onClick={() => setAdvanced((v) => !v)}
-            className="text-[11px] text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            {advanced ? '− បិទការកំណត់កម្រិតខ្ពស់' : '+ ការកំណត់កម្រិតខ្ពស់ (endpoint)'}
-          </button>
-
-          {advanced && (
-            <div className="space-y-1.5">
-              <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider">
-                Endpoint path (ទទេ = ស្វ័យប្រវត្តិ)
-              </label>
-              <input
-                type="text"
-                value={connection?.path ?? ''}
-                readOnly
-                placeholder="/separate"
-                className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/40 border border-slate-800 text-slate-400 placeholder:text-slate-600"
-              />
-              <p className="text-[10px] text-slate-500 leading-relaxed">
-                បើ API របស់អ្នកប្រើ path ផ្សេង សូមកំណត់វាតាម env <code className="text-slate-400">AUDIO_SEPARATOR_PATH</code>។
-                បើទទេ ប្រព័ន្ធនឹងសាកល្បង <code className="text-slate-400">/separate</code> និង path ទូទៅផ្សេងទៀត។
-              </p>
-            </div>
-          )}
-
           <div className="flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={handleSave}
-              disabled={busy !== null || !url || connection?.source === 'pinned'}
-              className="flex-1 min-w-[130px] min-h-[44px] px-4 rounded-xl text-xs font-semibold bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 hover:bg-cyan-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
-            >
-              {busy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
-              រក្សាទុក (Save)
-            </button>
+            {!pinned && (
+              <button
+                type="button"
+                onClick={handleSave}
+                disabled={busy !== null || !url}
+                className="flex-1 min-w-[130px] min-h-[44px] px-4 rounded-xl text-xs font-semibold bg-cyan-500/20 text-cyan-200 border border-cyan-500/40 hover:bg-cyan-500/30 disabled:opacity-50 disabled:cursor-not-allowed transition-colors flex items-center justify-center gap-2"
+              >
+                {busy === 'save' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plug className="w-4 h-4" />}
+                រក្សាទុក (Save)
+              </button>
+            )}
 
             <button
               type="button"
@@ -338,10 +299,11 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
             </p>
           )}
 
-          {connection?.source === 'pinned' && (
+          {pinned && (
             <p className="text-[10px] text-cyan-200/80 leading-relaxed">
-              URL នេះកំណត់ជាប់ក្នុងកូដកម្មវិធី (pinned) ដូច្នេះប្រព័ន្ធប្រើវាជាដាច់ខាត —  
-              ការរក្សាទុកក្នុងផ្ទាំងនេះមិនជំនួសវាទេ។ បើត្រូវការប្តូរ URL សូមប្រាប់អ្នកអភិវឌ្ឍ។
+              URL នេះកំណត់ជាប់ក្នុងកូដកម្មវិធី (pinned) ដូច្នេះប្រព័ន្ធប្រើវាជាដាច់ខាត។
+              មិនត្រូវការ API key ឬ model ទេ ព្រោះ Demucs API នៅលើទូរស័ព្ទមិនប្រើវា។
+              បើត្រូវការប្តូរ URL សូមប្រាប់អ្នកអភិវឌ្ឍ។
             </p>
           )}
         </div>

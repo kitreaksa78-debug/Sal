@@ -120,12 +120,14 @@ export function getSeparatorConnection(): ResolvedSeparatorConnection {
   const pinned = normaliseUrl(PINNED_SEPARATOR_URL);
   if (pinned) {
     return {
+      // Everything comes from the deployment's configuration: the phone's Demucs
+      // service takes no key and no model, so a value saved by an earlier
+      // session (a key typed into the panel, an MDX model name) must not be
+      // carried over into a connection it does not belong to.
       url: pinned,
-      // The key and the model belong to the service, not to the address, so a
-      // pinned URL keeps whatever was saved for it.
-      apiKey: saved?.apiKey || env('AUDIO_SEPARATOR_API_KEY'),
-      model: saved?.model || env('AUDIO_SEPARATOR_MODEL'),
-      path: saved?.path || env('AUDIO_SEPARATOR_PATH'),
+      apiKey: env('AUDIO_SEPARATOR_API_KEY'),
+      model: env('AUDIO_SEPARATOR_MODEL'),
+      path: env('AUDIO_SEPARATOR_PATH'),
       source: 'pinned',
       updatedAt: saved?.updatedAt,
     };

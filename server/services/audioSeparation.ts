@@ -197,6 +197,18 @@ function connectionHint(err: unknown): string {
 }
 
 /**
+ * An answer that names a folder instead of the two stems is what the phone's
+ * first `demucs_api.py` replied with: it separated the audio into files only it
+ * could see. Saying so matters, because that shape looks like a tunnel fault
+ * and is really an out-of-date copy of the service still running.
+ */
+function oldServiceHint(payload: unknown): string {
+  if (!payload || typeof payload !== 'object') return '';
+  if (!('output_folder' in (payload as Record<string, unknown>))) return '';
+  return ' ម៉ាស៊ីននេះជា demucs_api.py ជំនាន់ចាស់ (ត្រឡប់តែថតឯកសារ មិនត្រឡប់ vocals/instrumental) — សូមធ្វើបច្ចុប្បន្នភាពវាលើទូរស័ព្ទដោយ `sh restart-api.sh` រួចសាកល្បងម្តងទៀត។ (The stem service is an out-of-date demucs_api.py: restart it with the current file and test again.)';
+}
+
+/**
  * A stem service reached over HTTP.
  *
  * The Node/FFmpeg host cannot run UVR/Demucs models itself, so the model runs
@@ -343,7 +355,9 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
         const instrumental = pickStemLocation(payload, 'instrumental');
 
         if (!vocals || !instrumental) {
-          failures.push(`${endpoint} answered without both stems (${JSON.stringify(payload).slice(0, 200)})`);
+          failures.push(
+            `${endpoint} answered without both stems (${JSON.stringify(payload).slice(0, 200)})${oldServiceHint(payload)}`
+          );
           throw new Error(failures[failures.length - 1]);
         }
 
