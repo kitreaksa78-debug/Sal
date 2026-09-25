@@ -218,7 +218,9 @@ if [ -z "$REUSE" ]; then
   pkill -f "cloudflared tunnel" 2>/dev/null || true
   sleep 1
 
-  CF="cloudflared tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate --url http://localhost:$PORT"
+  # `127.0.0.1` ដោយចំ (មិនមែន `localhost`) ព្រោះ API ស្តាប់តែ IPv4៖ `localhost` អាចទៅ
+  # IPv6 `[::1]` ជាមុន ហើយបើមាន API ជំនាន់ចាស់នៅសល់នៅទីនោះ tunnel នឹងទៅជួបវា។
+  CF="cloudflared tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate --url http://127.0.0.1:$PORT"
   if command -v setsid >/dev/null 2>&1; then
     setsid $CF > "$LOG" 2>&1 < /dev/null &
   else

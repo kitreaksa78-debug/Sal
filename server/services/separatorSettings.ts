@@ -59,7 +59,7 @@ export interface ResolvedSeparatorConnection {
  * To hand the choice back to the website's stem panel, set this to an empty
  * string.
  */
-export const PINNED_SEPARATOR_URL = 'https://audio-backed-protecting-like.trycloudflare.com';
+export const PINNED_SEPARATOR_URL = 'https://bestsellers-guru-seems-investigator.trycloudflare.com';
 
 const SETTINGS_FILE = path.join(process.cwd(), 'data', 'separator.json');
 const STATE_KEY = 'separator.json';

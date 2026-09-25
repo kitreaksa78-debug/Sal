@@ -177,7 +177,7 @@ sh ./tools/demucs-termux/tunnel-cloudflared.sh
 | រោគសញ្ញា | មូលហេតុ / ដំណោះស្រាយ |
 |---|---|
 | tunnel មិនចេញ URL | Cloudflare មិនចេញ URL ក្នុង ៦០ វិនាទី — សាកប្តូរទៅ Wi-Fi ឬបិទ/បើក mobile data រួចបើកស្គ្រីបម្តងទៀត |
-| គេហទំព័រនិយាយថាបរាជ័យ តែ `test-demucs.sh` ជោគជ័យ | API ជំនាន់ចាស់ ឬ URL ចាស់៖ បើក `sh phone-start.sh` ម្តងទៀត — វាធ្វើបច្ចុប្បន្នភាព API ដោយស្វ័យប្រវត្តិ |
+| គេហទំព័រនិយាយថាបរាជ័យ តែ `test-demucs.sh` ជោគជ័យ | មាន API ជំនាន់ចាស់នៅសល់ ឬ URL ចាស់៖ បើក `sh restart-api.sh` (បិទ API ចាស់ទាំងអស់ រួចបើកជំនាន់ថ្មីតែមួយ) ឬ `sh phone-start.sh` |
 | URL ចេញ តែ «fetch failed» លើគេហទំព័រ | URL ចាស់ (tunnel មុន) — យក URL ថ្មីពី `cat ~/demucs-tunnel-url.txt` រួច paste ម្តងទៀត | | `tunnel បានបិទ` ឬ URL ថ្មី — បើក `sh tunnel-url.sh` វានឹងបង្ហាញ URL ដែលកំពុងរស់ រួច paste ថ្មី (URL ចាស់បាត់ពី DNS ទាំងស្រុង) |
 | ការងារឈប់នៅជំហានញែកភ្លេង | គ្មាន Demucs ភ្ជាប់ទេ — បើក API + tunnel រួចពិនិត្យកាតជាមួយ «សាកល្បង» |
 | បង្ហាញឈ្មោះ service តែបរាជ័យ | API មិនស្គាល់ endpoint នេះទេ — កំណត់ `AUDIO_SEPARATOR_PATH` ឬប្រើ `demucs_api.py` |
