@@ -23,6 +23,40 @@ RAW="https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-t
 
 ask() { curl -s --max-time 4 "$1/" 2>/dev/null || true; }
 
+# ---- តើយើងនៅក្នុង proot Ubuntu ឬក្នុង Termux ដើម? ----
+# API ត្រូវការ `demucs` ដែលដំឡើងបានតែក្នុង Ubuntu ប៉ុណ្ណោះ ដូច្នេះស្គ្រីបនេះចូល Ubuntu ជំនួស។
+IN_PROOT=no
+[ -n "${TERMUX_PROOT:-}" ] && IN_PROOT=yes
+[ -n "${PROOT_L2S_DIR:-}" ] && IN_PROOT=yes
+if [ "$IN_PROOT" = no ] && [ "$(uname -o 2>/dev/null)" = "Android" ]; then
+  PD="$(command -v proot-distro 2>/dev/null || true)"
+  ROOTFS="${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/ubuntu"
+  HAS_UBUNTU=no
+  [ -d "$ROOTFS" ] && HAS_UBUNTU=yes
+  if [ "$HAS_UBUNTU" = no ] && [ -n "$PD" ] && "$PD" list 2>/dev/null | grep -qi ubuntu; then
+    HAS_UBUNTU=yes
+  fi
+  if [ -n "$PD" ] && [ "$HAS_UBUNTU" = yes ]; then
+    echo "ទូរស័ព្ទនេះជា Termux ដើម — បើកក្នុង Ubuntu (proot) ជំនួសវិញ..."
+    echo
+    exec "$PD" login ubuntu -- /bin/sh -c "export TERMUX_PROOT=1; command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl; }; curl -fsSL '$RAW/restart-api.sh' | sh" < /dev/null
+  fi
+  cat <<'MSG'
+
+❌ អ្នកកំពុងវាយបញ្ជានេះក្នុង Termux ដើម — API ត្រូវការ demucs ដែលដំឡើងបានតែក្នុង Ubuntu។
+
+   សូមវាយ ៣ បន្ទាត់នេះម្តងមួយ៖
+
+       pkg install -y proot-distro
+       proot-distro install ubuntu
+       proot-distro login ubuntu
+
+   រួចវាយបញ្ជាដើមម្តងទៀត (curl -fsSL ... | sh)។
+
+MSG
+  exit 1
+fi
+
 mkdir -p "$DIR" 2>/dev/null || true
 cd "$DIR" || { echo "មិនអាចចូលថត $DIR បានទេ"; exit 1; }
 

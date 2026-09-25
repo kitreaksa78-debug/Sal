@@ -22,20 +22,40 @@ PORT="${PORT:-8000}"
 DIR="${DEMUCS_HOME:-$HOME/demucs-api}"
 LOG="${TUNNEL_LOG:-$DIR/cloudflared.log}"
 TERMUX_URL_FILE="${TERMUX_URL_FILE:-/data/data/com.termux/files/home/demucs-tunnel-url.txt}"
+RAW="https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux"
 
-mkdir -p "$DIR" 2>/dev/null || true
+# ---- តើយើងនៅក្នុង proot Ubuntu ឬក្នុង Termux ដើម? ----
+# នៅក្នុង proot ក៏ `uname -o` នៅតែបង្ហាញ `Android` ដូច្នេះយើងក៏មើល `TERMUX_PROOT` និង
+# `PROOT_L2S_DIR` ដែលមានតែក្នុង proot។
+IN_PROOT=no
+[ -n "${TERMUX_PROOT:-}" ] && IN_PROOT=yes
+[ -n "${PROOT_L2S_DIR:-}" ] && IN_PROOT=yes
 
-# ---- ០. គួររត់ក្នុង Ubuntu មិនមែន Termux ដើម -------------------------
-# Termux ដើមគ្មាន `setsid` ទេ ដូច្នេះពេលស្គ្រីបចប់ (ជាពិសេសពេលមកពី `curl | sh`)
-# Android អាចសម្លាប់ cloudflared ភ្លាម — URL ថ្មីនោះនឹងស្លាប់ភ្លាមដែរ។
-# ក្នុង proot Ubuntu វា​រត់ជា session ដោយខ្លួនឯង ហើយ URL ក៏ត្រូវសរសេរទៅផ្ទះដដែល
-# ដែល API រស់នៅ ដូច្នេះស្គ្រីបផ្សេងរកវាឃើញ។
-if [ -z "${TERMUX_PROOT:-}" ] && [ -z "${PROOT_L2S_DIR:-}" ] && [ "$(uname -o 2>/dev/null)" = "Android" ]; then
-  echo "⚠️  អ្នកកំពុងរត់ក្នុង Termux ដើម — tunnel អាចស្លាប់ភ្លាមពេលស្គ្រីបបញ្ចប់។"
-  echo "    គួររត់ក្នុង Ubuntu ជំនួស៖  proot-distro login ubuntu  រួចបើកស្គ្រីបនេះម្តងទៀត"
-  echo "    (ឬងាយបំផុត៖ `sh phone-start.sh` ដែលចូល Ubuntu ឲ្យស្វ័យប្រវត្តិ)"
+# បើអ្នកវាយបញ្ជានេះក្នុង Termux ដើម — ចូល Ubuntu (proot) ជំនួស រួចបន្តនៅទីនោះ ----------------
+# ហេតុអ្វីសំខាន់៖ Termux ដើមគ្មាន `setsid` ទេ ដូច្នេះពេលស្គ្រីបចប់ (ជាពិសេសពេលមក
+# ពី `curl | sh`) Android សម្លាប់ cloudflared ទៅជាមួយ — URL ដែលទើបបង្កើតគឺស្លាប់ភ្លាម
+# (`HTTP 530 error 1033` ពេលគេសាកពីខាងក្រៅ)។ ក្នុង proot Ubuntu វារត់ជា session
+# ដោយខ្លួនឯង ហើយឯកសារ URL ក៏ទៅផ្ទះដដែល (/root/demucs-api) ដែលស្គ្រីបផ្សេងរកឃើញ។
+if [ "$IN_PROOT" = no ] && [ "$(uname -o 2>/dev/null)" = "Android" ]; then
+  PD="$(command -v proot-distro 2>/dev/null || true)"
+  ROOTFS="${PREFIX:-/data/data/com.termux/files/usr}/var/lib/proot-distro/installed-rootfs/ubuntu"
+  HAS_UBUNTU=no
+  [ -d "$ROOTFS" ] && HAS_UBUNTU=yes
+  if [ "$HAS_UBUNTU" = no ] && [ -n "$PD" ] && "$PD" list 2>/dev/null | grep -qi ubuntu; then
+    HAS_UBUNTU=yes
+  fi
+  if [ -n "$PD" ] && [ "$HAS_UBUNTU" = yes ]; then
+    echo "ទូរស័ព្ទនេះជា Termux ដើម — បើកក្នុង Ubuntu (proot) ជំនួសវិញ..."
+    echo "(បើវាដួល សូមវាយដោយដៃ៖ proot-distro login ubuntu រួចវាយបញ្ជានេះម្តងទៀត)"
+    echo
+    exec "$PD" login ubuntu -- /bin/sh -c "export TERMUX_PROOT=1; command -v curl >/dev/null 2>&1 || { apt-get update -qq && apt-get install -y -qq curl; }; curl -fsSL '$RAW/tunnel-cloudflared.sh' | sh" < /dev/null
+  fi
+  echo "⚠️  អ្នកកំពុងរត់ក្នុង Termux ដើម ហើយរក Ubuntu មិនឃើញទេ — tunnel នឹងស្លាប់ភ្លាមពេលស្គ្រីបចប់។"
+  echo "    ដំឡើង Ubuntu មុន៖  pkg install -y proot-distro ; proot-distro install ubuntu ; proot-distro login ubuntu"
   echo
 fi
+
+mkdir -p "$DIR" 2>/dev/null || true
 
 # ---- ០. API គួរតែរត់រួចហើយ ------------------------------------------------
 if curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; then
