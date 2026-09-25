@@ -274,7 +274,13 @@ export class JobProcessor {
       if (ttsAvailable) {
         // Lines are independent, so synthesize several at once instead of the
         // old one-at-a-time loop; a 60-line video used to spend a full minute here.
-        const ttsConcurrency = Math.max(1, Number(process.env.TTS_CONCURRENCY || '3'));
+        // Edge is a keyless public endpoint that serves many parallel lines, so it
+        // runs wider than the metered providers (Gemini TTS has a real quota).
+        const defaultTtsConcurrency = ttsProvider.name === 'edge' ? 6 : 3;
+        const ttsConcurrency = Math.max(
+          1,
+          Number(process.env.TTS_CONCURRENCY) || defaultTtsConcurrency
+        );
         let voicedSoFar = 0;
 
         await mapWithConcurrency(dialogueSegments, ttsConcurrency, async (seg, i) => {

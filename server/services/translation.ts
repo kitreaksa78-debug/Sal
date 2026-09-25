@@ -3,6 +3,7 @@ import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { groqChatJson, isGroqConfigured, sleep } from '../utils/groq.js';
 import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
+import { mapWithConcurrency } from '../utils/concurrency.js';
 
 export interface TranslationResult {
   segments: DialogueSegment[];
@@ -23,6 +24,25 @@ export type TranslationProgressCallback = (
 export type TranslationProviderName = 'groq' | 'gemini';
 
 const DEFAULT_CHUNK_SIZE = 20;
+
+/**
+ * How many transcript blocks are translated at the same time. Blocks are separate
+ * requests with no dependency between them (each carries the lines around it as
+ * context), so asking several at once is the difference between paying for the
+ * provider's latency once per wave and once per block.
+ */
+const DEFAULT_CONCURRENCY = 4;
+
+/**
+ * One line of context handed to a block so names, pronouns and terminology stay
+ * consistent across block boundaries.
+ */
+export interface ContextLine {
+  speaker: string;
+  original: string;
+  /** How the line reads in Khmer, once a block has been translated. */
+  khmer?: string;
+}
 
 /**
  * The JSON shape every model answers with. Declared once so the schema a model
@@ -229,12 +249,32 @@ export class KhmerDubTranslationService {
   }
 
   /**
+   * How many blocks are in flight at once.
+   *
+   * Gemini tolerates several concurrent calls, so its blocks overlap. Groq's free
+   * tier caps tokens per minute, where overlapping requests only earn a 429, so its
+   * blocks stay strictly sequential and paced.
+   */
+  public getConcurrency(): number {
+    if (this.provider === 'groq') return 1;
+
+    const configured = Number(process.env.TRANSLATION_CONCURRENCY);
+    return Number.isFinite(configured) && configured >= 1
+      ? Math.floor(configured)
+      : DEFAULT_CONCURRENCY;
+  }
+
+  /**
    * Translates dialogue segments into natural spoken Cambodian Khmer.
    *
    * The transcript is sent in blocks rather than one giant request: a single
    * request grows past Groq's 8k tokens/minute ceiling at roughly four minutes
    * of video and then fails with HTTP 429. Blocking also lets the job report
    * real progress and keeps a bad block from discarding the whole transcript.
+   *
+   * The blocks do not depend on each other, so they are asked at the same time
+   * (see getConcurrency) and the stage costs roughly one provider round trip per
+   * wave instead of one per block.
    */
   public async translateDialogue(
     segments: DialogueSegment[],
@@ -261,18 +301,36 @@ export class KhmerDubTranslationService {
     const glossary = parseGlossary(settings.glossary);
     const translations = new Map<string, { khmer: string; emotion?: string }>();
     const warnings: string[] = [];
-    // Rolling window of already-translated lines so names, pronouns and terms
-    // stay consistent across block boundaries.
-    let recentContext: { speaker: string; original: string; khmer: string }[] = [];
-    let completedLines = 0;
+    // Blocks run at the same time, so the same problem (or the same failure) can be
+    // reported by more than one of them; each reason is listed once.
+    const warningSet = new Set<string>();
+    const addWarning = (message: string) => {
+      if (warningSet.has(message)) return;
+      warningSet.add(message);
+      warnings.push(message);
+    };
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
+    const concurrency = Math.max(1, Math.min(this.getConcurrency(), chunks.length));
+    const startedAt = Date.now();
+    let completedLines = 0;
+    // Rolling window of already-translated lines so names, pronouns and terms
+    // stay consistent across block boundaries. Only a sequential run can use it —
+    // concurrent blocks anchor on the source lines of the block before them instead.
+    let recentContext: ContextLine[] = [];
+
+    await mapWithConcurrency(chunks, concurrency, async (chunk, i) => {
+      const context: ContextLine[] =
+        concurrency > 1
+          ? i === 0
+            ? []
+            : chunks[i - 1].slice(-8).map((s) => ({ speaker: s.speaker, original: s.text }))
+          : recentContext;
+
       let billedTokens = 0;
       const requestStartedAt = Date.now();
 
       try {
-        const userPrompt = this.buildChunkPrompt(chunk, recentContext, i, chunks.length);
+        const userPrompt = this.buildChunkPrompt(chunk, context, i, chunks.length);
         // Fallback estimate in case the provider does not report usage.
         const estimatedTokens = estimateTokens(systemInstruction + userPrompt) + chunk.length * 45;
 
@@ -284,7 +342,7 @@ export class KhmerDubTranslationService {
         const parsed = this.parseChunkResponse(response.content);
 
         let missing = 0;
-        const blockContext: typeof recentContext = [];
+        const blockContext: ContextLine[] = [];
         for (let lineIndex = 0; lineIndex < chunk.length; lineIndex++) {
           const segment = chunk[lineIndex];
           const item = parsed.get(segment.id) || parsed.get(`__index_${lineIndex}`);
@@ -304,18 +362,20 @@ export class KhmerDubTranslationService {
         await this.enforceGlossary(chunk, translations, glossary, systemInstruction, warnings);
 
         if (missing > 0) {
-          warnings.push(
+          addWarning(
             `បន្ទាត់ចំនួន ${missing} ក្នុងក្រុមទី ${i + 1} មិនបានបកប្រែទេ ដូច្នេះវារក្សាអក្សរដើម។ (${missing} line(s) in block ${
               i + 1
             } of ${chunks.length} came back untranslated; the original text was kept for them.)`
           );
         }
 
-        recentContext = [...recentContext, ...blockContext].slice(-8);
+        if (concurrency === 1) {
+          recentContext = [...recentContext, ...blockContext].slice(-8);
+        }
       } catch (chunkErr: any) {
         // One bad block should not throw away a good transcription.
         logger.warn(`Translation block ${i + 1}/${chunks.length} failed:`, chunkErr);
-        warnings.push(
+        addWarning(
           `ក្រុមបកប្រែទី ${i + 1}/${chunks.length} បរាជ័យ ដូច្នេះបន្ទាត់ក្នុងក្រុមនោះរក្សាអក្សរដើម។ (Translation block ${
             i + 1
           }/${chunks.length} failed: ${chunkErr?.message ?? 'unknown error'})`
@@ -327,10 +387,11 @@ export class KhmerDubTranslationService {
 
       // Pace the next request against the per-minute token ceiling. There is
       // nothing left to protect after the final block, so don't wait for it.
-      if (i < chunks.length - 1) {
+      // A concurrent run has no next request of its own to pace.
+      if (concurrency === 1 && i < chunks.length - 1) {
         await this.paceRequest(billedTokens, requestStartedAt);
       }
-    }
+    });
 
     const translatedSegments = segments.map((segment) => {
       const item = translations.get(segment.id);
@@ -346,7 +407,10 @@ export class KhmerDubTranslationService {
     logger.info(
       `Translated ${translations.size}/${segments.length} dialogue lines to Cambodian Khmer via ${
         this.provider
-      } in ${chunks.length} block(s).`
+      } in ${chunks.length} block(s), ${concurrency} at a time, ${(
+        (Date.now() - startedAt) /
+        1000
+      ).toFixed(1)}s.`
     );
 
     return { segments: translatedSegments, warnings };
@@ -394,7 +458,7 @@ CRITICAL DUBBING TRANSLATION RULES:
 
   private buildChunkPrompt(
     chunk: DialogueSegment[],
-    recentContext: { speaker: string; original: string; khmer: string }[],
+    context: ContextLine[],
     chunkIndex: number,
     chunkCount: number
   ): string {
@@ -408,9 +472,9 @@ CRITICAL DUBBING TRANSLATION RULES:
     }));
 
     const contextSection =
-      recentContext.length > 0
-        ? `\nAlready translated lines from the previous block (keep names, pronouns and terminology consistent with these):\n${JSON.stringify(
-            recentContext,
+      context.length > 0
+        ? `\nEarlier lines from the same conversation (keep names, pronouns and terminology consistent with these):\n${JSON.stringify(
+            context,
             null,
             2
           )}\n`

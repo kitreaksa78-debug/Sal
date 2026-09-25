@@ -81,6 +81,26 @@ const deniedKeys = new Set<number>();
 const keyRejections = new Map<number, number>();
 
 /**
+ * Pairs that failed a moment ago, with the time they may be asked again.
+ *
+ * Module scope, unlike the per-call state it replaces, because translation blocks
+ * now run concurrently: the free-tier flashes regularly answer 503 "high demand"
+ * for whole minutes, and when every in-flight block rediscovers that on its own
+ * the walk through the dead models costs more wall time than the concurrency
+ * saves. One block pays for the discovery, the others go straight to a live model.
+ */
+const throttledUntil = new Map<string, number>();
+
+/** How long a model that answered 503 (or hit a per-minute limit) sits out. */
+const THROTTLE_COOLDOWN_MS = Number(process.env.GEMINI_THROTTLE_COOLDOWN_MS || '60000');
+
+/**
+ * The model that answered last, tried first from then on. Without it every block
+ * starts at the top of the list and walks the same unavailable models again.
+ */
+let preferredModel: string | null = null;
+
+/**
  * One SDK client per key: each instance keeps its own connection pool, and a
  * rotation that rebuilt them per request would pay for a new pool every block.
  */
@@ -200,25 +220,54 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
   const models = getGeminiModels();
   const maxAttempts = Math.max(1, request.maxAttempts ?? 2);
 
-  /** Pairs spent for the day: no point asking them again inside this process. */
-  /** Pairs that only hit a per-minute limit; retried on the next sweep. */
-  let throttledPairs = new Set<string>();
+  // The model that answered last is asked first: while the newest flashes are
+  // returning 503, starting at the top of the list costs seconds on every block.
+  const modelOrder =
+    preferredModel && models.includes(preferredModel)
+      ? [preferredModel, ...models.filter((model) => model !== preferredModel)]
+      : models;
 
   let lastError: GeminiError | null = null;
   let schemaRejections = 0;
   let backoffMs = 5_000;
+  /** Pairs this call walked past, reported so the rotation stays visible in logs. */
+  let skippedPairs = 0;
+
+  /** A pair that failed seconds ago is not worth asking again yet. */
+  const isThrottled = (pair: string): boolean => {
+    const until = throttledUntil.get(pair);
+    if (until === undefined) return false;
+    if (until <= Date.now()) {
+      throttledUntil.delete(pair);
+      return false;
+    }
+    return true;
+  };
+
+  const throttlePair = (pair: string): void => {
+    throttledUntil.set(pair, Date.now() + THROTTLE_COOLDOWN_MS);
+  };
 
   for (let round = 1; round <= maxAttempts; round++) {
+    // A new sweep is the deliberate second chance: every cooldown is expired here.
+    if (round > 1) throttledUntil.clear();
+
     for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
       if (deniedKeys.has(keyIndex)) continue;
       const key = keys[keyIndex];
       // 1-based everywhere it is mentioned; the key itself is never logged.
       const keyNumber = keyIndex + 1;
 
-      for (const model of models) {
+      for (const model of modelOrder) {
         const pair = `${keyNumber}:${model}`;
-        if (spentForToday.has(pair)) continue;
-        if (throttledPairs.has(pair)) continue;
+        if (spentForToday.has(pair)) {
+          skippedPairs++;
+          continue;
+        }
+        if (isThrottled(pair)) {
+          skippedPairs++;
+          continue;
+        }
 
         try {
           const response = await clientFor(key).models.generateContent({
@@ -241,15 +290,17 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
             logger.warn(
               `Gemini ${request.operationName}: ${model} returned an empty answer, trying the next one.`
             );
-            throttledPairs.add(pair);
+            throttlePair(pair);
             continue;
           }
 
-          if (spentForToday.size > 0 || throttledPairs.size > 0 || round > 1) {
+          // Remember what worked: the next block starts with this model instead of
+          // rediscovering which of the models are unavailable.
+          preferredModel = model;
+
+          if (skippedPairs > 0 || round > 1) {
             logger.info(
-              `Gemini ${request.operationName}: answered by ${model} (key #${keyNumber}) after rotating past ${
-                spentForToday.size + throttledPairs.size
-              } exhausted option(s).`
+              `Gemini ${request.operationName}: answered by ${model} (key #${keyNumber}) after skipping ${skippedPairs} spent or throttled option(s).`
             );
           }
 
@@ -293,7 +344,7 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
               spentForToday.add(pair);
               spentModelNames.add(model);
             } else {
-              throttledPairs.add(pair);
+              throttlePair(pair);
             }
             logger.warn(
               `Gemini ${request.operationName}: ${model} on key #${keyNumber} is out of quota${
@@ -324,7 +375,7 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
           logger.warn(
             `Gemini ${request.operationName}: ${model} hit a temporary error, trying the next option. ${error.message}`
           );
-          throttledPairs.add(pair);
+          throttlePair(pair);
         }
       }
     }
@@ -338,8 +389,6 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
       );
       await new Promise((resolve) => setTimeout(resolve, backoffMs));
       backoffMs = Math.min(backoffMs * 2, 60_000);
-      // A per-minute limit may lift by the next sweep; a daily one never does.
-      throttledPairs = new Set();
     }
   }
 
