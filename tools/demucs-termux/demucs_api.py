@@ -14,7 +14,8 @@ API ដែលគេហទំព័រស្គាល់ច្បាស់ ១០
 
 Endpoint
 --------
-GET  /                        -> {"status":"ok","service":"Demucs API", ...}
+GET  /                        -> {"status":"ok","service":"Demucs API",
+                                  "version":"1.1", ...}
 GET  /health                  -> ស្ថានភាព + ម៉ូឌែល + កំពុងរវល់ ឬអត់
 POST /separate                -> field `audio` (ឬ `file`/`video`), field `model`
                                  ឆ្លើយ: {"vocals": "/stems/<job>/vocals.wav",
@@ -63,6 +64,10 @@ from fastapi.responses import FileResponse, JSONResponse
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 log = logging.getLogger("demucs-api")
 
+# ជំនាន់នៃសេវានេះ។ វាបង្ហាញក្នុងចម្លើយ `/` ដូច្នេះស្គ្រីបលើទូរស័ព្ទ និងគេហទំព័រ
+# ដឹងថាឯកសារនេះជាជំនាន់ណា។ `1.1` = ម៉ូឌែលត្រូវបានទុកក្នុងមេម៉ូរី (គ្មាន cold start).
+VERSION = "1.1"
+
 DATA_DIR = Path(os.environ.get("DEMUCS_DATA_DIR", Path.home() / "demucs-api" / "stems")).expanduser().resolve()
 MODEL = os.environ.get("DEMUCS_MODEL", "htdemucs").strip() or "htdemucs"
 API_KEY = os.environ.get("DEMUCS_API_KEY", "").strip()
@@ -77,7 +82,7 @@ WARM = os.environ.get("DEMUCS_WARM", "1").strip() not in {"0", "false", "no"}
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-app = FastAPI(title="Demucs API", version="1.0")
+app = FastAPI(title="Demucs API", version=VERSION)
 
 # ទូរស័ព្ទមាន CPU តិច៖ ញែកម្តងមួយ។ ការរត់ពីរក្នុងពេលតែមួយធ្វើឲ្យយឺតទាំងពីរ។
 _run_lock = asyncio.Lock()
@@ -95,7 +100,7 @@ def _info() -> dict:
     return {
         "status": "ok",
         "service": "Demucs API",
-        "version": "1.0",
+        "version": VERSION,
         "model": MODEL,
         "busy": _busy,
     }
