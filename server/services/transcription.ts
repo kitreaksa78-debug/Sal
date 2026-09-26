@@ -206,29 +206,79 @@ export class GroqTranscriptionProvider implements TranscriptionProvider {
       ]);
 
       const audioBuffer = fs.readFileSync(uploadPath);
-      const formData = new FormData();
-      formData.append('file', new Blob([new Uint8Array(audioBuffer)], { type: 'audio/mpeg' }), 'audio.mp3');
-      formData.append('model', this.modelName);
-      formData.append('response_format', 'verbose_json');
-      formData.append('temperature', '0');
+      const blob = new Blob([new Uint8Array(audioBuffer)], { type: 'audio/mpeg' });
       // The studio's pick wins; STT_LANGUAGE stays as the server-wide default.
       const language =
         options?.language && options.language !== 'auto' ? options.language : process.env.STT_LANGUAGE;
       if (language && language !== 'auto') {
-        formData.append('language', language);
         logger.info(`Whisper is listening for "${language}" speech.`);
       } else {
         logger.info('Whisper will auto-detect the spoken language.');
       }
 
-      const response = await groqFetch(
-        '/audio/transcriptions',
-        { method: 'POST', body: formData },
-        'Whisper transcription'
-      );
+      /**
+       * `timestamp_granularities[]` turns Whisper's coarse segment windows into
+       * per-word timings.
+       *
+       * Both values have to be asked for: Groq answers a word-only request with
+       * `words` **instead of** `segments` (verified against the live endpoint),
+       * so requesting just `word` would leave the pipeline with nothing to build
+       * lines from. It is still an extra parameter, so the retry drops it
+       * entirely — an account or model that refuses it must still transcribe.
+       */
+      const buildForm = (withWords: boolean): FormData => {
+        const form = new FormData();
+        form.append('file', blob, 'audio.mp3');
+        form.append('model', this.modelName);
+        form.append('response_format', 'verbose_json');
+        form.append('temperature', '0');
+        if (withWords) {
+          form.append('timestamp_granularities[]', 'word');
+          form.append('timestamp_granularities[]', 'segment');
+        }
+        if (language && language !== 'auto') form.append('language', language);
+        return form;
+      };
 
-      const data = (await response.json()) as { segments?: any[] };
-      const rawSegments = Array.isArray(data.segments) ? data.segments : [];
+      const transcribe = async (withWords: boolean) => {
+        const response = await groqFetch(
+          '/audio/transcriptions',
+          { method: 'POST', body: buildForm(withWords) },
+          'Whisper transcription'
+        );
+        return (await response.json()) as { segments?: any[]; words?: any[] };
+      };
+
+      const wantsWords = process.env.STT_WORD_TIMESTAMPS !== 'false';
+      let data: { segments?: any[]; words?: any[] };
+      if (wantsWords) {
+        try {
+          data = await transcribe(true);
+        } catch (err) {
+          logger.warn('Word timestamps were refused; retrying without them:', err);
+          data = await transcribe(false);
+        }
+      } else {
+        data = await transcribe(false);
+      }
+
+      const words = Array.isArray(data.words) ? data.words : [];
+      if (words.length > 0) {
+        logger.info(`Whisper returned ${words.length} word timestamp(s); lines will be placed on their own words.`);
+      }
+      // A words-only answer must never cost the whole transcript, so the words
+      // are regrouped into lines when a service answers that way.
+      const rawSegments = Array.isArray(data.segments)
+        ? data.segments
+        : (() => {
+            const rebuilt = segmentsFromWords(words);
+            if (rebuilt.length > 0) {
+              logger.warn(
+                `Whisper returned word timings without segments; rebuilt ${rebuilt.length} line(s) from the words.`
+              );
+            }
+            return rebuilt;
+          })();
       const noSpeechThreshold = Number(process.env.STT_NO_SPEECH_THRESHOLD || '0.6');
       const segments: DialogueSegment[] = [];
 
@@ -245,11 +295,22 @@ export class GroqTranscriptionProvider implements TranscriptionProvider {
         const rawEnd = Math.max(start + 0.5, Number(raw.end) || start + 1);
         const end = durationSeconds > 0 ? Math.min(durationSeconds, rawEnd) : rawEnd;
 
+        // Whisper opens a segment on its decode window, which usually carries a
+        // little silence before the first spoken word. Placing the Khmer line
+        // there makes it late by that much on every single line; with word
+        // timings it can start on the word itself, which is what makes the dub
+        // sit on the mouth instead of drifting behind it.
+        const spoken = tightestWordWindow(start, end, words);
+        const placedStart = spoken ? spoken.start : start;
+        const placedEnd = spoken ? Math.max(spoken.start + 0.3, spoken.end) : end;
+
         segments.push({
           id: `seg_${segments.length + 1}`,
           speaker: 'speaker_1',
-          start: Number(start.toFixed(2)),
-          end: Number(end.toFixed(2)),
+          start: Number(Math.max(0, placedStart).toFixed(2)),
+          end: Number(
+            (durationSeconds > 0 ? Math.min(durationSeconds, placedEnd) : placedEnd).toFixed(2)
+          ),
           text: cleaned,
         });
       }
@@ -262,6 +323,73 @@ export class GroqTranscriptionProvider implements TranscriptionProvider {
       }
     }
   }
+}
+
+/**
+ * The span a segment's own words actually occupy.
+ *
+ * Matching is deliberately tolerant at both ends so a word Whisper placed a few
+ * frames outside the segment still belongs to it, and the answer is only ever
+ * used to tighten a line — never to stretch one past what Whisper found.
+ */
+/**
+ * Rebuild dialogue lines from word timings.
+ *
+ * The safety net for the shape Groq actually returns: a word-granularity request
+ * replaces `segments` with `words`, so a response that arrives with words and no
+ * segments is grouped back into lines on the natural pauses instead of throwing
+ * the transcript away.
+ */
+export function segmentsFromWords(
+  words: any[],
+  maxLineSeconds = 8
+): { start: number; end: number; text: string }[] {
+  const clean = words
+    .map((word) => ({
+      start: Number(word?.start),
+      end: Number(word?.end),
+      text: String(word?.word ?? '').trim(),
+    }))
+    .filter((word) => Number.isFinite(word.start) && Number.isFinite(word.end) && word.text)
+    .sort((a, b) => a.start - b.start);
+
+  const lines: { start: number; end: number; text: string }[] = [];
+  for (const word of clean) {
+    const current = lines[lines.length - 1];
+    const gap = current ? word.start - current.end : Number.POSITIVE_INFINITY;
+    const tooLong = current ? word.end - current.start > maxLineSeconds : false;
+    if (current && gap <= 0.6 && !tooLong) {
+      current.end = word.end;
+      current.text = `${current.text} ${word.text}`.trim();
+    } else {
+      lines.push({ start: word.start, end: word.end, text: word.text });
+    }
+  }
+  return lines;
+}
+
+export function tightestWordWindow(
+  start: number,
+  end: number,
+  words: any[]
+): { start: number; end: number } | null {
+  if (!Array.isArray(words) || words.length === 0) return null;
+
+  const tolerance = Number(process.env.STT_WORD_TOLERANCE || '0.35');
+  let first = Number.POSITIVE_INFINITY;
+  let last = 0;
+
+  for (const word of words) {
+    const wordStart = Number(word?.start);
+    const wordEnd = Number(word?.end);
+    if (!Number.isFinite(wordStart) || !Number.isFinite(wordEnd)) continue;
+    if (wordEnd <= start - tolerance || wordStart >= end + tolerance) continue;
+    first = Math.min(first, wordStart);
+    last = Math.max(last, wordEnd);
+  }
+
+  if (!Number.isFinite(first) || last <= first) return null;
+  return { start: Math.max(0, first), end: last };
 }
 
 export class AssemblyAITranscriptionProvider implements TranscriptionProvider {
