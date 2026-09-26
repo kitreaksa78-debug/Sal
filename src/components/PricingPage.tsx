@@ -6,6 +6,7 @@ import {
   Video,
   QrCode,
   Upload,
+  Landmark,
   Loader2,
   Clock3,
   CheckCircle2,
@@ -26,6 +27,17 @@ interface PricingPageProps {
 
 /** The owner's own bank QR, placed in the site's static folder. */
 const QR_IMAGE = '/qr-payment.png';
+
+/**
+ * Who the money goes to, spelled out above the QR. The scan itself is
+ * guess-free for the customer, but the bank app shows the beneficiary only after
+ * the code is read, so both halves are written next to the image — that is what
+ * lets somebody confirm the QR belongs to this account before paying.
+ */
+const PAY_TO = {
+  bank: 'ABA BANK',
+  accountName: 'CHING KEA',
+};
 
 const STATUS_STYLES: Record<
   ProPaymentRequest['status'],
@@ -181,8 +193,10 @@ const QrPaymentDialog: React.FC<{
               <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
               <p className="text-[11px] leading-relaxed text-amber-200 sm:text-xs">
                 កូដ QR មិនទាន់បានដាក់នៅឡើយ។ សូមបង់ប្រាក់ទៅគណនី{' '}
-                <span className="font-semibold">CHING KEA</span> រួចផ្ញើវិក្កយបត្រខាងក្រោម
-                ឬទាក់ទងម្ចាស់គេហទំព័រ។
+                <span className="font-semibold">
+                  {PAY_TO.bank} · {PAY_TO.accountName}
+                </span>{' '}
+                រួចផ្ញើវិក្កយបត្រខាងក្រោម ឬទាក់ទងម្ចាស់គេហទំព័រ។
                 <span className="text-amber-200/70">
                   {' '}
                   (Payment QR not uploaded yet — send the receipt below or contact the owner.)
@@ -190,14 +204,33 @@ const QrPaymentDialog: React.FC<{
               </p>
             </div>
           ) : (
-            <div className="flex justify-center">
-              <img
-                src={QR_IMAGE}
-                alt="កូដ QR បង់ប្រាក់ CHING KEA"
-                loading="lazy"
-                onError={() => setQrMissing(true)}
-                className="h-48 w-48 rounded-xl bg-white object-contain p-2 shadow-lg shadow-black/40 sm:h-56 sm:w-56"
-              />
+            /* QR plus the account it belongs to, in one card — the customer
+               checks the name here and sees the same name in the bank app. */
+            <div className="rounded-xl border border-slate-800 bg-slate-900/50 p-3.5">
+              <div className="flex justify-center">
+                <img
+                  src={QR_IMAGE}
+                  alt={`កូដ QR បង់ប្រាក់ ${PAY_TO.bank} · ${PAY_TO.accountName}`}
+                  loading="lazy"
+                  onError={() => setQrMissing(true)}
+                  className="h-48 w-48 rounded-xl bg-white object-contain p-2 shadow-lg shadow-black/40 sm:h-56 sm:w-56"
+                />
+              </div>
+
+              <div className="mt-3 flex flex-col items-center gap-1.5 text-center">
+                <span className="inline-flex items-center gap-1.5 rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[11px] font-bold tracking-wide text-sky-200">
+                  <Landmark className="h-3.5 w-3.5" />
+                  {PAY_TO.bank}
+                </span>
+                <p className="text-xs text-slate-300 sm:text-sm">
+                  ឈ្មោះគណនី:{' '}
+                  <span className="font-bold text-white">{PAY_TO.accountName}</span>{' '}
+                  <span className="text-slate-500">(Account name)</span>
+                </p>
+                <p className="text-[10px] leading-relaxed text-slate-500">
+                  សូមផ្ទៀងផ្ទាត់ឈ្មោះនេះក្នុងកម្មវិធីធនាគារមុនពេលបង់ប្រាក់
+                </p>
+              </div>
             </div>
           )}
 
