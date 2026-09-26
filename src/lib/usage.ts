@@ -13,8 +13,8 @@ const PLAN_BASE = 'khmerdub_plan';
 const EMAIL_BASE = 'khmerdub_email';
 const ADMIN_BASE = 'khmerdub_admin';
 
-/** Free plan: 3 videos/day, 2 minutes each. */
-export const FREE_DAILY_LIMIT = 3;
+/** Free plan: 1 video/day, 2 minutes long. */
+export const FREE_DAILY_LIMIT = 1;
 export const FREE_MAX_DURATION = 120;
 /** Pro plan: 30 minutes per video. */
 export const PRO_MAX_DURATION = 1800;

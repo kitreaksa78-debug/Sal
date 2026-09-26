@@ -13,7 +13,7 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { getPlan, PRO_PRICE_USD } from '../lib/usage';
+import { getPlan, FREE_DAILY_LIMIT, PRO_PRICE_USD } from '../lib/usage';
 import {
   getMyProRequests,
   submitProPayment,
@@ -328,7 +328,9 @@ const PlanCard: React.FC<{
 );
 
 const FREE_FEATURES: PlanFeature[] = [
-  { label: '3 វីដេអូ', english: 'per day' },
+  // Read from the one constant the gate uses, so the card can never promise a
+  // different allowance from the one the upload actually enforces.
+  { label: `${FREE_DAILY_LIMIT} វីដេអូ`, english: 'per day' },
   { label: '2 នាទី', english: 'per video' },
   { label: 'បង្ហាញ 720p', english: 'output' },
   { label: 'សំឡេងខ្មែរ', english: 'Khmer voice' },
