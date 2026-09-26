@@ -13,7 +13,6 @@ import {
   X,
   type LucideIcon,
 } from 'lucide-react';
-import { CheckoutButton } from './CheckoutButton';
 import { getPlan, PRO_PRICE_USD } from '../lib/usage';
 import {
   getMyProRequests,
@@ -268,12 +267,6 @@ const QrPaymentDialog: React.FC<{
             </div>
           )}
 
-          <div className="border-t border-slate-800 pt-3">
-            <CheckoutButton className="w-full" />
-            <p className="mt-1.5 text-center text-[10px] text-slate-500">
-              បង់ផ្ទាល់តាមកាត LemonSqueezy — Pro បើកភ្លាមៗ
-            </p>
-          </div>
         </div>
       </div>
     </div>
