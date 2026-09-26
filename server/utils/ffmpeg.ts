@@ -4,7 +4,27 @@ import path from 'path';
 import ffmpegStaticPath from 'ffmpeg-static';
 import ffprobeStatic from 'ffprobe-static';
 import { logger } from './logger.js';
+import { resolveSubtitleFontsDir } from './subtitleFonts.js';
 import { VideoMetadata } from '../types.js';
+
+/**
+ * Escape one value for FFmpeg's filtergraph parser.
+ *
+ * The parser treats `:` as an option separator, `,` as a filter separator and
+ * `\` / `'` / `[` / `]` / `;` as syntax, so a path carrying any of them has to
+ * be escaped or the whole filter chain is misread. Ordinary paths come out of
+ * this unchanged.
+ */
+function escapeFilterValue(value: string): string {
+  return value
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/:/g, '\\:')
+    .replace(/,/g, '\\,')
+    .replace(/\[/g, '\\[')
+    .replace(/\]/g, '\\]')
+    .replace(/;/g, '\\;');
+}
 
 /**
  * How long one FFmpeg run may take before it is killed.
@@ -218,6 +238,26 @@ export class FFmpegHelper {
     }
   }
 
+  /**
+   * The audio filter that cuts a line to `trim` seconds and fades the very end.
+   *
+   * Cutting speech dead mid-syllable is what a listener hears as a broken, choppy
+   * dub, so every hard cut ends in a short fade. The fade is anchored to the cut
+   * point, which means a line that finishes before it is never touched: the fade
+   * only exists where the cut actually happens.
+   */
+  public static slotTrimChain(trim: number, fadeSeconds?: number): string {
+    const fade = Math.min(
+      fadeSeconds ?? Number(process.env.SPEECH_TRIM_FADE_SECONDS || '0.12'),
+      Math.max(0, trim / 3)
+    );
+    const parts = [`atrim=end=${trim.toFixed(3)}`, 'asetpts=PTS-STARTPTS'];
+    if (fade > 0.005) {
+      parts.push(`afade=t=out:st=${Math.max(0, trim - fade).toFixed(3)}:d=${fade.toFixed(3)}`);
+    }
+    return parts.join(',');
+  }
+
   /** Build a safe atempo chain for any factor using 0.5..2.0 steps. */
   public static buildAtempoChain(factor: number): string {
     const clamped = Math.max(0.25, Math.min(4.0, factor));
@@ -330,11 +370,12 @@ export class FFmpegHelper {
     if (outDur > slotDuration + 0.01) {
       // Even at the cap this line is too long, so cutting it is the only way to
       // hold the sync. The trim stays, but it is reported: a clipped syllable is
-      // audible and the line it came from is worth knowing.
+      // audible and the line it came from is worth knowing. The cut itself ends
+      // in a fade (see slotTrimChain) so it sounds cut short rather than chopped.
       await this.execute([
         '-y',
         '-i', tempoPath,
-        '-filter:a', `atrim=end=${slotDuration.toFixed(3)},asetpts=PTS-STARTPTS`,
+        '-filter:a', this.slotTrimChain(slotDuration),
         '-vn',
         outputAudioPath,
       ]);
@@ -704,49 +745,83 @@ export class FFmpegHelper {
    * Render final MP4 by combining original video stream with newly mixed audio track
    * Codecs: H.264 video, AAC audio (highly compatible with Android, Chrome, Safari, etc.)
    */
+  /**
+   * Render the final MP4, optionally painting the Khmer subtitles onto the
+   * picture.
+   *
+   * `subtitleAssPath` is an ASS file (see VideoRenderingService.generateAss).
+   * When it is given, libass draws it over every frame with the Khmer font from
+   * `assets/fonts`, which is what puts readable Khmer text **in** the downloaded
+   * video rather than only in a side-car file the player may never show.
+   *
+   * Burned-in text forces a video re-encode, and a host without a Khmer font (or
+   * without libass) must not lose the whole job over it: the render is attempted
+   * with the subtitles and, if that fails, retried without them.
+   */
   public static async renderFinalMp4(
     originalVideoPath: string,
     mixedAudioPath: string,
     outputMp4Path: string,
     quality: '720p' | '1080p' | 'original' = 'original',
     /** Reported while the MP4 is written, against the source video's length. */
-    onProgress?: (writtenSeconds: number) => void
+    onProgress?: (writtenSeconds: number) => void,
+    /** ASS file to burn into the picture. Omitted when the studio turned subtitles off. */
+    subtitleAssPath?: string
   ): Promise<string> {
-    const scaleFilter =
-      quality === '720p'
-        ? ['-vf', 'scale=-2:720']
-        : quality === '1080p'
-        ? ['-vf', 'scale=-2:1080']
-        : [];
-
     // Check if original video stream is already H.264
     const meta = await this.probeVideo(originalVideoPath);
     const isH264 = meta.videoCodec === 'h264';
 
-    const args: string[] = ['-y', '-i', originalVideoPath, '-i', mixedAudioPath];
+    const scale = quality === '720p' ? 'scale=-2:720' : quality === '1080p' ? 'scale=-2:1080' : '';
 
-    if (isH264 && quality === 'original') {
-      // Fast stream copy for video
-      args.push('-c:v', 'copy');
-    } else {
-      // Re-encode with standard H.264 fast preset
-      args.push('-c:v', 'libx264', '-preset', 'fast', '-crf', '22', ...scaleFilter);
+    const buildArgs = (subtitleFilter: string | null): string[] => {
+      const chain = [scale, subtitleFilter].filter(Boolean).join(',');
+      const args: string[] = ['-y', '-i', originalVideoPath, '-i', mixedAudioPath];
+
+      if (isH264 && quality === 'original' && !subtitleFilter) {
+        // Fast stream copy for video — only possible when nothing is drawn on top.
+        args.push('-c:v', 'copy');
+      } else {
+        // Re-encode with standard H.264 fast preset
+        args.push('-c:v', 'libx264', '-preset', 'fast', '-crf', '22');
+        if (chain) args.push('-vf', chain);
+      }
+
+      args.push(
+        '-c:a', 'aac',
+        '-b:a', '192k',
+        '-map', '0:v:0',
+        '-map', '1:a:0',
+        '-movflags', '+faststart', // web streaming friendly
+        '-shortest',
+        outputMp4Path
+      );
+      return args;
+    };
+
+    let subtitleFilter: string | null = null;
+    if (subtitleAssPath && fs.existsSync(subtitleAssPath)) {
+      const fontsDir = await resolveSubtitleFontsDir();
+      if (fontsDir) {
+        subtitleFilter = `ass=filename=${escapeFilterValue(subtitleAssPath)}:fontsdir=${escapeFilterValue(
+          fontsDir
+        )}`;
+      }
     }
 
-    args.push(
-      '-c:a', 'aac',
-      '-b:a', '192k',
-      '-map', '0:v:0',
-      '-map', '1:a:0',
-      '-movflags', '+faststart', // web streaming friendly
-      '-shortest',
-      outputMp4Path
-    );
+    const runOptions = { onProgress, totalSeconds: onProgress ? meta.duration : undefined };
 
-    await this.execute(args, {
-      onProgress,
-      totalSeconds: onProgress ? meta.duration : undefined,
-    });
+    if (subtitleFilter) {
+      try {
+        await this.execute(buildArgs(subtitleFilter), runOptions);
+        logger.info('Rendered the final MP4 with burned-in Khmer subtitles.');
+        return outputMp4Path;
+      } catch (err) {
+        logger.warn('Burning subtitles into the video failed; rendering without them:', err);
+      }
+    }
+
+    await this.execute(buildArgs(null), runOptions);
     return outputMp4Path;
   }
 

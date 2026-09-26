@@ -27,7 +27,17 @@ export class AudioMixingService {
     segments: DialogueSegment[],
     totalDuration: number,
     outputSpeechTrackPath: string,
-    tempDir: string
+    tempDir: string,
+    options: {
+      /**
+       * How long each line may be, as the synthesizer was told. Silence between
+       * two speakers belongs to the line before it, so this is usually longer
+       * than the segment's own slot: giving it to the line is what stops the
+       * Khmer voice being sliced mid-syllable. It stays clamped to the next
+       * mouth start below, so two lines can never talk over each other.
+       */
+      speechWindows?: Map<string, number>;
+    } = {}
   ): Promise<string> {
     const raw = segments.filter(s => s.audioFile && fs.existsSync(s.audioFile));
     // Mouth order is timeline order; WHISPER can return out-of-order chunks
@@ -48,7 +58,9 @@ export class AudioMixingService {
 
     // Clamp overlaps: if a slot overlaps the next mouth start, trim the line
     // to gap-to-next so lines never talk over each other.
-    const effectiveSlots: number[] = validSegments.map(slotDuration);
+    const effectiveSlots: number[] = validSegments.map(
+      (seg) => options.speechWindows?.get(seg.id) ?? slotDuration(seg)
+    );
     for (let i = 0; i < validSegments.length - 1; i++) {
       const gap = validSegments[i + 1].start - validSegments[i].start;
       // Keep a tiny breathing gap so cuts are not clicky
@@ -62,11 +74,13 @@ export class AudioMixingService {
     if (validSegments.length === 1) {
       const seg = validSegments[0];
       const delayMs = Math.max(0, Math.round(seg.start * 1000));
-      const trim = effectiveSlots[0].toFixed(3);
+      // The same fade the fit uses, so a line that reaches the cut point decays
+      // instead of stopping dead; a line that ends earlier is unaffected.
+      const trim = FFmpegHelper.slotTrimChain(effectiveSlots[0]);
       await FFmpegHelper.execute([
         '-y',
         '-i', seg.audioFile!,
-        '-filter_complex', `[0:a]atrim=end=${trim},asetpts=PTS-STARTPTS,adelay=${delayMs}|${delayMs},apad=whole_dur=${Math.ceil(totalDuration)}[out]`,
+        '-filter_complex', `[0:a]${trim},adelay=${delayMs}|${delayMs},apad=whole_dur=${Math.ceil(totalDuration)}[out]`,
         '-map', '[out]',
         '-ac', '2',
         '-ar', '44100',
@@ -82,9 +96,10 @@ export class AudioMixingService {
     validSegments.forEach((seg, idx) => {
       inputArgs.push('-i', seg.audioFile!);
       const delayMs = Math.max(0, Math.round(seg.start * 1000));
-      const trim = effectiveSlots[idx].toFixed(3);
-      // atrim to slot guarantees no line ever overruns its mouth window
-      filterClauses.push(`[${idx}:a]atrim=end=${trim},asetpts=PTS-STARTPTS,adelay=${delayMs}|${delayMs}[a${idx}]`);
+      // Trimming to the window guarantees no line ever overruns its mouth
+      // window; the fade inside slotTrimChain keeps that cut from clicking.
+      const trim = FFmpegHelper.slotTrimChain(effectiveSlots[idx]);
+      filterClauses.push(`[${idx}:a]${trim},adelay=${delayMs}|${delayMs}[a${idx}]`);
       mixInputs.push(`[a${idx}]`);
     });
 

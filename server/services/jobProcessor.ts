@@ -342,6 +342,36 @@ export class JobProcessor {
       const segmentsDir = path.join(jobTempDir, 'tts_segments');
       if (!fs.existsSync(segmentsDir)) fs.mkdirSync(segmentsDir, { recursive: true });
 
+      // How long each line may be.
+      //
+      // A line may use the silence that follows it, right up to the moment the
+      // next speaker starts: leftover silence is worth nothing to the video,
+      // while a line squeezed into its own slot is first sped up and then cut
+      // mid-syllable — which is exactly what makes a dub sound choppy. So the
+      // window is the segment's own length plus a little headroom, never past
+      // the next line. The assembler is handed the very same windows, so the
+      // room the voice was given is the room it keeps on the timeline.
+      const windowStretch = Math.max(1, Number(process.env.SPEECH_WINDOW_STRETCH || '1.4'));
+      const timeline = [...dialogueSegments].sort((a, b) => a.start - b.start);
+      const speechWindows = new Map<string, number>();
+      timeline.forEach((seg, index) => {
+        const own = Math.max(0.5, seg.end - seg.start);
+        const next = timeline[index + 1];
+        const beforeNext = next
+          ? Math.max(0, next.start - seg.start - DIALOGUE_GAP_SECONDS)
+          : Number.POSITIVE_INFINITY;
+        // The last line has no next speaker to run into; the video's own end is
+        // the only limit left.
+        const beforeEnd =
+          meta.duration > 0
+            ? Math.max(own, meta.duration - seg.start - DIALOGUE_GAP_SECONDS)
+            : Number.POSITIVE_INFINITY;
+        speechWindows.set(
+          seg.id,
+          Math.max(0.5, Math.min(beforeNext, beforeEnd, own * windowStretch))
+        );
+      });
+
       if (ttsAvailable) {
         // Lines are independent, so synthesize several at once instead of the
         // old one-at-a-time loop; a 60-line video used to spend a full minute here.
@@ -352,22 +382,6 @@ export class JobProcessor {
           1,
           Number(process.env.TTS_CONCURRENCY) || defaultTtsConcurrency
         );
-
-        // How long each line may be. A line can only use the time before the
-        // next one starts — assembling clamps it to that gap so two speakers
-        // never talk over each other — so fitting it to its own (often longer)
-        // slot would just get it cut mid-word later. Asking for the real window
-        // keeps the Khmer voice on the mouth without chopping syllables.
-        const timeline = [...dialogueSegments].sort((a, b) => a.start - b.start);
-        const speechWindows = new Map<string, number>();
-        timeline.forEach((seg, index) => {
-          const own = Math.max(0.5, seg.end - seg.start);
-          const next = timeline[index + 1];
-          const beforeNext = next
-            ? Math.max(0, next.start - seg.start - DIALOGUE_GAP_SECONDS)
-            : Number.POSITIVE_INFINITY;
-          speechWindows.set(seg.id, Math.max(0.5, Math.min(own, beforeNext)));
-        });
 
         let voicedSoFar = 0;
 
@@ -451,7 +465,8 @@ export class JobProcessor {
           dialogueSegments,
           meta.duration,
           masterSpeechTrack,
-          jobTempDir
+          jobTempDir,
+          { speechWindows }
         );
 
         // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
@@ -499,7 +514,37 @@ export class JobProcessor {
       const audioOutputFilename = `khmer-audio-${jobId}.wav`;
       const savedAudioPath = await storage.saveFile('outputs', audioOutputFilename, finalMixedAudioTrack);
 
-      // STEP 10: RENDER FINAL MP4 VIDEO (H.264 / AAC)
+      // STEP 10: SUBTITLES
+      //
+      // The Khmer lines are written out before the video is rendered, because
+      // the same script is painted onto every frame: whoever downloads the MP4
+      // should see the Khmer text without having to hunt for a side-car file.
+      // The SRT/VTT copies are still saved as well, so the subtitles can be
+      // edited or switched on as a track in a player.
+      const srtContent = VideoRenderingService.generateSrt(dialogueSegments);
+      const vttContent = VideoRenderingService.generateVtt(dialogueSegments);
+      const srtFilename = `subtitles-${jobId}.srt`;
+      const vttFilename = `subtitles-${jobId}.vtt`;
+
+      const savedSrtPath = await storage.saveFile('outputs', srtFilename, Buffer.from(srtContent, 'utf8'));
+      const savedVttPath = await storage.saveFile('outputs', vttFilename, Buffer.from(vttContent, 'utf8'));
+
+      // `subtitle: false` is the only way to ask for a clean picture; the studio
+      // defaults it to on.
+      const burnedSubtitles =
+        job.settings.subtitle === false
+          ? null
+          : VideoRenderingService.writeAssFile(
+              dialogueSegments,
+              path.join(jobTempDir, 'khmer-subtitles.ass'),
+              meta.width,
+              meta.height
+            );
+      if (job.settings.subtitle === false) {
+        logger.info(`Subtitles are turned off for job ${jobId}; rendering a clean picture.`);
+      }
+
+      // STEP 11: RENDER FINAL MP4 VIDEO (H.264 / AAC)
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'rendering');
       const tempFinalMp4 = path.join(jobTempDir, `khmer-dubbed-${jobId}.mp4`);
@@ -525,19 +570,11 @@ export class JobProcessor {
         finalMixedAudioTrack,
         tempFinalMp4,
         job.settings,
-        reportRenderProgress
+        reportRenderProgress,
+        burnedSubtitles ?? undefined
       );
 
-      // Generate Subtitles (SRT & VTT)
-      const srtContent = VideoRenderingService.generateSrt(dialogueSegments);
-      const vttContent = VideoRenderingService.generateVtt(dialogueSegments);
-      const srtFilename = `subtitles-${jobId}.srt`;
-      const vttFilename = `subtitles-${jobId}.vtt`;
-
-      const savedSrtPath = await storage.saveFile('outputs', srtFilename, Buffer.from(srtContent, 'utf8'));
-      const savedVttPath = await storage.saveFile('outputs', vttFilename, Buffer.from(vttContent, 'utf8'));
-
-      // STEP 11: QUALITY CHECK
+      // STEP 12: QUALITY CHECK
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'quality_check');
       const qualityResult = await FFmpegHelper.verifyOutputQuality(tempFinalMp4);
@@ -549,7 +586,7 @@ export class JobProcessor {
       const finalMp4Filename = `khmer-dubbed-${jobId}.mp4`;
       const savedMp4Path = await storage.saveFile('outputs', finalMp4Filename, tempFinalMp4);
 
-      // STEP 12: COMPLETED
+      // STEP 13: COMPLETED
       await this.updateJobState(jobId, 'completed', KHMER_STEP_MESSAGES.completed, {
         outputFile: savedMp4Path,
         outputAudioFile: savedAudioPath,

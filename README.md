@@ -51,6 +51,33 @@ The app owner can also paste the URL into the `ញែកភ្លេង · Demuc
 studio, and that value wins over the environment variable — a phone tunnel gets a
 new URL every time it is reopened, so re-pointing it must not need a redeploy.
 
+## Khmer subtitles
+
+The finished MP4 carries the Khmer text on the picture: the lines are written to
+an ASS script and painted onto every frame with libass, so the subtitles show up
+in every player, on every phone, with no separate file to find. `subtitles-<id>.srt`
+and `.vtt` are still produced next to it, for editing or for loading as a track.
+
+Drawing Khmer needs a Khmer font, which the hosts this runs on do not have, so
+`assets/fonts/NotoSansKhmer-*.ttf` travels with the repository. If a host is
+missing them the server downloads the same font into `data/fonts` once
+(`SUBTITLE_FONTS_DIR` overrides where it looks); if it still cannot find one, the
+video is rendered without burned-in subtitles rather than failing the job. The
+font size and margins follow the real frame size, and lines are wrapped by hand
+because Khmer has almost no spaces for libass to break on.
+
+Set `subtitle: false` in a job's settings for a clean picture.
+
+## Voice timing
+
+A line may use the silence that follows it, up to the moment the next speaker
+starts, so a long Khmer sentence is spoken at close to its natural speed instead
+of being sped up and cut off mid-syllable. `SPEECH_WINDOW_STRETCH` (default
+`1.4`) sets how much room past its own slot a line may claim, and
+`SPEECH_TRIM_FADE_SECONDS` (default `0.12`) fades the end of any line that still
+has to be cut, so a hard cut sounds cut short rather than chopped. `MAX_SPEECH_TEMPO`
+(default `1.5`) is the fastest a line may be sped up in the first place.
+
 ## Required secrets
 
 Add these in **Settings → Variables and secrets** as **Secrets** (not variables):

@@ -1,7 +1,7 @@
 import React, { useRef } from 'react';
-import { Download, CheckCircle2, RefreshCw } from 'lucide-react';
+import { Download, CheckCircle2, RefreshCw, Captions } from 'lucide-react';
 import { JobRecord } from '../types';
-import { getDownloadUrl } from '../lib/api';
+import { getDownloadUrl, getSubtitlesUrl } from '../lib/api';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -12,6 +12,8 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   const dubbedVideoRef = useRef<HTMLVideoElement>(null);
 
   const finalVideoUrl = getDownloadUrl(job.id);
+  const srtUrl = getSubtitlesUrl(job.id, 'srt');
+  const vttUrl = getSubtitlesUrl(job.id, 'vtt');
 
   return (
     <div className="space-y-6">
@@ -55,6 +57,10 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
                 <span>វីដេអូសំឡេងខ្មែរ (Khmer Dubbed Video)</span>
               </h3>
             </div>
+            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
+              <Captions className="w-3.5 h-3.5" />
+              អក្សរខ្មែរបញ្ចូលក្នុងវីដេអូរួច
+            </span>
           </div>
 
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
@@ -66,6 +72,11 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
               className="w-full h-full object-contain"
             />
           </div>
+
+          <p className="text-[11px] text-slate-400 leading-relaxed">
+            អក្សរខ្មែរត្រូវបានបញ្ចូលទៅក្នុងវីដេអូនេះផ្ទាល់ ដូច្នេះវាលេចឡើងគ្រប់កម្មវិធី និងគ្រប់ទូរស័ព្ទ។
+            (The Khmer subtitles are burned into this video, so they show in every player.)
+          </p>
         </div>
       </div>
 
@@ -85,6 +96,26 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
             <Download className="w-4 h-4" />
             <span>ទាញយក MP4 (Khmer Video)</span>
           </a>
+
+          {/* Subtitle files, so the text can be edited or loaded as a track */}
+          <div className="grid grid-cols-2 gap-3">
+            <a
+              href={srtUrl}
+              download={`khmer-subtitles-${job.id}.srt`}
+              className="flex items-center justify-center gap-2 px-3 py-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 font-semibold text-xs border border-slate-700 transition-colors min-h-[44px]"
+            >
+              <Captions className="w-4 h-4 text-emerald-400" />
+              <span>អក្សរ SRT</span>
+            </a>
+            <a
+              href={vttUrl}
+              download={`khmer-subtitles-${job.id}.vtt`}
+              className="flex items-center justify-center gap-2 px-3 py-3 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 font-semibold text-xs border border-slate-700 transition-colors min-h-[44px]"
+            >
+              <Captions className="w-4 h-4 text-emerald-400" />
+              <span>អក្សរ VTT</span>
+            </a>
+          </div>
         </div>
       </div>
     </div>

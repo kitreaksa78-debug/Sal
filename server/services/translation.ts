@@ -553,8 +553,9 @@ CRITICAL DUBBING TRANSLATION RULES:
 4. FIT ORIGINAL DURATION (LIP-SYNC / TIMING CONSTRAINT):
    - Cambodian Khmer audio takes time to speak.
    - Calculate duration = end - start seconds.
-   - Keep the Khmer translation concise enough to be spoken comfortably within the original segment duration.
-   - If a literal translation would be too long for the duration, rephrase or condense it naturally.
+   - KHMER SPEECH RATE: spoken Khmer runs at roughly 4-5 syllables per second, so a line with duration D can hold about D * 4.5 syllables. That is the budget for every line.
+   - Keep the Khmer translation concise enough to be spoken comfortably within the original segment duration, and stay under that syllable budget. A line that overshoots has to be sped up or cut off mid-word in the dub, which the viewer hears as broken speech.
+   - If a literal translation would be too long for the duration, rephrase or condense it naturally — use shorter Khmer words, not fewer ideas.
 5. PRESERVE EMOTIONAL TONE & SPEECH:
    - Identify emotion: "neutral", "energetic", "calm", "dramatic", "happy", "serious".
    - Reflect this tone in the chosen Khmer phrasing and punctuation.
@@ -566,7 +567,12 @@ CRITICAL DUBBING TRANSLATION RULES:
 9. Return STRICT JSON only matching the schema.
 10. SOURCE LANGUAGE: the dialogue may already be in Khmer. If a line is already Khmer, keep it as Khmer and only clean up obvious spacing or spelling — do NOT re-translate it, and never change proper names or numbers.
 11. You will receive the transcript in numbered blocks. Translate EVERY line in the block you are given and echo back its exact "id" — never merge, split, reorder or skip lines.
-12. SCRIPT PURITY — ABSOLUTE REQUIREMENT:
+12. COMPLETENESS — NEVER TRADE MEANING FOR TIME:
+   - Every piece of information in the source line must still be there in the Khmer line. Never summarize, never drop a clause, never answer with a shorter sentence that loses what was said.
+   - When the line is too long for its duration, condense the WORDING (shorter Khmer words, dropped pleasantries, tighter phrasing) — never delete facts, names, numbers or requests.
+   - Numbers, dates, money and units stay exactly as spoken. Do not round, convert or invent them.
+
+13. SCRIPT PURITY — ABSOLUTE REQUIREMENT:
    - Every "khmer" value you return MUST be written in pure Khmer Unicode only (U+1780-U+17FF plus Khmer punctuation U+17D4-U+17DD, digits, and basic Latin for brand names from the glossary).
    - FORBIDDEN: Thai script (U+0E00-U+0E7F) and Lao script (U+0E80-U+0EFF) are NEVER allowed, not even one character. ការសរសេរត្រូវតែជាអក្សរខ្មែរសុទ្ធ 100% ហាមប្រើអក្សរថៃឬឡាវដាច់ខាត។
    - Bad example (DO NOT DO): "ไปไหนมา" (Thai) instead of "ទៅណាមក" (Khmer) — they look similar but are different Unicode.
