@@ -14,7 +14,7 @@ import { getTranscriptionProvider } from './transcription.js';
 import { SpeakerDetector } from './speakerDetection.js';
 import { getTranslationService } from './translation.js';
 import { getTTSProvider } from './tts.js';
-import { AudioMixingService } from './audioMixing.js';
+import { AudioMixingService, DIALOGUE_GAP_SECONDS } from './audioMixing.js';
 import { VideoRenderingService } from './videoRendering.js';
 import { logger } from '../utils/logger.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
@@ -352,6 +352,23 @@ export class JobProcessor {
           1,
           Number(process.env.TTS_CONCURRENCY) || defaultTtsConcurrency
         );
+
+        // How long each line may be. A line can only use the time before the
+        // next one starts — assembling clamps it to that gap so two speakers
+        // never talk over each other — so fitting it to its own (often longer)
+        // slot would just get it cut mid-word later. Asking for the real window
+        // keeps the Khmer voice on the mouth without chopping syllables.
+        const timeline = [...dialogueSegments].sort((a, b) => a.start - b.start);
+        const speechWindows = new Map<string, number>();
+        timeline.forEach((seg, index) => {
+          const own = Math.max(0.5, seg.end - seg.start);
+          const next = timeline[index + 1];
+          const beforeNext = next
+            ? Math.max(0, next.start - seg.start - DIALOGUE_GAP_SECONDS)
+            : Number.POSITIVE_INFINITY;
+          speechWindows.set(seg.id, Math.max(0.5, Math.min(own, beforeNext)));
+        });
+
         let voicedSoFar = 0;
 
         await mapWithConcurrency(dialogueSegments, ttsConcurrency, async (seg, i) => {
@@ -359,7 +376,7 @@ export class JobProcessor {
           // already synthesised are simply discarded with the temp folder.
           await this.throwIfCancelled(jobId);
           const segOutPath = path.join(segmentsDir, `segment_${i + 1}.wav`);
-          const originalDuration = Math.max(0.5, seg.end - seg.start);
+          const originalDuration = speechWindows.get(seg.id) ?? Math.max(0.5, seg.end - seg.start);
 
           // Determine voice gender
           let gender: 'male' | 'female' | 'neutral' = seg.speakerGender || 'male';

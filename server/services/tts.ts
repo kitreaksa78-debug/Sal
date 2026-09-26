@@ -10,13 +10,17 @@ import { withRetry } from '../utils/retry.js';
 import { getGeminiApiKey } from '../utils/aiKeys.js';
 
 /**
- * How far a Khmer line may be squeezed to fit its original slot before it stops
- * sounding human. 1.25x is the point where chipmunk artefacts appear; beyond that
- * the line is hard-trimmed to the slot so it stays perfectly lip-synced. The
- * overflow is NOT carried into the next pause — trimming keeps every line locked
- * to the mouth movement that created it.
+ * How far a Khmer line may be squeezed to fit its original slot.
+ *
+ * Khmer usually needs more words than the source language, so a translated line
+ * often runs past its slot. Padding silence is stripped before the fit is judged
+ * (see fitAudioToSlot), which already recovers a good part of that, and 1.5x is
+ * still intelligible for speech — whereas a tighter cap means the line is cut
+ * mid-syllable, which sounds broken and loses the words the viewer needs. Slow
+ * it down with MAX_SPEECH_TEMPO if the owner prefers calmer delivery and can
+ * accept trimming instead.
  */
-const MAX_SPEECH_TEMPO = Number(process.env.MAX_SPEECH_TEMPO || '1.25');
+const MAX_SPEECH_TEMPO = Number(process.env.MAX_SPEECH_TEMPO || '1.5');
 
 export interface TTSOptions {
   gender?: 'male' | 'female' | 'neutral';

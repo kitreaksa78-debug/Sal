@@ -268,48 +268,119 @@ export class FFmpegHelper {
    *   leave silence for the rest of the slot (no artificial slow-down).
    * Returns measured final duration.
    */
+  /**
+   * Make one synthesized line occupy its slot on the timeline.
+   *
+   * Three things have to hold at once for the Khmer voice to land on the original
+   * mouth movement: the line starts when the speaker starts, it finishes inside
+   * the slot, and it is not cut mid-word.
+   *
+   * TTS engines pad every line with silence, so the raw file is measured wrong
+   * twice over — the padding makes a line look longer than it is, and the leading
+   * padding pushes the actual voice away from the mouth. So the padding is
+   * removed first, the fit is judged on the speech that is left, and a speed-up
+   * within `maxTempo` is the normal way to make it fit. Only a line that needs
+   * more than the cap is trimmed, and that is logged as the real compromise it
+   * is rather than presented as a clean fit.
+   */
   public static async fitAudioToSlot(
     inputAudioPath: string,
     outputAudioPath: string,
     slotDuration: number,
-    maxTempo: number = 1.25
+    maxTempo: number = 1.5
   ): Promise<number> {
-    const dur = await this.getAudioDuration(inputAudioPath);
-    if (!dur || !slotDuration || slotDuration < 0.35) {
+    const rawDuration = await this.getAudioDuration(inputAudioPath);
+    if (!rawDuration || !slotDuration || slotDuration < 0.35) {
       fs.copyFileSync(inputAudioPath, outputAudioPath);
       return await this.getAudioDuration(outputAudioPath);
     }
-    const ratio = dur / slotDuration;
-    // Already fits within 8% tolerance - keep natural delivery
-    if (ratio <= 1.08 && ratio >= 0.92) {
+
+    const speechDuration = await this.stripSilence(inputAudioPath, outputAudioPath);
+
+    // A line that is silent from start to finish has nothing to place; hand the
+    // original through rather than an empty file.
+    if (speechDuration <= 0.05) {
       fs.copyFileSync(inputAudioPath, outputAudioPath);
-      return dur;
+      return rawDuration;
     }
-    // Too long: speed up (capped) then hard-trim to slot to guarantee sync
-    if (ratio > 1.08) {
-      const needed = Math.min(maxTempo, ratio);
-      const chain = this.buildAtempoChain(needed);
-      // atrim to slot after tempo ensures no overrun even if maxTempo still not enough
-      const filter = `${chain},atrim=end=${slotDuration.toFixed(3)},asetpts=PTS-STARTPTS`;
-      // Need aresample to keep valid wav length after trim
+
+    const ratio = speechDuration / slotDuration;
+
+    // Already fits — a little slack either way is natural delivery.
+    if (ratio <= 1.04) {
+      if (ratio < 0.92) {
+        logger.debug(
+          `Slot ${slotDuration.toFixed(2)}s: speech ${speechDuration.toFixed(2)}s is shorter; the pause carries it.`
+        );
+      }
+      return speechDuration;
+    }
+
+    const needed = Math.min(maxTempo, ratio);
+    const tempoPath = `${outputAudioPath}.tempo.wav`;
+    await this.execute([
+      '-y',
+      '-i', outputAudioPath,
+      '-filter:a', `${this.buildAtempoChain(needed)},asetpts=PTS-STARTPTS`,
+      '-vn',
+      tempoPath,
+    ]);
+    let outDur = await this.getAudioDuration(tempoPath);
+
+    if (outDur > slotDuration + 0.01) {
+      // Even at the cap this line is too long, so cutting it is the only way to
+      // hold the sync. The trim stays, but it is reported: a clipped syllable is
+      // audible and the line it came from is worth knowing.
       await this.execute([
         '-y',
-        '-i', inputAudioPath,
-        '-filter:a', filter,
+        '-i', tempoPath,
+        '-filter:a', `atrim=end=${slotDuration.toFixed(3)},asetpts=PTS-STARTPTS`,
         '-vn',
         outputAudioPath,
       ]);
-      const outDur = await this.getAudioDuration(outputAudioPath);
-      if (needed >= maxTempo && ratio > maxTempo * 1.02) {
-        logger.info(`Slot ${slotDuration.toFixed(2)}s: speech ${dur.toFixed(2)}s needed ${ratio.toFixed(2)}x but capped at ${maxTempo}x; trimmed to ${outDur.toFixed(2)}s to keep sync.`);
-      } else {
-        logger.info(`Slot ${slotDuration.toFixed(2)}s: fitted speech ${dur.toFixed(2)}s -> ${outDur.toFixed(2)}s (${needed.toFixed(2)}x)`);
-      }
-      return outDur;
+      outDur = await this.getAudioDuration(outputAudioPath);
+      logger.warn(
+        `Slot ${slotDuration.toFixed(2)}s: speech ${speechDuration.toFixed(2)}s needs ${ratio.toFixed(2)}x but is capped at ${maxTempo}x; trimmed to ${outDur.toFixed(2)}s (a syllable may be cut).`
+      );
+    } else {
+      fs.renameSync(tempoPath, outputAudioPath);
+      logger.info(
+        `Slot ${slotDuration.toFixed(2)}s: fitted speech ${speechDuration.toFixed(2)}s -> ${outDur.toFixed(2)}s (${needed.toFixed(2)}x).`
+      );
     }
-    // Short: keep natural duration, let timeline carry silence
-    fs.copyFileSync(inputAudioPath, outputAudioPath);
-    return dur;
+
+    if (fs.existsSync(tempoPath)) {
+      try {
+        fs.unlinkSync(tempoPath);
+      } catch {
+        /* temp file, discarded with the job folder */
+      }
+    }
+    return outDur;
+  }
+
+  /**
+   * Drop the silence a TTS engine pads around a line so the voice begins where
+   * the speaker begins. A little is kept at each end so the cut does not click.
+   */
+  private static async stripSilence(inputPath: string, outputPath: string): Promise<number> {
+    const threshold = process.env.TTS_SILENCE_DB || '-45dB';
+    const keepSeconds = process.env.TTS_SILENCE_KEEP || '0.04';
+    const trim = `silenceremove=start_periods=1:start_silence=${keepSeconds}:start_threshold=${threshold}:detection=peak`;
+    try {
+      await this.execute([
+        '-y',
+        '-i', inputPath,
+        '-filter:a', `${trim},areverse,${trim},areverse,asetpts=PTS-STARTPTS`,
+        '-vn',
+        outputPath,
+      ]);
+      return await this.getAudioDuration(outputPath);
+    } catch (err) {
+      logger.warn('Could not trim silence from a synthesized line; using it as-is:', err);
+      fs.copyFileSync(inputPath, outputPath);
+      return await this.getAudioDuration(outputPath);
+    }
   }
 
   /**

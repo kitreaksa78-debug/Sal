@@ -4,6 +4,14 @@ import { DialogueSegment, JobSettings } from '../types.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
 
+/**
+ * The breathing gap left between two lines on the assembled track. A line may
+ * therefore only use the time up to `next.start - this gap`, which is the window
+ * the synthesizer is asked to fit into as well — otherwise a line built for its
+ * own longer slot gets cut here, mid-syllable.
+ */
+export const DIALOGUE_GAP_SECONDS = 0.03;
+
 function slotDuration(seg: DialogueSegment): number {
   return Math.max(0.3, seg.end - seg.start);
 }
@@ -43,8 +51,8 @@ export class AudioMixingService {
     const effectiveSlots: number[] = validSegments.map(slotDuration);
     for (let i = 0; i < validSegments.length - 1; i++) {
       const gap = validSegments[i + 1].start - validSegments[i].start;
-      // Keep a tiny 30ms breathing gap so cuts are not clicky
-      const maxForSlot = Math.max(0.3, gap - 0.03);
+      // Keep a tiny breathing gap so cuts are not clicky
+      const maxForSlot = Math.max(0.3, gap - DIALOGUE_GAP_SECONDS);
       if (effectiveSlots[i] > maxForSlot) {
         logger.info(`Trimming segment ${validSegments[i].id} slot ${effectiveSlots[i].toFixed(2)}s -> ${maxForSlot.toFixed(2)}s to avoid overlap with next line.`);
         effectiveSlots[i] = maxForSlot;
