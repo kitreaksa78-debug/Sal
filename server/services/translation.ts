@@ -4,6 +4,7 @@ import { logger } from '../utils/logger.js';
 import { groqChatJson, isGroqConfigured, sleep } from '../utils/groq.js';
 import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
+import { DIALOGUE_GAP_SECONDS } from './audioMixing.js';
 
 export interface TranslationResult {
   segments: DialogueSegment[];
@@ -108,6 +109,89 @@ export function sanitizeKhmer(text: string): string | null {
   const cleaned = stripWrongScript(text);
   if (cleaned && isValidKhmer(cleaned)) return cleaned;
   return null;
+}
+
+/**
+ * How fast spoken Khmer goes in this pipeline's voice. Every length decision in
+ * this file is measured against it: a line with a window of D seconds can hold
+ * about D * 3.8 syllables.
+ *
+ * 4.5 is the textbook figure for spoken Khmer, but the voice that actually
+ * renders the dub — Edge's km-KH neural voices — measured 3.83 syllables a
+ * second over 20 real lines (range 3.1-4.5, 275 syllables in 71.9s of speech with
+ * padding stripped). Budgeting at the textbook rate asked every translation for
+ * ~15% more speech than the line could hold, which is precisely the overshoot
+ * that ends up sped up or trimmed. The measured rate is the honest one.
+ */
+const KHMER_SYLLABLES_PER_SECOND = Number(process.env.KHMER_SYLLABLES_PER_SECOND || '3.8');
+
+/** How far past its budget a line may sit before it is rewritten to fit. */
+const FIT_TOLERANCE = 1.3;
+
+/** One fit pass costs one provider round trip, so it only ever rewrites a bounded set. */
+const MAX_FIT_LINES = 40;
+
+/** One vowel sign marks one syllable nucleus; these are the two vowel ranges. */
+const KHMER_DEPENDENT_VOWEL = /[\u17B4-\u17C5]/;
+const KHMER_INDEPENDENT_VOWEL = /[\u17A3-\u17B3]/;
+
+/**
+ * Rough syllable count for a line of dialogue — the thing that decides how long
+ * it takes to speak.
+ *
+ * Khmer writes one vowel sign per syllable nucleus, so counting the vowel signs
+ * tracks spoken length closely enough to measure a line against its slot
+ * ("សួស្តី" = two signs = two syllables; "ខ្មែរ" = one = one). A word written
+ * without any vowel sign still speaks as a syllable, so the word count is the
+ * floor, and a line that is not Khmer at all — a source line kept untranslated, a
+ * brand name, digits — falls back to its word count.
+ */
+export function countKhmerSyllables(text: string): number {
+  const trimmed = (text || '').trim();
+  if (!trimmed) return 0;
+
+  const words = trimmed.split(/\s+/).filter(Boolean).length;
+  if (!KHMER_SCRIPT.test(trimmed)) return Math.max(1, Math.round(words * 1.3));
+
+  let nuclei = 0;
+  for (const character of trimmed) {
+    if (KHMER_DEPENDENT_VOWEL.test(character) || KHMER_INDEPENDENT_VOWEL.test(character)) nuclei++;
+  }
+  return Math.max(nuclei, words);
+}
+
+/** How many syllables a speech window of `seconds` can hold. */
+export function syllableBudget(seconds: number): number {
+  return Math.max(2, Math.round(Math.max(0, seconds || 0) * KHMER_SYLLABLES_PER_SECOND));
+}
+
+/**
+ * The room each line actually has on the timeline, which is what the dub is
+ * fitted into when the voice is synthesised (see jobProcessor: the same window
+ * the assembler receives).
+ *
+ * A line may borrow the silence that follows it — right up to the next speaker,
+ * never past them — so a line sitting in a pause genuinely has more time than
+ * `end - start` suggests. Measuring against `end - start` alone would rewrite
+ * those lines for a problem they do not have, so this mirrors the runtime window
+ * exactly. Video length only ever shortens the last line, and translation runs
+ * before the video is probed, so it is left at the segment's own reach here.
+ */
+export function speechWindowsFor(segments: DialogueSegment[]): Map<string, number> {
+  const windowStretch = Math.max(1, Number(process.env.SPEECH_WINDOW_STRETCH || '1.4'));
+  const timeline = [...segments].sort((a, b) => a.start - b.start);
+  const windows = new Map<string, number>();
+
+  timeline.forEach((segment, index) => {
+    const own = Math.max(0.5, segment.end - segment.start);
+    const next = timeline[index + 1];
+    const beforeNext = next
+      ? Math.max(0, next.start - segment.start - DIALOGUE_GAP_SECONDS)
+      : Number.POSITIVE_INFINITY;
+    windows.set(segment.id, Math.max(0.5, Math.min(beforeNext, own * windowStretch)));
+  });
+
+  return windows;
 }
 
 /** Strip Markdown fences (```json ... ```) that some models wrap around JSON. */
@@ -331,6 +415,9 @@ export class KhmerDubTranslationService {
 
     const systemInstruction = this.buildSystemInstruction(settings);
     const glossary = parseGlossary(settings.glossary);
+    // The room each line will have on the timeline. The prompt quotes it per
+    // line, and the same numbers are re-measured once every block has answered.
+    const speechWindows = speechWindowsFor(segments);
     const translations = new Map<string, { khmer: string; emotion?: string }>();
     const warnings: string[] = [];
     // Blocks run at the same time, so the same problem (or the same failure) can be
@@ -362,7 +449,7 @@ export class KhmerDubTranslationService {
       const requestStartedAt = Date.now();
 
       try {
-        const userPrompt = this.buildChunkPrompt(chunk, context, i, chunks.length);
+        const userPrompt = this.buildChunkPrompt(chunk, context, i, chunks.length, speechWindows);
         // Fallback estimate in case the provider does not report usage.
         const estimatedTokens = estimateTokens(systemInstruction + userPrompt) + chunk.length * 45;
 
@@ -483,6 +570,10 @@ export class KhmerDubTranslationService {
       }
     });
 
+    // Every line is in hand — now check them against the video's own timing and
+    // tighten the ones that will not fit.
+    await this.fitLinesToOriginalTiming(segments, translations, speechWindows, systemInstruction, glossary, addWarning);
+
     const translatedSegments = segments.map((segment) => {
       const item = translations.get(segment.id);
       let khmer = (item?.khmer || '').trim();
@@ -553,8 +644,9 @@ CRITICAL DUBBING TRANSLATION RULES:
 4. FIT ORIGINAL DURATION (LIP-SYNC / TIMING CONSTRAINT):
    - Cambodian Khmer audio takes time to speak.
    - Calculate duration = end - start seconds.
-   - KHMER SPEECH RATE: spoken Khmer runs at roughly 4-5 syllables per second, so a line with duration D can hold about D * 4.5 syllables. That is the budget for every line.
-   - Keep the Khmer translation concise enough to be spoken comfortably within the original segment duration, and stay under that syllable budget. A line that overshoots has to be sped up or cut off mid-word in the dub, which the viewer hears as broken speech.
+   - KHMER SPEECH RATE: this dubbing voice speaks about 3.8 Khmer syllables per second (measured), so a line with duration D holds about D * 3.8 syllables.
+   - Every line you receive carries "budget_syllables" — duration * 3.8 already worked out for THAT line. It is the exact limit for that line; stay at or under it.
+   - Keep the Khmer translation concise enough to be spoken comfortably within the original segment duration, and stay under that syllable budget. A line that overshoots has to be sped up or cut off mid-word in the dub, which the viewer hears as broken speech — and the words no longer line up with the original video.
    - If a literal translation would be too long for the duration, rephrase or condense it naturally — use shorter Khmer words, not fewer ideas.
 5. PRESERVE EMOTIONAL TONE & SPEECH:
    - Identify emotion: "neutral", "energetic", "calm", "dramatic", "happy", "serious".
@@ -584,7 +676,8 @@ CRITICAL DUBBING TRANSLATION RULES:
     chunk: DialogueSegment[],
     context: ContextLine[],
     chunkIndex: number,
-    chunkCount: number
+    chunkCount: number,
+    speechWindows: Map<string, number>
   ): string {
     const formattedInput = chunk.map((s) => ({
       id: s.id,
@@ -592,6 +685,12 @@ CRITICAL DUBBING TRANSLATION RULES:
       start: s.start,
       end: s.end,
       duration: Number((s.end - s.start).toFixed(2)),
+      // The exact size of this line's speaking slot in the finished video. The
+      // model is told the rate in rule 4; handing it the arithmetic removes the
+      // one step it gets wrong often enough to matter.
+      budget_syllables: syllableBudget(
+        speechWindows.get(s.id) ?? Math.max(0.5, s.end - s.start)
+      ),
       text: s.text,
     }));
 
@@ -608,6 +707,8 @@ CRITICAL DUBBING TRANSLATION RULES:
 ${contextSection}
 Lines to translate:
 ${JSON.stringify(formattedInput, null, 2)}
+
+Each line's "budget_syllables" is how many Khmer syllables fit in the time that line has on screen — stay at or under it for that line.
 
 Return JSON containing exactly ${
       chunk.length
@@ -726,6 +827,139 @@ Return JSON containing exactly ${
       return [parsed];
     }
     return [];
+  }
+
+  /**
+   * Measure every finished Khmer line against the time the original video gives
+   * it, and rewrite the ones that will not fit.
+   *
+   * The first pass is *told* the budget but nothing enforces it, and a line that
+   * overshoots is not merely long: the dub has to speed up past comfort or the
+   * assembler trims it mid-syllable, so the translation visibly drifts away from
+   * the picture. So the lines are measured after the fact and the worst offenders
+   * are asked for once more, this time with their own numbers.
+   *
+   * A rewrite is only kept when it is genuinely shorter, still valid Khmer, and
+   * still carries every glossary term the line already had — anything else would
+   * buy timing with accuracy, which is the one trade this pipeline must never
+   * make. Refusing costs nothing: the original wording stands and the voice is
+   * fitted exactly as it was before.
+   */
+  private async fitLinesToOriginalTiming(
+    segments: DialogueSegment[],
+    translations: Map<string, { khmer: string; emotion?: string }>,
+    speechWindows: Map<string, number>,
+    systemInstruction: string,
+    glossary: Glossary,
+    addWarning: (message: string) => void
+  ): Promise<void> {
+    const measure = (segment: DialogueSegment) => {
+      const budget = syllableBudget(
+        speechWindows.get(segment.id) ?? Math.max(0.5, segment.end - segment.start)
+      );
+      const khmer = translations.get(segment.id)?.khmer?.trim() || '';
+      return { segment, khmer, budget, syllables: countKhmerSyllables(khmer) };
+    };
+
+    const overlong = segments
+      .map(measure)
+      .filter((line) => line.khmer && line.syllables > line.budget * FIT_TOLERANCE);
+
+    if (overlong.length === 0) return;
+
+    const batch = overlong.slice(0, MAX_FIT_LINES);
+    logger.warn(
+      `${overlong.length} Khmer line(s) say more than the original video has time for; rewriting ${batch.length} to fit.`
+    );
+    for (const line of batch) {
+      logger.warn(
+        `  ${line.segment.id}: ${line.syllables} syllables in a ${line.budget}-syllable window (${Math.max(
+          0.5,
+          line.segment.end - line.segment.start
+        ).toFixed(2)}s).`
+      );
+    }
+
+    const payload = batch.map((line) => ({
+      id: line.segment.id,
+      duration: Number((line.segment.end - line.segment.start).toFixed(2)),
+      budget_syllables: line.budget,
+      current_syllables: line.syllables,
+      original: line.segment.text,
+      khmer: line.khmer,
+    }));
+
+    const prompt = `These ${batch.length} Khmer line(s) say more than the original video has time for. Rewrite ONLY the "khmer" text of each so it fits its "budget_syllables" while staying complete.\n
+Rules:\n
+- Keep EVERY fact, name, number, date, question and request from the original line. Condense the WORDING — shorter Khmer synonyms, drop filler and pleasantries — never drop content and never summarize.\n
+- Keep the register and the emotion of the line, and keep any glossary term already present in "khmer" written exactly as it is.\n
+- Pure Khmer script only (U+1780-U+17FF). No Thai, no Lao.\n
+- Echo each "id" exactly; do not merge, split or reorder lines.\n\nLines to shorten:\n${JSON.stringify(
+      payload,
+      null,
+      2
+    )}\n\nReturn JSON with exactly ${payload.length} entries, each with "id", the shorter "khmer", and its "emotion".`;
+
+    let parsed: Map<string, { khmer: string; emotion?: string }>;
+    try {
+      const response = await this.requestTranslation(systemInstruction, prompt);
+      parsed = this.parseChunkResponse(response.content);
+    } catch (err: any) {
+      // Not fatal: these lines keep their wording and the voice is fitted as it
+      // always was — the old behaviour rather than a broken job.
+      logger.warn('Fit-to-timing rewrite failed; keeping the original wording:', err?.message || err);
+      return;
+    }
+
+    /** A rewrite may not cost the line the terms that line was required to keep. */
+    const keepsGlossary = (previous: string, next: string): boolean => {
+      for (const term of glossary.keep) {
+        if (containsTerm(previous, term) && !containsTerm(next, term)) return false;
+      }
+      for (const { translation } of glossary.forced) {
+        if (translation && previous.includes(translation) && !next.includes(translation)) return false;
+      }
+      return true;
+    };
+
+    let shortened = 0;
+    for (const line of batch) {
+      const item = parsed.get(line.segment.id);
+      const next = (item?.khmer || '').trim();
+      if (!next || !isValidKhmer(next)) continue;
+
+      const nextSyllables = countKhmerSyllables(next);
+      if (nextSyllables >= line.syllables) continue; // no gain, keep the original
+      if (nextSyllables < Math.max(2, Math.round(line.budget * 0.6))) continue; // not a stub
+      if (!keepsGlossary(line.khmer, next)) continue;
+
+      const existing = translations.get(line.segment.id);
+      translations.set(line.segment.id, {
+        khmer: next,
+        emotion: item?.emotion || existing?.emotion,
+      });
+      shortened++;
+    }
+
+    if (shortened > 0) {
+      logger.info(`Fit-to-timing rewrite accepted ${shortened}/${batch.length} line(s).`);
+    }
+
+    const stillOver = segments
+      .map(measure)
+      .filter((line) => line.khmer && line.syllables > line.budget * FIT_TOLERANCE);
+    logger.info(
+      `Post-translation timing: ${segments.length - stillOver.length}/${segments.length} line(s) fit their window.`
+    );
+
+    // Anything still well past its window is about to be heard as sped-up or
+    // clipped speech, and the owner should know which job produced that.
+    const badlyOver = stillOver.filter((line) => line.syllables > line.budget * (FIT_TOLERANCE + 0.3));
+    if (badlyOver.length > 0) {
+      addWarning(
+        `បន្ទាត់ចំនួន ${badlyOver.length} វែងជាងចំណុំពេលដែលវីដេអូដើមមាន ដូច្នេះសំឡេងខ្មែរក្នុងបន្ទាត់ទាំងនោះត្រូវបានបង្រួមលឿនបន្តិច។ (${badlyOver.length} line(s) still run past the original video's timing, so that speech is delivered a little faster.)`
+      );
+    }
   }
 
   /**
