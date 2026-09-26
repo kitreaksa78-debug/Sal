@@ -20,109 +20,39 @@ import { fileURLToPath } from 'node:url';
 const OUT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 // ---------------------------------------------------------------- the artwork
-//
-// The same mark as `src/components/Logo.tsx`, scaled from its 64-unit drawing
-// by 0.375 and given its own gradients. The two speech bubbles carry real text in
-// the SVG twin but none here: at the sizes an icon is seen at, a glyph is three
-// pixels of noise, while the plate, the film tile and the two arrows stay legible.
-const TILE = [11, 15, 23]; // #0b0f17 — the icon plate and the spool holes
-const WHITE = [0xf8, 0xfa, 0xfc];
-
-/** A linear gradient: two points in the 24-unit space plus its colour stops. */
-const TILE_GRADIENT = {
-  from: [2.25, 16.13],
-  to: [13.13, 5.63],
-  stops: [
-    { at: 0, rgb: [0x22, 0xd3, 0xee] },
-    { at: 0.45, rgb: [0x3b, 0x82, 0xf6] },
-    { at: 1, rgb: [0x7c, 0x3a, 0xed] },
-  ],
-};
-const ARROW_UP_GRADIENT = {
-  from: [1.5, 10.13],
-  to: [14.63, 3.38],
-  stops: [
-    { at: 0, rgb: [0x38, 0xbd, 0xf8] },
-    { at: 0.5, rgb: [0xc0, 0x26, 0xd3] },
-    { at: 1, rgb: [0xe8, 0x79, 0xf9] },
-  ],
-};
-const ARROW_DOWN_GRADIENT = {
-  from: [1.88, 16.5],
-  to: [14.63, 21.75],
-  stops: [
-    { at: 0, rgb: [0x22, 0xd3, 0xee] },
-    { at: 1, rgb: [0x3b, 0x82, 0xf6] },
-  ],
-};
-const BUBBLE_KHMER_GRADIENT = {
-  from: [13.13, 8.25],
-  to: [21.75, 1.88],
-  stops: [
-    { at: 0, rgb: [0x0e, 0xa5, 0xe9] },
-    { at: 1, rgb: [0x38, 0xbd, 0xf8] },
-  ],
-};
-const BUBBLE_CJK_GRADIENT = {
-  from: [14.25, 19.88],
-  to: [22.13, 13.88],
-  stops: [
-    { at: 0, rgb: [0x7c, 0x3a, 0xed] },
-    { at: 0.55, rgb: [0xa8, 0x55, 0xf7] },
-    { at: 1, rgb: [0xd9, 0x46, 0xef] },
-  ],
-};
-
-// The mark is drawn smaller than the plate so the icon keeps breathing room and
-// survives Android's maskable crop (content must stay inside the middle 80%).
-const MARK_SCALE = 0.94;
-const MARK_CENTER = { x: 11.38, y: 11.78 };
-const TILE_RADIUS = 5.2; // of a 24-unit plate
-
-// Everything below is measured from the 24-unit space of the icon, not the 64
-// used by the on-page logo.
-const ARC = { cx: 9.375, cy: 12.375, radius: 8.0625, halfWidth: 0.86 };
-const ARC_UP = { start: 200, end: 290 }; // over the top, clockwise
-const ARC_DOWN = { start: 70, end: 150 }; // underneath, counter-clockwise
-
-const VIDEO_TILE = { x: 2.06, y: 5.81, w: 10.88, h: 10.13, r: 2.44 };
-const SPOOLS = [7.65, 10.35, 13.05].map((y) => ({
-  x: 3.38,
-  y,
-  w: 1.28,
-  h: 1.43,
-  r: 0.41,
-}));
+// Same numbers as the inline SVG: a video frame with a play button, crossed by a
+// pencil whose dark outline cuts the frame exactly where they overlap.
+const FRAME = { x: 2.6, y: 5.6, w: 18.8, h: 12.8, r: 3.6, stroke: 2 };
 const PLAY = [
-  [7.65, 9.04],
-  [11.55, 10.88],
-  [7.65, 12.71],
+  [7.4, 8.7],
+  [12.2, 12],
+  [7.4, 15.3],
 ];
-const PLAY_ROUND = 0.41; // half the play button's stroke, which rounds its corners
+const PLAY_STROKE = 0.9; // width of the stroke that rounds the triangle's corners
+const PENCIL = [
+  [9.6, 17.4],
+  [12.43, 16.83],
+  [22.47, 6.79],
+  [20.21, 4.53],
+  [10.17, 14.57],
+];
+const PENCIL_STROKE = 1.5;
 
-const BUBBLE_KHMER = { x: 13.13, y: 2.06, w: 8.63, h: 6.19, r: 2.25 };
-const BUBBLE_KHMER_TAIL = [
-  [16.5, 8.1],
-  [15.41, 10.28],
-  [18.23, 8.1],
-];
-const BUBBLE_CJK = { x: 14.25, y: 14.06, w: 8.06, h: 5.81, r: 2.25 };
-const BUBBLE_CJK_TAIL = [
-  [16.28, 14.33],
-  [15.08, 12.26],
-  [18.08, 14.33],
+/** The app's darkest background, used for the icon tile and the pencil outline. */
+const TILE = [11, 15, 23]; // #0b0f17
+const GRADIENT = [
+  { at: 0, rgb: [0x22, 0xd3, 0xee] }, // cyan
+  { at: 0.5, rgb: [0x3b, 0x82, 0xf6] }, // blue
+  { at: 1, rgb: [0xa8, 0x55, 0xf7] }, // purple
 ];
 
-const ARROW_UP_HEAD = [
-  [14.46, 5.65],
-  [11.59, 6.28],
-  [12.67, 3.32],
-];
-const ARROW_DOWN_HEAD = [
-  [14.38, 19.13],
-  [12.69, 21.49],
-  [11.57, 18.41],
-];
+// The mark is drawn inside the tile rather than edge to edge, so the icon keeps
+// breathing room and survives Android's maskable crop (content must stay inside
+// the middle 80%).
+const MARK_SCALE = 0.94;
+/** Middle of the mark's bounding box (x 2.6–22.47, y 4.53–18.4), so it sits centred. */
+const MARK_CENTER = { x: 12.53, y: 11.47 };
+const TILE_RADIUS = 5.2; // of a 24-unit tile
 
 // ------------------------------------------------------------- shape helpers
 function roundedRectSdf(px, py, cx, cy, halfW, halfH, radius) {
@@ -159,51 +89,13 @@ function polygonSdf(px, py, points) {
   return inside ? -distance : distance;
 }
 
-/**
- * Distance from a point to a thick arc: negative inside the band.
- * `range` is the pair of angles the arc sweeps, in the same degrees the SVG
- * paths use (0° points right, growing clockwise on screen).
- */
-function arcBandSdf(px, py, arc, range) {
-  const dx = px - arc.cx;
-  const dy = py - arc.cy;
-  const radial = Math.abs(Math.hypot(dx, dy) - arc.radius) - arc.halfWidth;
-
-  let angle = (Math.atan2(dy, dx) * 180) / Math.PI;
-  if (angle < 0) angle += 360;
-  if (angle >= range.start && angle <= range.end) return radial;
-
-  // Past either end the nearest point on the arc is that end cap.
-  const capDistance = (degrees) => {
-    const radians = (degrees * Math.PI) / 180;
-    return Math.hypot(
-      px - (arc.cx + arc.radius * Math.cos(radians)),
-      py - (arc.cy + arc.radius * Math.sin(radians))
-    );
-  };
-  return Math.min(capDistance(range.start), capDistance(range.end)) - arc.halfWidth;
-}
-
-/** True when the point sits inside a rounded rectangle of the mark. */
-function inRoundedRect(x, y, rect) {
-  return (
-    roundedRectSdf(x, y, rect.x + rect.w / 2, rect.y + rect.h / 2, rect.w / 2, rect.h / 2, rect.r) <= 0
-  );
-}
-
-/** Project a point onto one gradient's axis and read the colour there. */
-function gradientAt(x, y, gradient) {
-  const [x0, y0] = gradient.from;
-  const [x1, y1] = gradient.to;
-  const dx = x1 - x0;
-  const dy = y1 - y0;
-  const len2 = dx * dx + dy * dy || 1;
-  const t = Math.max(0, Math.min(1, ((x - x0) * dx + (y - y0) * dy) / len2));
-
-  for (let i = 1; i < gradient.stops.length; i++) {
-    const from = gradient.stops[i - 1];
-    const to = gradient.stops[i];
-    if (t <= to.at || i === gradient.stops.length - 1) {
+function gradientAt(x, y) {
+  // Linear gradient running from the bottom-left to the top-right, as in the SVG.
+  const t = Math.max(0, Math.min(1, (x - 2 + (22 - y)) / 40));
+  for (let i = 1; i < GRADIENT.length; i++) {
+    const from = GRADIENT[i - 1];
+    const to = GRADIENT[i];
+    if (t <= to.at || i === GRADIENT.length - 1) {
       const span = to.at - from.at || 1;
       const k = Math.max(0, Math.min(1, (t - from.at) / span));
       return [
@@ -213,7 +105,15 @@ function gradientAt(x, y, gradient) {
       ];
     }
   }
-  return gradient.stops[gradient.stops.length - 1].rgb.slice();
+  return GRADIENT[GRADIENT.length - 1].rgb;
+}
+
+/** Where a point of the mark lands on the tile, in the 24-unit space. */
+function markToTile(x, y) {
+  return {
+    x: 12 + (x - MARK_CENTER.x) * MARK_SCALE,
+    y: 12 + (y - MARK_CENTER.y) * MARK_SCALE,
+  };
 }
 
 /** One sample of the artwork, in the 24-unit space. Returns [r,g,b,a]. */
@@ -223,31 +123,32 @@ function sample(x, y) {
 
   let colour = TILE;
 
-  // Place the mark: scale around its own centre, then centre it in the plate.
-  const mx = 12 + (x - MARK_CENTER.x) / MARK_SCALE;
-  const my = 12 + (y - MARK_CENTER.y) / MARK_SCALE;
+  // Undo the placement, exactly inverting buildSvg()'s
+  // `translate(12 12) scale(s) translate(-cx -cy)`: a tile point maps back to
+  // the mark by travelling to the tile centre first, then dividing by the scale.
+  const mx = MARK_CENTER.x + (x - 12) / MARK_SCALE;
+  const my = MARK_CENTER.y + (y - 12) / MARK_SCALE;
 
-  // Paint order is the SVG's: bubbles, then the film tile, then the arrows, so
-  // an arrowhead always lands on top of the shape it points at.
-  if (inRoundedRect(mx, my, BUBBLE_KHMER) || polygonSdf(mx, my, BUBBLE_KHMER_TAIL) < 0) {
-    colour = gradientAt(mx, my, BUBBLE_KHMER_GRADIENT);
-  }
-  if (inRoundedRect(mx, my, BUBBLE_CJK) || polygonSdf(mx, my, BUBBLE_CJK_TAIL) < 0) {
-    colour = gradientAt(mx, my, BUBBLE_CJK_GRADIENT);
-  }
+  const frameDistance = roundedRectSdf(
+    mx,
+    my,
+    FRAME.x + FRAME.w / 2,
+    FRAME.y + FRAME.h / 2,
+    FRAME.w / 2,
+    FRAME.h / 2,
+    FRAME.r
+  );
+  if (Math.abs(frameDistance) <= FRAME.stroke / 2) colour = gradientAt(mx, my);
 
-  if (inRoundedRect(mx, my, VIDEO_TILE)) {
-    colour = gradientAt(mx, my, TILE_GRADIENT);
-    if (SPOOLS.some((spool) => inRoundedRect(mx, my, spool))) colour = TILE;
-    if (polygonSdf(mx, my, PLAY) <= PLAY_ROUND) colour = WHITE;
-  }
+  // Dilating the triangle by half the stroke is exactly what a round-joined
+  // stroke does to it, so the corners come out soft here too.
+  if (polygonSdf(mx, my, PLAY) <= PLAY_STROKE / 2) colour = gradientAt(mx, my);
 
-  if (arcBandSdf(mx, my, ARC, ARC_UP) <= 0 || polygonSdf(mx, my, ARROW_UP_HEAD) < 0) {
-    colour = gradientAt(mx, my, ARROW_UP_GRADIENT);
-  }
-  if (arcBandSdf(mx, my, ARC, ARC_DOWN) <= 0 || polygonSdf(mx, my, ARROW_DOWN_HEAD) < 0) {
-    colour = gradientAt(mx, my, ARROW_DOWN_GRADIENT);
-  }
+  // Paint order matters: the pencil's outline goes down first, then its body, so
+  // the outline eats the frame stroke where the two cross.
+  const pencilDistance = polygonSdf(mx, my, PENCIL);
+  if (Math.abs(pencilDistance) <= PENCIL_STROKE / 2) colour = TILE;
+  if (pencilDistance < 0) colour = gradientAt(mx, my);
 
   return [colour[0], colour[1], colour[2], 255];
 }
@@ -360,7 +261,6 @@ function encodeIco(images) {
     entry[3] = 0; // reserved
     entry.writeUInt16LE(1, 4); // colour planes
     entry.writeUInt16LE(32, 6); // bits per pixel
-    entry.writeUInt32BE(0, 8);
     entry.writeUInt32LE(data.length, 8);
     entry.writeUInt32LE(offset, 12);
     offset += data.length;
@@ -371,44 +271,20 @@ function encodeIco(images) {
 }
 
 // --------------------------------------------------------------- the SVG twin
-/** `#rrggbb` for one stop, so the SVG and the rasteriser cannot drift apart. */
-const hex = (rgb) => `#${rgb.map((c) => c.toString(16).padStart(2, '0')).join('')}`;
-
 function buildSvg() {
-  const linearGradient = (id, gradient) =>
-    `    <linearGradient id="${id}" x1="${gradient.from[0]}" y1="${gradient.from[1]}" x2="${gradient.to[0]}" y2="${gradient.to[1]}" gradientUnits="userSpaceOnUse">\n` +
-    gradient.stops
-      .map((stop) => `      <stop offset="${stop.at}" stop-color="${hex(stop.rgb)}"/>`)
-      .join('\n') +
-    '\n    </linearGradient>';
-
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="AI translate video">
   <defs>
-${linearGradient('tile', TILE_GRADIENT)}
-${linearGradient('arrowUp', ARROW_UP_GRADIENT)}
-${linearGradient('arrowDown', ARROW_DOWN_GRADIENT)}
-${linearGradient('bubbleKhmer', BUBBLE_KHMER_GRADIENT)}
-${linearGradient('bubbleCjk', BUBBLE_CJK_GRADIENT)}
+    <linearGradient id="mark" x1="2" y1="22" x2="22" y2="2" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#22d3ee"/>
+      <stop offset="0.5" stop-color="#3b82f6"/>
+      <stop offset="1" stop-color="#a855f7"/>
+    </linearGradient>
   </defs>
   <rect width="24" height="24" rx="${TILE_RADIUS}" fill="#0b0f17"/>
   <g transform="translate(12 12) scale(${MARK_SCALE}) translate(${-MARK_CENTER.x} ${-MARK_CENTER.y})">
-    <path d="M16.5 8.1 15.41 10.28 18.23 8.1Z" fill="url(#bubbleKhmer)"/>
-    <rect x="13.13" y="2.06" width="8.63" height="6.19" rx="2.25" fill="url(#bubbleKhmer)"/>
-    <text x="17.44" y="6.4" text-anchor="middle" font-size="3.5" font-weight="700" fill="#f8fafc" font-family="'Noto Sans Khmer','Khmer OS',sans-serif">ខ្មែរ</text>
-    <path d="M16.28 14.33 15.08 12.26 18.08 14.33Z" fill="url(#bubbleCjk)"/>
-    <rect x="14.25" y="14.06" width="8.06" height="5.81" rx="2.25" fill="url(#bubbleCjk)"/>
-    <text x="18.28" y="18.42" text-anchor="middle" font-size="4.1" font-weight="700" fill="#f8fafc" font-family="'Noto Sans SC','Microsoft YaHei',sans-serif">文</text>
-    <rect x="2.06" y="5.81" width="10.88" height="10.13" rx="2.44" fill="url(#tile)"/>
-    <g fill="#0b0f17">
-      <rect x="3.38" y="7.65" width="1.28" height="1.43" rx="0.41"/>
-      <rect x="3.38" y="10.35" width="1.28" height="1.43" rx="0.41"/>
-      <rect x="3.38" y="13.05" width="1.28" height="1.43" rx="0.41"/>
-    </g>
-    <path d="M7.65 9.04 11.55 10.88 7.65 12.71Z" fill="#f8fafc" stroke="#f8fafc" stroke-width="0.83" stroke-linejoin="round"/>
-    <path d="M1.8 9.62A8.06 8.06 0 0 1 12.13 4.8" fill="none" stroke="url(#arrowUp)" stroke-width="1.73" stroke-linecap="round"/>
-    <path d="M14.46 5.65 11.59 6.28 12.67 3.32Z" fill="#e879f9"/>
-    <path d="M2.39 16.41A8.06 8.06 0 0 0 12.13 19.95" fill="none" stroke="url(#arrowDown)" stroke-width="1.73" stroke-linecap="round"/>
-    <path d="M14.38 19.13 12.69 21.49 11.57 18.41Z" fill="#3b82f6"/>
+    <rect x="2.6" y="5.6" width="18.8" height="12.8" rx="3.6" fill="none" stroke="url(#mark)" stroke-width="2"/>
+    <path d="M7.4 8.7 12.2 12l-4.8 3.3z" fill="url(#mark)" stroke="url(#mark)" stroke-width="0.9" stroke-linejoin="round"/>
+    <path d="M9.6 17.4 12.43 16.83 22.47 6.79 20.21 4.53 10.17 14.57Z" fill="url(#mark)" stroke="#0b0f17" stroke-width="1.5" stroke-linejoin="round" paint-order="stroke"/>
   </g>
 </svg>
 `;
@@ -439,37 +315,44 @@ write('apple-touch-icon.png', rasters.get(180));
 write('icon-192.png', rasters.get(192));
 write('icon-512.png', rasters.get(512));
 
+// ------------------------------------------------------------------ the checks
 // Pixel sanity checks, so a broken drawing is caught here instead of on the web.
-const at = (size, x, y) => {
-  const rgba = renderIcon(size);
-  const offset = (y * size + x) * 4;
+// Each probe names a point on the *mark* (the 24-unit space the SVG is drawn in)
+// and the helper walks it through the same scale/centre transform the renderer
+// uses — measuring raw pixel offsets instead is how a check silently ends up
+// looking at the middle of the tile no matter which point it was asked about.
+const pixelCache = new Map();
+function renderOnce(size) {
+  if (!pixelCache.has(size)) pixelCache.set(size, renderIcon(size));
+  return pixelCache.get(size);
+}
+
+function atSize(size, x, y) {
+  const rgba = renderOnce(size);
+  const perUnit = size / 24;
+  const px = Math.min(size - 1, Math.max(0, Math.round(x * perUnit)));
+  const py = Math.min(size - 1, Math.max(0, Math.round(y * perUnit)));
+  const offset = (py * size + px) * 4;
   return [...rgba.subarray(offset, offset + 4)];
-};
-/**
- * The pixel a point of the *mark* lands on. The mark is scaled and centred
- * inside the plate, so its own coordinates have to be mapped through the same
- * transform `sample` applies before it looks at them.
- */
+}
+
+/** Colour of one point of the mark, read back from the 192px raster. */
 const onMark = (markX, markY) => {
-  const x = MARK_CENTER.x + (markX - 12) * MARK_SCALE;
-  const y = MARK_CENTER.y + (markY - 12) * MARK_SCALE;
-  return at(192, Math.floor((x / 24) * 192), Math.floor((y / 24) * 192));
+  const { x, y } = markToTile(markX, markY);
+  return atSize(192, x, y);
 };
 
+const isBright = ([r, , b, a]) => a === 255 && b > 150 && r < 150;
+const isTile = ([r, g, b, a]) => a === 255 && r < 50 && g < 60 && b < 80;
+
 const checks = [
-  ['corner is transparent', at(192, 1, 1)[3] === 0],
-  [
-    'the play button is drawn white',
-    onMark(8.95, 10.88).slice(0, 3).every((channel) => channel > 200),
-  ],
-  ['the film tile holds its gradient', onMark(12.2, 8)[2] > 120],
-  ['the Khmer bubble is drawn cyan', onMark(17.4, 4.6)[2] > 200 && onMark(17.4, 4.6)[1] > 120],
-  ['the Chinese bubble is drawn violet', onMark(18.3, 18.3)[0] > 100],
-  [
-    'the orbit arrow is drawn blue',
-    onMark(6.6, 20.4)[2] > 150 && onMark(6.6, 20.4)[0] < 120,
-  ],
-  ['the plate is opaque beside the mark', onMark(2, 21.5)[3] === 255],
+  ['corner is transparent', atSize(192, 1, 1)[3] === 0],
+  ['centre of the tile is opaque', atSize(192, 12, 12)[3] === 255],
+  ['frame stroke is drawn', isBright(onMark(6.5, 5.6))],
+  ['play button is filled', isBright(onMark(10.2, 12))],
+  ['pencil body is drawn', isBright(onMark(19, 8))],
+  ['pencil outline cuts the frame', isTile(onMark(21.61, 8.07))],
+  ['tile background stays dark', isTile(onMark(12, 4))],
 ];
 
 console.log(written.join('\n'));
