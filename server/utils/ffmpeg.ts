@@ -6,6 +6,25 @@ import ffprobeStatic from 'ffprobe-static';
 import { logger } from './logger.js';
 import { VideoMetadata } from '../types.js';
 
+/**
+ * How long one FFmpeg run may take before it is killed.
+ *
+ * Generous by default because a free host is slow by design, but finite: a run
+ * that never returns must surface as a failed step with a reason, not as a job
+ * that sits on one percentage forever.
+ */
+const FFMPEG_TIMEOUT_MS = Number(process.env.FFMPEG_TIMEOUT_MS || '1800000');
+
+/** Optional behaviour for one FFmpeg run. */
+export interface FfmpegRunOptions {
+  /** Receives the seconds FFmpeg has written. Requires `totalSeconds`. */
+  onProgress?: (writtenSeconds: number) => void;
+  /** Media length the progress is measured against, in seconds. */
+  totalSeconds?: number;
+  /** Watchdog for this run only; 0 disables it. */
+  timeoutMs?: number;
+}
+
 export class FFmpegHelper {
   // Binary resolution order: explicit env override -> bundled static binary -> system PATH.
   // The bundled binaries keep media processing working on hosts without a system FFmpeg.
@@ -13,17 +32,57 @@ export class FFmpegHelper {
   private static ffprobePath = process.env.FFPROBE_PATH || ffprobeStatic.path || 'ffprobe';
 
   /**
-   * Run ffmpeg with given arguments and return stdout/stderr
+   * Run ffmpeg with given arguments and return stdout/stderr.
+   *
+   * `onProgress` turns on FFmpeg's own `-progress` stream so a long step can
+   * report how much audio/video it has actually written. The final steps of the
+   * pipeline (mixing, rendering) are the slow ones on a free host, and without
+   * this the job sat on one percentage for minutes with no sign of life.
+   *
+   * Every run also gets a watchdog: a throttled instance can leave FFmpeg busy
+   * for a long time, but a process that never returns would hold the job at that
+   * percentage forever, so it is killed and reported instead.
    */
-  public static async execute(args: string[]): Promise<{ stdout: string; stderr: string }> {
+  public static async execute(
+    args: string[],
+    options: FfmpegRunOptions = {}
+  ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-      logger.debug(`Executing ffmpeg with args: ${args.join(' ')}`);
-      const proc = spawn(this.ffmpegPath, args);
+      const reportProgress = Boolean(options.onProgress && options.totalSeconds);
+      const finalArgs = reportProgress ? ['-nostats', '-progress', 'pipe:1', ...args] : args;
+      logger.debug(`Executing ffmpeg with args: ${finalArgs.join(' ')}`);
+      const proc = spawn(this.ffmpegPath, finalArgs);
       let stdout = '';
       let stderr = '';
+      let settled = false;
+
+      const timeoutMs = options.timeoutMs ?? FFMPEG_TIMEOUT_MS;
+      const watchdog =
+        timeoutMs > 0
+          ? setTimeout(() => {
+              if (settled) return;
+              settled = true;
+              const limit =
+                timeoutMs >= 1000 ? `${Math.round(timeoutMs / 1000)}s` : `${timeoutMs}ms`;
+              logger.error(`FFmpeg ran longer than ${limit} and was stopped.`);
+              proc.kill('SIGKILL');
+              reject(new Error(`FFmpeg ran longer than ${limit} and was stopped.`));
+            }, timeoutMs)
+          : null;
+      watchdog?.unref?.();
 
       proc.stdout.on('data', (d) => {
-        stdout += d.toString();
+        const text = d.toString();
+        stdout += text;
+        if (!reportProgress) return;
+        // `-progress` emits key=value lines; out_time_us is microseconds written
+        // so far, which is the honest measure of how far this step has got.
+        for (const line of text.split('\n')) {
+          const match = /^out_time_(?:us|ms)=(\d+)/.exec(line.trim());
+          if (!match) continue;
+          const written = Number(match[1]) / 1_000_000;
+          if (Number.isFinite(written)) options.onProgress!(written);
+        }
       });
 
       proc.stderr.on('data', (d) => {
@@ -31,6 +90,9 @@ export class FFmpegHelper {
       });
 
       proc.on('close', (code) => {
+        if (settled) return;
+        settled = true;
+        if (watchdog) clearTimeout(watchdog);
         if (code === 0) {
           resolve({ stdout, stderr });
         } else {
@@ -40,6 +102,9 @@ export class FFmpegHelper {
       });
 
       proc.on('error', (err) => {
+        if (settled) return;
+        settled = true;
+        if (watchdog) clearTimeout(watchdog);
         logger.error('Failed to start FFmpeg process', err);
         reject(err);
       });
@@ -465,16 +530,27 @@ export class FFmpegHelper {
       dialogueWindows?: { start: number; end: number }[];
       /** True when the background still carries the original voices (mono source). */
       backgroundHasOriginalVoice?: boolean;
+      /** Reported while the mix is written, against the background's length. */
+      onProgress?: (writtenSeconds: number) => void;
     }
   ): Promise<string> {
+    // Mixing walks the whole track, so its own length is what progress is
+    // measured against. A failed probe just means no sub-progress is reported.
+    const progress = options.onProgress
+      ? { onProgress: options.onProgress, totalSeconds: await this.getAudioDuration(backgroundTrack) }
+      : undefined;
+
     if (options.backgroundMusic === 'remove') {
       // Just normalize speech
-      await this.execute([
-        '-y',
-        '-i', dubbedSpeechTrack,
-        '-af', 'volume=1.2,loudnorm=I=-16:TP=-1.5:LRA=11',
-        outputMixedTrack,
-      ]);
+      await this.execute(
+        [
+          '-y',
+          '-i', dubbedSpeechTrack,
+          '-af', 'volume=1.2,loudnorm=I=-16:TP=-1.5:LRA=11',
+          outputMixedTrack,
+        ],
+        { onProgress: options.onProgress, totalSeconds: await this.getAudioDuration(dubbedSpeechTrack) }
+      );
       return outputMixedTrack;
     }
 
@@ -520,28 +596,34 @@ export class FFmpegHelper {
     ].join(';');
 
     try {
-      await this.execute([
-        '-y',
-        '-i', backgroundTrack,
-        '-i', dubbedSpeechTrack,
-        '-filter_complex', filter,
-        '-map', '[out]',
-        '-ac', '2',
-        '-ar', '44100',
-        outputMixedTrack,
-      ]);
+      await this.execute(
+        [
+          '-y',
+          '-i', backgroundTrack,
+          '-i', dubbedSpeechTrack,
+          '-filter_complex', filter,
+          '-map', '[out]',
+          '-ac', '2',
+          '-ar', '44100',
+          outputMixedTrack,
+        ],
+        progress
+      );
     } catch (err) {
       logger.warn('Sidechain ducking mix failed, falling back to static balanced amix:', err);
-      await this.execute([
-        '-y',
-        '-i', backgroundTrack,
-        '-i', dubbedSpeechTrack,
-        '-filter_complex', `${backgroundStage};[1:a]volume=${speechVol}[voice];[bg][voice]amix=inputs=2:duration=longest[out]`,
-        '-map', '[out]',
-        '-ac', '2',
-        '-ar', '44100',
-        outputMixedTrack,
-      ]);
+      await this.execute(
+        [
+          '-y',
+          '-i', backgroundTrack,
+          '-i', dubbedSpeechTrack,
+          '-filter_complex', `${backgroundStage};[1:a]volume=${speechVol}[voice];[bg][voice]amix=inputs=2:duration=longest[out]`,
+          '-map', '[out]',
+          '-ac', '2',
+          '-ar', '44100',
+          outputMixedTrack,
+        ],
+        progress
+      );
     }
 
     return outputMixedTrack;
@@ -555,7 +637,9 @@ export class FFmpegHelper {
     originalVideoPath: string,
     mixedAudioPath: string,
     outputMp4Path: string,
-    quality: '720p' | '1080p' | 'original' = 'original'
+    quality: '720p' | '1080p' | 'original' = 'original',
+    /** Reported while the MP4 is written, against the source video's length. */
+    onProgress?: (writtenSeconds: number) => void
   ): Promise<string> {
     const scaleFilter =
       quality === '720p'
@@ -588,7 +672,10 @@ export class FFmpegHelper {
       outputMp4Path
     );
 
-    await this.execute(args);
+    await this.execute(args, {
+      onProgress,
+      totalSeconds: onProgress ? meta.duration : undefined,
+    });
     return outputMp4Path;
   }
 

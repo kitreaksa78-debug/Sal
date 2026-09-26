@@ -440,6 +440,26 @@ export class JobProcessor {
         // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
         await this.throwIfCancelled(jobId);
         await this.updateJobState(jobId, 'mixing');
+
+        // Mixing walks the whole track and is the slowest step on a small host,
+        // so it reports how much audio it has written instead of leaving the bar
+        // parked on one number for minutes. It is mapped onto the mixing band
+        // (never past it), and it never goes backwards — the mixer's fallback
+        // retry restarts FFmpeg from zero.
+        const mixCeiling = STATUS_PROGRESS.rendering - 1;
+        let mixPct = STATUS_PROGRESS.mixing;
+        const reportMixProgress = (writtenSeconds: number) => {
+          if (!meta.duration) return;
+          const span = mixCeiling - STATUS_PROGRESS.mixing;
+          const pct = Math.min(
+            mixCeiling,
+            STATUS_PROGRESS.mixing + Math.round((writtenSeconds / meta.duration) * span)
+          );
+          if (pct <= mixPct) return;
+          mixPct = pct;
+          void this.updateJobState(jobId, 'mixing', undefined, { progress: pct });
+        };
+
         await AudioMixingService.mixDubbedWithBackground(
           masterSpeechTrack,
           noVocalsTrack,
@@ -448,6 +468,7 @@ export class JobProcessor {
           {
             segments: dialogueSegments,
             backgroundHasOriginalVoice: separationResult.backgroundHasOriginalVoice,
+            onProgress: reportMixProgress,
           }
         );
       } else {
@@ -465,11 +486,29 @@ export class JobProcessor {
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'rendering');
       const tempFinalMp4 = path.join(jobTempDir, `khmer-dubbed-${jobId}.mp4`);
+
+      // Rendering re-encodes the video, which is the other long step: report its
+      // own progress across the rendering band the same way mixing does.
+      const renderCeiling = STATUS_PROGRESS.quality_check - 1;
+      let renderPct = STATUS_PROGRESS.rendering;
+      const reportRenderProgress = (writtenSeconds: number) => {
+        if (!meta.duration) return;
+        const span = renderCeiling - STATUS_PROGRESS.rendering;
+        const pct = Math.min(
+          renderCeiling,
+          STATUS_PROGRESS.rendering + Math.round((writtenSeconds / meta.duration) * span)
+        );
+        if (pct <= renderPct) return;
+        renderPct = pct;
+        void this.updateJobState(jobId, 'rendering', undefined, { progress: pct });
+      };
+
       await VideoRenderingService.renderMp4(
         videoFilePath,
         finalMixedAudioTrack,
         tempFinalMp4,
-        job.settings
+        job.settings,
+        reportRenderProgress
       );
 
       // Generate Subtitles (SRT & VTT)

@@ -116,6 +116,8 @@ export class AudioMixingService {
     options: {
       segments?: DialogueSegment[];
       backgroundHasOriginalVoice?: boolean;
+      /** Reported while the mix is written, so a slow host still shows movement. */
+      onProgress?: (writtenSeconds: number) => void;
     } = {}
   ): Promise<string> {
     const raw = (options.segments || [])
@@ -144,6 +146,7 @@ export class AudioMixingService {
         musicVolume: settings.backgroundMusic === 'reduce' ? 0.35 : 0.65,
         dialogueWindows,
         backgroundHasOriginalVoice: options.backgroundHasOriginalVoice ?? false,
+        onProgress: options.onProgress,
       }
     );
   }

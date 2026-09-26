@@ -88,14 +88,17 @@ export class VideoRenderingService {
     originalVideoPath: string,
     mixedAudioPath: string,
     outputMp4Path: string,
-    settings: JobSettings
+    settings: JobSettings,
+    /** Reported while the MP4 is written, so a slow host still shows movement. */
+    onProgress?: (writtenSeconds: number) => void
   ): Promise<string> {
     logger.info(`Rendering final MP4: ${outputMp4Path}`);
     return await FFmpegHelper.renderFinalMp4(
       originalVideoPath,
       mixedAudioPath,
       outputMp4Path,
-      settings.outputQuality || 'original'
+      settings.outputQuality || 'original',
+      onProgress
     );
   }
 }
