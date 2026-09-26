@@ -220,8 +220,9 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
                 ជាមួយសំឡេងសាកល្បងពិត ចុច «តេស្សពេញ (Full test)» ជំនួស។
               </p>
               <p>
-                ៦. ការងារបកប្រែត្រូវការ Demucs នេះជាចាំបាច់ (គ្មានការជំនួសទេ) — ដូច្នេះពេល tunnel
-                ប្តូរ URL ថ្មី គ្រាន់តែ paste ថ្មីម្តងទៀតនៅទីនេះ។
+                ៦. ពេល tunnel ប្តូរ URL ថ្មី គ្រាន់តែ paste ថ្មីម្តងទៀតនៅទីនេះ។ បើមិនភ្ជាប់ Demucs
+                ការងារបកប្រែនៅតែដំណើរការជោគជ័យ តែសំឡេងដើមនឹងនៅក្នុងភ្លេងផ្ទៃខាងក្រោយ
+                (ត្រូវបានបន្ថយក្រោមសំឡេងខ្មែរ) ជំនួសការញែកចេញស្អាត។
               </p>
             </div>
           </div>
@@ -230,8 +231,10 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
             <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/30 border border-amber-500/30">
               <TriangleAlert className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
               <p className="text-[11px] text-amber-200 leading-relaxed">
-                មិនទាន់ភ្ជាប់ Demucs API ទេ — ការងារបកប្រែនឹងឈប់នៅជំហានញែកភ្លេង ព្រោះប្រព័ន្ធមិនប្រើវិធីផ្សេងជំនួសទេ។
-                (Stem separation needs the Demucs API; jobs stop at that step rather than using a substitute.)
+                មិនទាន់ភ្ជាប់ Demucs API ទេ — ការងារបកប្រែនៅតែដំណើរការ តែសំឡេងដើមនឹងនៅជាប់ក្នុង
+                ភ្លេងផ្ទៃខាងក្រោយ ហើយត្រូវបានបន្ថយក្រោមសំឡេងខ្មែរ។ ភ្ជាប់ Demucs ដើម្បីបានគុណភាពខ្ពស់ជាង។
+                (No Demucs API: jobs still complete, but the original voices stay in the background and are
+                dipped under the Khmer dub. Connect Demucs for a cleaner result.)
               </p>
             </div>
           )}

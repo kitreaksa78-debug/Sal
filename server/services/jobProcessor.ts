@@ -5,7 +5,11 @@ import { JobRecord, JobSettings, JobStatus, DialogueSegment } from '../types.js'
 import { getDatabase } from './db.js';
 import { getStorage } from './storage.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
-import { getAudioSeparationProvider } from './audioSeparation.js';
+import {
+  getAudioSeparationProvider,
+  UnseparatedAudioProvider,
+  SeparationResult,
+} from './audioSeparation.js';
 import { getTranscriptionProvider } from './transcription.js';
 import { SpeakerDetector } from './speakerDetection.js';
 import { getTranslationService } from './translation.js';
@@ -208,8 +212,28 @@ export class JobProcessor {
       // STEP 3: VOICE / MUSIC SEPARATION
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'separating_audio');
-      const separationProvider = getAudioSeparationProvider();
-      const separationResult = await separationProvider.separate(rawAudioPath, jobTempDir);
+
+      // Stem separation is what lets the music stay loud under the Khmer voice,
+      // but it must never be the reason a translation is lost. When no Demucs
+      // service is connected this is already the unseparated provider; when one
+      // is connected but breaks, the job drops to the same untouched-mix path
+      // (with a note on the job) instead of failing.
+      let separationResult: SeparationResult;
+      try {
+        separationResult = await getAudioSeparationProvider().separate(rawAudioPath, jobTempDir);
+      } catch (separationErr: any) {
+        if (separationErr instanceof JobCancelledError) throw separationErr;
+
+        logger.warn(
+          `Stem separation failed for job ${jobId}; continuing on the original mix: ${
+            separationErr?.message || separationErr
+          }`
+        );
+        await addWarning(
+          'ការញែកសំឡេង (Demucs) មិនបានសម្រេចទេ ដូច្នេះការងារបន្តដោយរក្សាសំឡេងដើម រួចបន្ថយសំឡេងដើមក្រោមសំឡេងខ្មែរ។ (Stem separation failed; the job continued on the original mix, dipped under the Khmer voice.)'
+        );
+        separationResult = await new UnseparatedAudioProvider().separate(rawAudioPath, jobTempDir);
+      }
 
       const vocalsTrack = separationResult.vocalsPath;
       const noVocalsTrack = separationResult.noVocalsPath; // music/background track

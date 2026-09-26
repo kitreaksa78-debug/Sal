@@ -29,10 +29,15 @@ This Space runs the **whole app** (frontend + API) from one container.
 
 ## Stem separation (Demucs only)
 
-Splitting the voices out of the mix runs on Demucs, reached over HTTP. There is
-no built-in substitute: if the service is missing or unreachable, the job stops
-at the separation step and reports why, instead of quietly continuing with a
-lesser separation.
+Splitting the voices out of the mix runs on Demucs, reached over HTTP. Model
+separation is never faked: a job that reaches Demucs gets real stems.
+
+Demucs is an upgrade, not a requirement. When no service is connected — or a
+connected one fails — the pipeline keeps going on the untouched mix: the video is
+still transcribed, translated and dubbed, and the mixer dips the original audio
+under each Khmer line so the dub stays intelligible. The trade-off is that the
+original voices remain in the background at a low level, and the job carries a
+warning saying so. Connect Demucs for a clean background.
 
 Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 
