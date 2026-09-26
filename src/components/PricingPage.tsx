@@ -71,7 +71,6 @@ const QrPaymentDialog: React.FC<{
   priceUsd: string;
 }> = ({ open, onClose, priceUsd }) => {
   const [qrMissing, setQrMissing] = useState(false);
-  const [transactionRef, setTransactionRef] = useState('');
   const [receipt, setReceipt] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
@@ -122,9 +121,8 @@ const QrPaymentDialog: React.FC<{
     setBusy(true);
     setNotice(null);
     try {
-      await submitProPayment({ amount: Number(priceUsd), transactionRef, receipt });
+      await submitProPayment({ amount: Number(priceUsd), transactionRef: '', receipt });
       setReceipt(null);
-      setTransactionRef('');
       setNotice({
         tone: 'ok',
         text: 'បានផ្ញើវិក្កយបត្ររួចរាល់។ អ្នកនឹងទទួល Pro បន្ទាប់ពីពិនិត្យប្រាក់រួច។ (Receipt sent — Pro opens once the payment is checked.)',
@@ -205,19 +203,6 @@ const QrPaymentDialog: React.FC<{
           )}
 
           <div className="space-y-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3.5">
-            <label className="block space-y-1">
-              <span className="text-[11px] font-semibold text-slate-300">
-                លេខប្រវត្តិធនាគារ <span className="font-normal text-slate-500">(បាន។ / optional)</span>
-              </span>
-              <input
-                type="text"
-                value={transactionRef}
-                onChange={(e) => setTransactionRef(e.target.value)}
-                placeholder="ឧ. 0123456789"
-                className="w-full min-h-[44px] rounded-lg border border-slate-800 bg-slate-900/60 px-3 text-sm text-white placeholder:text-slate-600 focus:border-emerald-500/50 focus:outline-none"
-              />
-            </label>
-
             <label className="block space-y-1">
               <span className="text-[11px] font-semibold text-slate-300">
                 រូបភាពវិក្កយបត្រ <span className="font-normal text-slate-500">(រូបថតការបង់ប្រាក់)</span>
