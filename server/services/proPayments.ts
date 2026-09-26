@@ -127,16 +127,20 @@ export async function decideProRequest(
 
   let proExpiresAt = request.proExpiresAt ?? null;
   if (status === 'approved') {
+    const user = await db.getUser(request.userId);
+
+    // Extend from whichever is later: the moment the owner approves, or the end
+    // of a Pro window the account still has. Deriving this from the request's
+    // submit-time timestamp instead could hand a renewing customer a *shorter*
+    // window than they already paid for when the owner reviews days later.
+    const currentExpiry = user?.proExpiresAt ? new Date(user.proExpiresAt) : null;
     const base =
-      isProUser(await db.getUser(request.userId)) && request.proExpiresAt
-        ? new Date(request.proExpiresAt)
-        : reviewedAt;
+      currentExpiry && currentExpiry.getTime() > reviewedAt.getTime() ? currentExpiry : reviewedAt;
     proExpiresAt = new Date(base.getTime() + PRO_DAYS * 24 * 60 * 60 * 1000).toISOString();
 
     // The account has to exist: the receipt may come from a signed-in session
     // whose profile is already stored, but an owner decision must still land on
     // a real record.
-    const user = await db.getUser(request.userId);
     if (user) {
       await db.updateUser(request.userId, {
         plan: 'pro',

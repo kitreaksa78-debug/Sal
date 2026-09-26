@@ -340,8 +340,12 @@ export class S3StorageProvider implements StorageProvider {
     // Always persist to local high-speed cache first
     const localPath = await this.localFallback.saveFile(category, filename, bufferOrPath);
 
-    // Sync upload to S3/Cloudflare R2 if configured and it's a permanent artifact (uploads or outputs)
-    if (this.s3 && this.config.bucket && (category === 'uploads' || category === 'outputs')) {
+    // Sync upload to S3/Cloudflare R2 if configured and it's a permanent artifact
+    // (uploads, outputs, and payment receipts). A receipt lives on a free host's
+    // ephemeral disk only until the next restart, and then the owner could no
+    // longer check the payment the customer already made — so it is replicated
+    // too, privately, and read back through the authenticated receipt route.
+    if (this.s3 && this.config.bucket && (category === 'uploads' || category === 'outputs' || category === 'receipts')) {
       try {
         const fileBuffer = typeof bufferOrPath === 'string' ? fs.readFileSync(bufferOrPath) : bufferOrPath;
         const key = `${category}/${filename}`;
@@ -356,6 +360,10 @@ export class S3StorageProvider implements StorageProvider {
           '.vtt': 'text/vtt; charset=utf-8',
           '.srt': 'text/plain; charset=utf-8',
           '.json': 'application/json',
+          '.png': 'image/png',
+          '.jpg': 'image/jpeg',
+          '.jpeg': 'image/jpeg',
+          '.webp': 'image/webp',
         };
         const contentType = contentTypes[ext] || 'application/octet-stream';
 

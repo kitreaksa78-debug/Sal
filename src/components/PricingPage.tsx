@@ -119,7 +119,18 @@ const QrPayment: React.FC<{ priceUsd: string }> = ({ priceUsd }) => {
         បង់តាម QR របស់ CHING KEA រួចផ្ញើវិក្កយបត្រមកវិញ — រយៈពេល {proDays} ថ្ងៃក្នុងមួយដើម្បីបង់។
       </p>
 
-      {!qrMissing && (
+      {qrMissing ? (
+        /* The owner has not placed the QR image yet. Say so plainly instead of
+           leaving a blank space where the customer expects something to scan. */
+        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 text-left">
+          <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+          <p className="text-[11px] leading-relaxed text-amber-200 sm:text-xs">
+            កូដ QR មិនទាន់បានដាក់នៅឡើយ។ សូមបង់ប្រាក់ទៅគណនី <span className="font-semibold">CHING KEA</span>{' '}
+            រួចផ្ញើវិក្កយបត្រខាងក្រោម ឬទាក់ទងម្ចាស់គេហទំព័រ។
+            <span className="text-amber-200/70"> (Payment QR not uploaded yet — send the receipt below or contact the owner.)</span>
+          </p>
+        </div>
+      ) : (
         <div className="flex justify-center">
           <img
             src={QR_IMAGE}
