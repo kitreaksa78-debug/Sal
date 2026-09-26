@@ -10,6 +10,7 @@ import {
   Clock3,
   CheckCircle2,
   XCircle,
+  X,
   type LucideIcon,
 } from 'lucide-react';
 import { CheckoutButton } from './CheckoutButton';
@@ -56,13 +57,20 @@ function formatDate(iso?: string | null): string {
 }
 
 /**
- * Pay by bank QR: scan, pay, send the screenshot. The owner checks the payment
- * and presses Approve, which is what turns the account into Pro — nothing here
- * grants access on its own.
+ * Pay by bank QR — but only after the customer asked to upgrade.
+ *
+ * The pricing page itself stays a clean pair of plans; scanning and uploading
+ * only appear here, in the popup, so a visitor who is just reading the plans is
+ * never handed a payment form. The owner still checks the payment by hand and
+ * presses Approve, and that is what turns the account into Pro — the upload on
+ * its own grants nothing.
  */
-const QrPayment: React.FC<{ priceUsd: string }> = ({ priceUsd }) => {
+const QrPaymentDialog: React.FC<{
+  open: boolean;
+  onClose: () => void;
+  priceUsd: string;
+}> = ({ open, onClose, priceUsd }) => {
   const [qrMissing, setQrMissing] = useState(false);
-  const [amount, setAmount] = useState(priceUsd);
   const [transactionRef, setTransactionRef] = useState('');
   const [receipt, setReceipt] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
@@ -80,30 +88,46 @@ const QrPayment: React.FC<{ priceUsd: string }> = ({ priceUsd }) => {
     }
   }, []);
 
+  // Load the account's own payment history each time the popup is opened.
   useEffect(() => {
+    if (!open) return;
     void load();
-  }, [load]);
+  }, [open, load]);
+
+  // Escape closes it, and the page behind must not scroll while it is open.
+  useEffect(() => {
+    if (!open) return;
+
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onClose();
+    };
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    window.addEventListener('keydown', onKey);
+
+    return () => {
+      window.removeEventListener('keydown', onKey);
+      document.body.style.overflow = previousOverflow;
+    };
+  }, [open, onClose]);
+
+  if (!open) return null;
 
   const submit = async () => {
     if (!receipt) {
       setNotice({ tone: 'error', text: 'សូមជ្រើសរូបវិក្កយបត្រការបង់ប្រាក់ជាមុន។' });
       return;
     }
-    const value = Number(amount);
-    if (!Number.isFinite(value) || value <= 0) {
-      setNotice({ tone: 'error', text: 'សូមបញ្ចូលចំនួនបង់ប្រាក់។' });
-      return;
-    }
 
     setBusy(true);
     setNotice(null);
     try {
-      await submitProPayment({ amount: value, transactionRef, receipt });
+      await submitProPayment({ amount: Number(priceUsd), transactionRef, receipt });
       setReceipt(null);
       setTransactionRef('');
       setNotice({
         tone: 'ok',
-        text: `បានផ្ញើវិក្កយបត្ររួចរាល់។ អ្នកបានបង់ប្រាក់ ដើម្បីឲ្យអ្នកពិនិត្យ ហើយ Pro នឹងបើកដោយស្វថ្ម្មក្នុងរយៈពេលប៉ុន្មាន។`,
+        text: 'បានផ្ញើវិក្កយបត្ររួចរាល់។ អ្នកនឹងទទួល Pro បន្ទាប់ពីពិនិត្យប្រាក់រួច។ (Receipt sent — Pro opens once the payment is checked.)',
       });
       await load();
     } catch (err: any) {
@@ -114,120 +138,159 @@ const QrPayment: React.FC<{ priceUsd: string }> = ({ priceUsd }) => {
   };
 
   return (
-    <div className="space-y-3">
-      <p className="text-center text-[11px] sm:text-xs leading-relaxed text-slate-300">
-        បង់តាម QR របស់ CHING KEA រួចផ្ញើវិក្កយបត្រមកវិញ — រយៈពេល {proDays} ថ្ងៃក្នុងមួយដើម្បីបង់។
-      </p>
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/70 backdrop-blur-sm sm:items-center sm:p-4"
+      role="dialog"
+      aria-modal="true"
+      aria-label="បង់ប្រាក់ Pro តាម QR"
+    >
+      {/* Tapping the dimmed background closes the popup, the same as the X. */}
+      <button
+        type="button"
+        aria-label="បិទ"
+        onClick={onClose}
+        className="absolute inset-0 h-full w-full cursor-default"
+        tabIndex={-1}
+      />
 
-      {qrMissing ? (
-        /* The owner has not placed the QR image yet. Say so plainly instead of
-           leaving a blank space where the customer expects something to scan. */
-        <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 text-left">
-          <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
-          <p className="text-[11px] leading-relaxed text-amber-200 sm:text-xs">
-            កូដ QR មិនទាន់បានដាក់នៅឡើយ។ សូមបង់ប្រាក់ទៅគណនី <span className="font-semibold">CHING KEA</span>{' '}
-            រួចផ្ញើវិក្កយបត្រខាងក្រោម ឬទាក់ទងម្ចាស់គេហទំព័រ។
-            <span className="text-amber-200/70"> (Payment QR not uploaded yet — send the receipt below or contact the owner.)</span>
-          </p>
-        </div>
-      ) : (
-        <div className="flex justify-center">
-          <img
-            src={QR_IMAGE}
-            alt="កូដ QR បង់ប្រាក់ CHING KEA"
-            loading="lazy"
-            onError={() => setQrMissing(true)}
-            className="h-44 w-44 rounded-xl bg-white object-contain p-2 shadow-lg shadow-black/30"
-          />
-        </div>
-      )}
-
-      <div className="space-y-2.5 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3.5 text-left">
-        <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
-          <label className="space-y-1">
-            <span className="text-[11px] font-semibold text-slate-300">ចំនួនបង់ប្រាក់ (USD)</span>
-            <input
-              type="number"
-              min="0.01"
-              step="0.01"
-              value={amount}
-              onChange={(e) => setAmount(e.target.value)}
-              className="w-full min-h-[44px] rounded-lg border border-slate-800 bg-slate-900/60 px-3 text-sm text-white focus:border-emerald-500/50 focus:outline-none"
-            />
-          </label>
-          <label className="space-y-1">
-            <span className="text-[11px] font-semibold text-slate-300">
-              លេខប្រវត្តិធនាគារ (បាន។)
-            </span>
-            <input
-              type="text"
-              value={transactionRef}
-              onChange={(e) => setTransactionRef(e.target.value)}
-              placeholder="ឧ. 0123456789"
-              className="w-full min-h-[44px] rounded-lg border border-slate-800 bg-slate-900/60 px-3 text-sm text-white placeholder:text-slate-600 focus:border-emerald-500/50 focus:outline-none"
-            />
-          </label>
-        </div>
-
-        <label className="block space-y-1">
-          <span className="text-[11px] font-semibold text-slate-300">វិក្កយបត្រការបង់ប្រាក់</span>
-          <span className="flex min-h-[44px] cursor-pointer items-center gap-2 rounded-lg border border-dashed border-emerald-500/40 bg-slate-900/40 px-3 text-xs text-slate-300 hover:border-emerald-500/70">
-            <Upload className="h-4 w-4 shrink-0 text-emerald-400" />
-            {receipt ? receipt.name : 'ជ្រើសរូបភាសា PNG, JPG ឬ WebP'}
-          </span>
-          <input
-            type="file"
-            accept="image/png,image/jpeg,image/webp"
-            className="sr-only"
-            onChange={(e) => setReceipt(e.target.files?.[0] ?? null)}
-          />
-        </label>
-
-        <button
-          type="button"
-          onClick={submit}
-          disabled={busy}
-          className="inline-flex min-h-[46px] w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 text-sm font-bold text-white transition-all hover:from-emerald-400 hover:to-teal-400 disabled:opacity-60"
-        >
-          {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
-          {busy ? 'កំពុងផ្ញើ...' : 'ផ្ញើវិក្កយបត្រ (Submit)'}
-        </button>
-
-        {notice && (
-          <p
-            className={`text-[11px] leading-relaxed ${
-              notice.tone === 'ok' ? 'text-emerald-300' : 'text-rose-300'
-            }`}
-            role="status"
+      <div className="relative max-h-[92vh] w-full max-w-lg overflow-y-auto rounded-t-3xl border border-emerald-500/25 bg-[#0d1320] p-5 shadow-2xl shadow-black/60 sm:rounded-3xl sm:p-6">
+        <div className="flex items-start justify-between gap-3">
+          <div className="min-w-0">
+            <h3 className="text-lg font-bold text-white sm:text-xl">Upgrade to Pro</h3>
+            <p className="mt-0.5 text-[11px] leading-relaxed text-slate-400 sm:text-xs">
+              ស្កេន QR ខាងក្រោម បង់ប្រាក់ រួចផ្ញើរូបវិក្កយបត្រ។
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="បិទ"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-slate-800 text-slate-400 transition-colors hover:border-slate-600 hover:text-slate-200"
           >
-            {notice.text}
-          </p>
-        )}
-      </div>
-
-      {requests.length > 0 && (
-        <div className="space-y-1.5 text-left">
-          {requests.slice(0, 3).map((request) => {
-            const { label, className, Icon } = STATUS_STYLES[request.status];
-            return (
-              <div
-                key={request.id}
-                className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2"
-              >
-                <span className="text-[11px] text-slate-300">
-                  ${request.amount} · {formatDate(request.submittedAt)}
-                </span>
-                <span
-                  className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${className}`}
-                >
-                  <Icon className="h-3 w-3" />
-                  {label}
-                </span>
-              </div>
-            );
-          })}
+            <X className="h-4 w-4" />
+          </button>
         </div>
-      )}
+
+        <div className="mt-3 flex items-baseline gap-1.5">
+          <span className="text-3xl font-bold leading-none text-white">${priceUsd}</span>
+          <span className="text-xs text-slate-400">/ {proDays} ថ្ងៃ</span>
+        </div>
+
+        <div className="mt-4 space-y-3">
+          {qrMissing ? (
+            /* The owner has not placed the QR image yet. Say so plainly instead of
+               leaving a blank space where the customer expects something to scan. */
+            <div className="flex items-start gap-2.5 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3.5 text-left">
+              <QrCode className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+              <p className="text-[11px] leading-relaxed text-amber-200 sm:text-xs">
+                កូដ QR មិនទាន់បានដាក់នៅឡើយ។ សូមបង់ប្រាក់ទៅគណនី{' '}
+                <span className="font-semibold">CHING KEA</span> រួចផ្ញើវិក្កយបត្រខាងក្រោម
+                ឬទាក់ទងម្ចាស់គេហទំព័រ។
+                <span className="text-amber-200/70">
+                  {' '}
+                  (Payment QR not uploaded yet — send the receipt below or contact the owner.)
+                </span>
+              </p>
+            </div>
+          ) : (
+            <div className="flex justify-center">
+              <img
+                src={QR_IMAGE}
+                alt="កូដ QR បង់ប្រាក់ CHING KEA"
+                loading="lazy"
+                onError={() => setQrMissing(true)}
+                className="h-48 w-48 rounded-xl bg-white object-contain p-2 shadow-lg shadow-black/40 sm:h-56 sm:w-56"
+              />
+            </div>
+          )}
+
+          <div className="space-y-3 rounded-xl border border-emerald-500/20 bg-emerald-500/5 p-3.5">
+            <label className="block space-y-1">
+              <span className="text-[11px] font-semibold text-slate-300">
+                លេខប្រវត្តិធនាគារ <span className="font-normal text-slate-500">(បាន។ / optional)</span>
+              </span>
+              <input
+                type="text"
+                value={transactionRef}
+                onChange={(e) => setTransactionRef(e.target.value)}
+                placeholder="ឧ. 0123456789"
+                className="w-full min-h-[44px] rounded-lg border border-slate-800 bg-slate-900/60 px-3 text-sm text-white placeholder:text-slate-600 focus:border-emerald-500/50 focus:outline-none"
+              />
+            </label>
+
+            <label className="block space-y-1">
+              <span className="text-[11px] font-semibold text-slate-300">
+                រូបភាពវិក្កយបត្រ <span className="font-normal text-slate-500">(រូបថតការបង់ប្រាក់)</span>
+              </span>
+              <span className="flex min-h-[52px] cursor-pointer items-center gap-2 rounded-lg border border-dashed border-emerald-500/40 bg-slate-900/40 px-3 text-xs text-slate-300 transition-colors hover:border-emerald-500/70">
+                <Upload className="h-4 w-4 shrink-0 text-emerald-400" />
+                {receipt ? receipt.name : 'ជ្រើសរូបភាព PNG, JPG ឬ WebP'}
+              </span>
+              <input
+                type="file"
+                accept="image/png,image/jpeg,image/webp"
+                className="sr-only"
+                onChange={(e) => setReceipt(e.target.files?.[0] ?? null)}
+              />
+            </label>
+
+            <button
+              type="button"
+              onClick={submit}
+              disabled={busy}
+              className="inline-flex min-h-[50px] w-full items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 px-4 py-3 text-sm font-bold text-white transition-all hover:from-emerald-400 hover:to-teal-400 disabled:opacity-60"
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : <QrCode className="h-4 w-4" />}
+              {busy ? 'កំពុងផ្ញើ...' : 'Submit Payment'}
+            </button>
+
+            {notice && (
+              <p
+                className={`text-[11px] leading-relaxed ${
+                  notice.tone === 'ok' ? 'text-emerald-300' : 'text-rose-300'
+                }`}
+                role="status"
+              >
+                {notice.text}
+              </p>
+            )}
+          </div>
+
+          {requests.length > 0 && (
+            <div className="space-y-1.5 text-left">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-slate-500">
+                ប្រវត្តិការបង់ប្រាក់របស់អ្នក
+              </p>
+              {requests.slice(0, 3).map((request) => {
+                const { label, className, Icon } = STATUS_STYLES[request.status];
+                return (
+                  <div
+                    key={request.id}
+                    className="flex items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-900/50 px-3 py-2"
+                  >
+                    <span className="text-[11px] text-slate-300">
+                      ${request.amount} · {formatDate(request.submittedAt)}
+                    </span>
+                    <span
+                      className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-semibold ${className}`}
+                    >
+                      <Icon className="h-3 w-3" />
+                      {label}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          <div className="border-t border-slate-800 pt-3">
+            <CheckoutButton className="w-full" />
+            <p className="mt-1.5 text-center text-[10px] text-slate-500">
+              បង់ផ្ទាល់តាមកាត LemonSqueezy — Pro បើកភ្លាមៗ
+            </p>
+          </div>
+        </div>
+      </div>
     </div>
   );
 };
@@ -304,11 +367,13 @@ const PRO_FEATURES: PlanFeature[] = [
 ];
 
 /**
- * Pro unlocks automatically for the signed-in account, so this page only has to
- * offer the two plans and hand the Pro button to the checkout.
+ * Pro unlocks after the owner approves a payment, so this page only has to offer
+ * the two plans: the Pro button opens the payment popup, and everything about
+ * scanning, uploading and submitting lives in there.
  */
 export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan }) => {
   const isPro = getPlan() === 'pro';
+  const [payOpen, setPayOpen] = useState(false);
 
   return (
     <div className="max-w-5xl mx-auto py-6 sm:py-10">
@@ -359,18 +424,28 @@ export const PricingPage: React.FC<PricingPageProps> = ({ onSelectPlan }) => {
             period="/ខែ"
             features={PRO_FEATURES}
           >
-            <div className="space-y-3">
-              <QrPayment priceUsd={PRO_PRICE_USD} />
-              <div className="border-t border-slate-800 pt-3">
-                <CheckoutButton className="w-full" />
-                <p className="mt-1.5 text-center text-[10px] text-slate-500">
-                  ឬបង់ផ្ទាល់តាមកាត LemonSqueezy — Pro បើកភ្លាមៗ
-                </p>
-              </div>
+            <div className="space-y-2">
+              <button
+                type="button"
+                onClick={() => setPayOpen(true)}
+                className="w-full min-h-[52px] inline-flex flex-wrap items-center justify-center gap-2 px-5 py-3.5 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-500 text-white font-bold text-base hover:from-emerald-400 hover:to-teal-400 active:scale-95 transition-all shadow-lg shadow-emerald-500/25"
+              >
+                <Zap className="w-5 h-5 shrink-0" />
+                <span>Upgrade to Pro — ${PRO_PRICE_USD}/ខែ</span>
+              </button>
+              <p className="text-center text-[10px] leading-relaxed text-slate-500">
+                ស្កេន QR បង់ប្រាក់ រួចផ្ញើវិក្កយបត្រ — Pro បើកបន្ទាប់ពីពិនិត្យរួច។
+              </p>
             </div>
           </PlanCard>
         </div>
       </div>
+
+      <QrPaymentDialog
+        open={payOpen}
+        onClose={() => setPayOpen(false)}
+        priceUsd={PRO_PRICE_USD}
+      />
     </div>
   );
 };
