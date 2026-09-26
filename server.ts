@@ -51,6 +51,14 @@ app.use('/api/billing', billingRouter);
 // the owner turns it into a Pro plan from the studio.
 app.use('/api/pro', proPaymentsRouter);
 
+// Anything still unmatched under /api has to answer like an API. Without this
+// the static fallback below would serve index.html with a 200 for a removed or
+// mistyped endpoint, and the client would try to parse HTML as JSON instead of
+// seeing a plain 404.
+app.use('/api', (req, res) => {
+  res.status(404).json({ error: 'រកមិនឃើញ API នេះទេ។ (Unknown API endpoint.)' });
+});
+
 async function startServer() {
   // Recover job history from object storage: hosts like Render free wipe the local
   // disk on every restart, but uploads and results live on in Cloudflare R2.
@@ -59,8 +67,9 @@ async function startServer() {
   // across the restarts that free hosts perform.
   await getBilling().hydrateFromRemote();
   // The stem service the owner pointed the app at from the website, so a job
-  // started right after a restart still uses the phone. Separation is Demucs
-  // only, so there is no substitute to fall back to when it is missing.
+  // started right after a restart still uses the phone. When none is connected
+  // the pipeline runs unseparated rather than failing, so this is an upgrade
+  // for the result, not a prerequisite for the job.
   await hydrateSeparatorSettings();
 
   // Check system dependencies on start
