@@ -108,6 +108,8 @@ export interface JobRecord {
   segments?: DialogueSegment[];
   speakers?: SpeakerInfo[];
   outputFile?: string;
+  /** The same video with no burned-in subtitles, for the player's on/off switch. */
+  outputFileClean?: string;
   outputSubtitlesSrt?: string;
   outputSubtitlesVtt?: string;
   outputAudioFile?: string;

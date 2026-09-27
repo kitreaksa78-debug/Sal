@@ -221,7 +221,9 @@ export class VideoRenderingService {
     /** Reported while the MP4 is written, so a slow host still shows movement. */
     onProgress?: (writtenSeconds: number) => void,
     /** ASS script painted onto the picture; omitted when subtitles are off. */
-    subtitleAssPath?: string
+    subtitleAssPath?: string,
+    /** Same video with no painted subtitles, so the player can switch them off. */
+    cleanOutputMp4Path?: string
   ): Promise<string> {
     logger.info(
       subtitleAssPath
@@ -234,7 +236,8 @@ export class VideoRenderingService {
       outputMp4Path,
       settings.outputQuality || 'original',
       onProgress,
-      subtitleAssPath
+      subtitleAssPath,
+      cleanOutputMp4Path
     );
   }
 }

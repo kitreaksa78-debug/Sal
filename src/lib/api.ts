@@ -197,6 +197,21 @@ export function getDownloadUrl(jobId: string): string {
   return withToken(`${API_BASE}/jobs/${jobId}/download`);
 }
 
+/**
+ * The subtitle-free twin of the dubbed video, for the player's on/off switch.
+ * `inline=1` makes the browser play it in the page instead of saving it.
+ */
+export function getCleanVideoUrl(jobId: string): string {
+  const base = `${API_BASE}/jobs/${jobId}/download?variant=clean&inline=1`;
+  return withToken(base);
+}
+
+/** The dubbed video with the burned-in Khmer text, played in the page. */
+export function getSubtitledVideoUrl(jobId: string): string {
+  const base = `${API_BASE}/jobs/${jobId}/download?inline=1`;
+  return withToken(base);
+}
+
 export function getSubtitlesUrl(jobId: string, format: 'srt' | 'vtt' = 'vtt'): string {
   return withToken(`${API_BASE}/jobs/${jobId}/subtitles?format=${format}`);
 }

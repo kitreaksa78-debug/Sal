@@ -66,6 +66,19 @@ video is rendered without burned-in subtitles rather than failing the job. The
 font size and margins follow the real frame size, and lines are wrapped by hand
 because Khmer has almost no spaces for libass to break on.
 
+### Turning the subtitles off
+
+Painted-in text cannot be switched off inside a player, so each job also keeps a
+subtitle-free twin of the same render (`khmer-dubbed-clean-<id>.mp4`). The result
+panel uses it for a **បិទអក្សរខ្មែរ / បើកអក្សរខ្មែរ** switch, and offers it as a second
+download.
+
+The twin is not a second render of the job: the clean picture is produced first —
+a plain stream copy when the upload is already H.264 at the requested size — and
+the subtitles are then burned onto that file, so the video is re-encoded once,
+exactly as before. Both files share the same audio track, and switching in the
+player keeps the current playback position.
+
 Set `subtitle: false` in a job's settings for a clean picture.
 
 ## Voice timing

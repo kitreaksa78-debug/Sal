@@ -565,13 +565,19 @@ export class JobProcessor {
         void this.updateJobState(jobId, 'rendering', undefined, { progress: pct });
       };
 
+      // The same render also produces a subtitle-free copy. The player switches
+      // between the two files, which is what makes the on/off toggle possible
+      // without a second job.
+      const tempCleanMp4 = path.join(jobTempDir, `khmer-dubbed-clean-${jobId}.mp4`);
+
       await VideoRenderingService.renderMp4(
         videoFilePath,
         finalMixedAudioTrack,
         tempFinalMp4,
         job.settings,
         reportRenderProgress,
-        burnedSubtitles ?? undefined
+        burnedSubtitles ?? undefined,
+        tempCleanMp4
       );
 
       // STEP 12: QUALITY CHECK
@@ -586,9 +592,19 @@ export class JobProcessor {
       const finalMp4Filename = `khmer-dubbed-${jobId}.mp4`;
       const savedMp4Path = await storage.saveFile('outputs', finalMp4Filename, tempFinalMp4);
 
+      // The subtitle-free twin only exists when the burn-in actually produced a
+      // different picture. Without a clean copy the toggle has nothing to switch
+      // to, and the player keeps showing the one file it was given.
+      let savedCleanMp4Path: string | undefined;
+      if (fs.existsSync(tempCleanMp4)) {
+        const cleanFilename = `khmer-dubbed-clean-${jobId}.mp4`;
+        savedCleanMp4Path = await storage.saveFile('outputs', cleanFilename, tempCleanMp4);
+      }
+
       // STEP 13: COMPLETED
       await this.updateJobState(jobId, 'completed', KHMER_STEP_MESSAGES.completed, {
         outputFile: savedMp4Path,
+        ...(savedCleanMp4Path ? { outputFileClean: savedCleanMp4Path } : {}),
         outputAudioFile: savedAudioPath,
         outputSubtitlesSrt: savedSrtPath,
         outputSubtitlesVtt: savedVttPath,

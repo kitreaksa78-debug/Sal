@@ -255,6 +255,10 @@ router.get('/:id/events', async (req: Request, res: Response) => {
 /**
  * GET /api/jobs/:id/download
  * Download final dubbed MP4 file
+ *
+ * `?variant=clean` serves the subtitle-free twin instead, which is what the
+ * player's subtitles on/off switch plays. `?inline=1` asks for playback
+ * headers so the browser shows the video rather than saving it.
  */
 router.get('/:id/download', async (req: Request, res: Response) => {
   try {
@@ -268,16 +272,58 @@ router.get('/:id/download', async (req: Request, res: Response) => {
       return res.status(404).send('Job not found');
     }
 
+    const wantsClean = (req.query.variant as string || '').toLowerCase() === 'clean';
+
     // A restart wipes the local disk, so the file usually has to come back from
     // object storage before it can be streamed.
-    const videoFile = await resolveStoredArtifact(job.outputFile);
+    const videoFile = await resolveStoredArtifact(
+      wantsClean ? job.outputFileClean : job.outputFile
+    );
     if (job.status !== 'completed' || !videoFile) {
       return res.status(400).send('វីដេអូបកប្រែមិនទាន់រួចរាល់ ឬមានបញ្ហា។ (Output video not ready)');
     }
 
-    const safeFilename = `khmer-dubbed-${job.id}.mp4`;
+    const disposition =
+      (req.query.inline as string || '') === '1'
+        ? 'inline'
+        : 'attachment';
+    const safeFilename = wantsClean
+      ? `khmer-dubbed-nosubtitles-${job.id}.mp4`
+      : `khmer-dubbed-${job.id}.mp4`;
     res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Disposition', `attachment; filename="${safeFilename}"`);
+    res.setHeader('Content-Disposition', `${disposition}; filename="${safeFilename}"`);
+
+    // Byte ranges let the player seek instead of waiting for the whole file,
+    // and switching the subtitles off loads only what it needs.
+    const size = fs.statSync(videoFile).size;
+    const range = req.headers.range;
+    const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
+    if (match) {
+      const startRaw = match[1];
+      const endRaw = match[2];
+      let start = startRaw ? Number(startRaw) : 0;
+      let end = endRaw ? Number(endRaw) : size - 1;
+      if (!startRaw && endRaw) {
+        // A suffix range ("bytes=-500") asks for the last N bytes.
+        start = Math.max(0, size - Number(endRaw));
+        end = size - 1;
+      }
+      if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) {
+        res.status(416).setHeader('Content-Range', `bytes */${size}`);
+        return res.end();
+      }
+      end = Math.min(end, size - 1);
+      res.status(206);
+      res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
+      res.setHeader('Accept-Ranges', 'bytes');
+      res.setHeader('Content-Length', String(end - start + 1));
+      if (req.method === 'HEAD') return res.end();
+      return fs.createReadStream(videoFile, { start, end }).pipe(res);
+    }
+
+    res.setHeader('Accept-Ranges', 'bytes');
+    res.setHeader('Content-Length', String(size));
+    if (req.method === 'HEAD') return res.end();
     const fileStream = fs.createReadStream(videoFile);
     fileStream.pipe(res);
   } catch (err: any) {
@@ -361,6 +407,7 @@ function jobArtifacts(job: JobRecord): { category: 'uploads' | 'outputs'; filena
 
   add('uploads', job.inputFile);
   add('outputs', job.outputFile);
+  add('outputs', job.outputFileClean);
   add('outputs', job.outputAudioFile);
   add('outputs', job.outputSubtitlesSrt);
   add('outputs', job.outputSubtitlesVtt);

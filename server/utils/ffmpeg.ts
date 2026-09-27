@@ -757,6 +757,13 @@ export class FFmpegHelper {
    * Burned-in text forces a video re-encode, and a host without a Khmer font (or
    * without libass) must not lose the whole job over it: the render is attempted
    * with the subtitles and, if that fails, retried without them.
+   *
+   * `cleanOutputPath` asks for the same video **without** the painted text, so
+   * the player can offer a subtitles on/off switch. It costs no extra encode:
+   * the clean picture is rendered first (a stream copy whenever the source is
+   * already H.264 at the requested size) and the subtitles are then burned onto
+   * that file, re-encoding the video once — the same single encode the job
+   * already paid for.
    */
   public static async renderFinalMp4(
     originalVideoPath: string,
@@ -766,7 +773,9 @@ export class FFmpegHelper {
     /** Reported while the MP4 is written, against the source video's length. */
     onProgress?: (writtenSeconds: number) => void,
     /** ASS file to burn into the picture. Omitted when the studio turned subtitles off. */
-    subtitleAssPath?: string
+    subtitleAssPath?: string,
+    /** Where to keep the same video with no painted subtitles, for the toggle. */
+    cleanOutputPath?: string
   ): Promise<string> {
     // Check if original video stream is already H.264
     const meta = await this.probeVideo(originalVideoPath);
@@ -774,7 +783,7 @@ export class FFmpegHelper {
 
     const scale = quality === '720p' ? 'scale=-2:720' : quality === '1080p' ? 'scale=-2:1080' : '';
 
-    const buildArgs = (subtitleFilter: string | null): string[] => {
+    const buildArgs = (subtitleFilter: string | null, destination: string): string[] => {
       const chain = [scale, subtitleFilter].filter(Boolean).join(',');
       const args: string[] = ['-y', '-i', originalVideoPath, '-i', mixedAudioPath];
 
@@ -794,10 +803,24 @@ export class FFmpegHelper {
         '-map', '1:a:0',
         '-movflags', '+faststart', // web streaming friendly
         '-shortest',
-        outputMp4Path
+        destination
       );
       return args;
     };
+
+    /** Paint the subtitles onto an already rendered file: video only, the audio
+     *  in that file is final, so copying it keeps this to one video re-encode. */
+    const burnArgs = (sourcePath: string, destination: string): string[] => [
+      '-y',
+      '-i', sourcePath,
+      '-vf', subtitleFilter!,
+      '-c:v', 'libx264',
+      '-preset', 'fast',
+      '-crf', '22',
+      '-c:a', 'copy',
+      '-movflags', '+faststart',
+      destination,
+    ];
 
     let subtitleFilter: string | null = null;
     if (subtitleAssPath && fs.existsSync(subtitleAssPath)) {
@@ -809,19 +832,63 @@ export class FFmpegHelper {
       }
     }
 
-    const runOptions = { onProgress, totalSeconds: onProgress ? meta.duration : undefined };
+    // Two renders of the same length report the same seconds, so the second pass
+    // must not drag the progress bar backwards.
+    let highWater = 0;
+    const runOptions = {
+      onProgress: onProgress
+        ? (written: number) => {
+            if (!(written > highWater)) return;
+            highWater = written;
+            onProgress(written);
+          }
+        : undefined,
+      totalSeconds: onProgress ? meta.duration : undefined,
+    };
+
+    // Both versions wanted: render the clean picture, then burn onto it.
+    if (subtitleFilter && cleanOutputPath) {
+      try {
+        await this.execute(buildArgs(null, cleanOutputPath), runOptions);
+        await this.execute(burnArgs(cleanOutputPath, outputMp4Path), runOptions);
+        logger.info('Rendered the final MP4 with burned-in Khmer subtitles, plus a clean copy.');
+        return outputMp4Path;
+      } catch (err) {
+        logger.warn(
+          'Rendering both subtitled and clean videos failed; falling back to one pass:',
+          err
+        );
+        if (!fs.existsSync(outputMp4Path)) {
+          // The clean pass may have succeeded and only the burn failed; that file
+          // is a valid release, subtitles aside.
+          if (fs.existsSync(cleanOutputPath)) {
+            fs.copyFileSync(cleanOutputPath, outputMp4Path);
+            logger.info('Used the clean render as the release after the subtitle pass failed.');
+            return outputMp4Path;
+          }
+        } else if (!fs.existsSync(cleanOutputPath)) {
+          fs.copyFileSync(outputMp4Path, cleanOutputPath);
+        }
+      }
+    }
 
     if (subtitleFilter) {
       try {
-        await this.execute(buildArgs(subtitleFilter), runOptions);
+        await this.execute(buildArgs(subtitleFilter, outputMp4Path), runOptions);
         logger.info('Rendered the final MP4 with burned-in Khmer subtitles.');
+        if (cleanOutputPath && !fs.existsSync(cleanOutputPath)) {
+          fs.copyFileSync(outputMp4Path, cleanOutputPath);
+        }
         return outputMp4Path;
       } catch (err) {
         logger.warn('Burning subtitles into the video failed; rendering without them:', err);
       }
     }
 
-    await this.execute(buildArgs(null), runOptions);
+    await this.execute(buildArgs(null, outputMp4Path), runOptions);
+    if (cleanOutputPath && !fs.existsSync(cleanOutputPath)) {
+      fs.copyFileSync(outputMp4Path, cleanOutputPath);
+    }
     return outputMp4Path;
   }
 
