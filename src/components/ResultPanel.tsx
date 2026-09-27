@@ -134,10 +134,14 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
                 <span>វីដេអូសំឡេងខ្មែរ (Khmer Dubbed Video)</span>
               </h3>
             </div>
-            <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
-              <Captions className="w-3.5 h-3.5" />
-              អក្សរខ្មែរបញ្ចូលក្នុងវីដេអូរួច
-            </span>
+            {/* The switch below is the honest control now, so the old
+                "subtitles are burned in" badge would only repeat it. */}
+            {hasCleanCopy ? null : (
+              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
+                <Captions className="w-3.5 h-3.5" />
+                អក្សរខ្មែរបញ្ចូលក្នុងវីដេអូរួច
+              </span>
+            )}
           </div>
 
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
