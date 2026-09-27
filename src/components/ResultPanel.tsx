@@ -5,8 +5,6 @@ import {
   RefreshCw,
   Captions,
   CaptionsOff,
-  Copy,
-  Check,
 } from 'lucide-react';
 import { JobRecord } from '../types';
 import { getCleanVideoUrl, getDownloadUrl, getSubtitledVideoUrl } from '../lib/api';
@@ -26,7 +24,6 @@ function formatClock(seconds: number): string {
 
 export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   const dubbedVideoRef = useRef<HTMLVideoElement>(null);
-  const [copied, setCopied] = useState(false);
   // Khmer text is painted into the picture, so turning it off means playing the
   // subtitle-free copy of the very same render.
   const [subtitlesOn, setSubtitlesOn] = useState(true);
@@ -81,16 +78,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
       text: (segment.khmer || segment.text || '').trim(),
     }))
     .filter((line) => line.text.length > 0);
-
-  const copyAllLines = async () => {
-    try {
-      await navigator.clipboard.writeText(lines.map((line) => line.text).join('\n'));
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    } catch {
-      /* Clipboard blocked (http, older phone): the text on screen stays selectable. */
-    }
-  };
 
   return (
     <div className="space-y-6">
@@ -223,37 +210,20 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
 
       {/* The Khmer text itself: every line the dub speaks, in the order it is
           spoken. It replaces the old SRT/VTT buttons — the words live on screen
-          where they can be read, selected and copied, instead of hiding inside a
-          file the visitor has to open somewhere else. */}
+          where they can be read, instead of hiding inside a file the visitor has
+          to open somewhere else. */}
       <div className="bg-[#111827]/90 rounded-2xl border border-slate-800 p-4 sm:p-5 shadow-xl">
-        <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-          <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2">
-            <Captions className="w-4 h-4 text-emerald-400" />
-            <span>
-              អត្ថបទខ្មែរ (Khmer Text)
-              {lines.length > 0 && (
-                <span className="ml-1.5 font-normal normal-case text-slate-500">
-                  {lines.length} បន្ទាត់
-                </span>
-              )}
-            </span>
-          </h3>
-
-          {lines.length > 0 && (
-            <button
-              type="button"
-              onClick={copyAllLines}
-              className="inline-flex items-center gap-1.5 rounded-lg border border-slate-700 bg-slate-800/80 px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 transition-colors hover:bg-slate-700/80 hover:text-white min-h-[36px]"
-            >
-              {copied ? (
-                <Check className="w-3.5 h-3.5 text-emerald-400" />
-              ) : (
-                <Copy className="w-3.5 h-3.5 text-emerald-400" />
-              )}
-              {copied ? 'បានចម្លង' : 'ចម្លងអត្ថបទ'}
-            </button>
-          )}
-        </div>
+        <h3 className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-2 mb-3">
+          <Captions className="w-4 h-4 text-emerald-400" />
+          <span>
+            អត្ថបទខ្មែរ (Khmer Text)
+            {lines.length > 0 && (
+              <span className="ml-1.5 font-normal normal-case text-slate-500">
+                {lines.length} បន្ទាត់
+              </span>
+            )}
+          </span>
+        </h3>
 
         {lines.length === 0 ? (
           <p className="text-xs text-slate-500 leading-relaxed">
