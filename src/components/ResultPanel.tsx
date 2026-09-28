@@ -1,13 +1,7 @@
-import React, { useRef, useState } from 'react';
-import {
-  Download,
-  CheckCircle2,
-  RefreshCw,
-  Captions,
-  CaptionsOff,
-} from 'lucide-react';
+import React from 'react';
+import { Download, CheckCircle2, RefreshCw, Captions } from 'lucide-react';
 import { JobRecord } from '../types';
-import { getCleanVideoUrl, getDownloadUrl, getSubtitledVideoUrl } from '../lib/api';
+import { getDownloadUrl, getSubtitledVideoUrl } from '../lib/api';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -23,51 +17,12 @@ function formatClock(seconds: number): string {
 }
 
 export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
-  const dubbedVideoRef = useRef<HTMLVideoElement>(null);
-  // Khmer text is painted into the picture, so turning it off means playing the
-  // subtitle-free copy of the very same render.
-  const [subtitlesOn, setSubtitlesOn] = useState(true);
-
   const finalVideoUrl = getDownloadUrl(job.id);
-  const hasCleanCopy = Boolean(job.outputFileClean);
-  const playableUrl = subtitlesOn || !hasCleanCopy
-    ? getSubtitledVideoUrl(job.id)
-    : getCleanVideoUrl(job.id);
-
   /**
-   * Swap the source without losing the place: the visitor keeps watching from
-   * the same second, playing or paused as they were.
+   * The release cut, and the only video this page plays or hands out: the Khmer
+   * text is painted into the picture, so there is nothing to switch off.
    */
-  const toggleSubtitles = () => {
-    const video = dubbedVideoRef.current;
-    if (video) {
-      const wasPlaying = !video.paused && !video.ended;
-      video.dataset.resumeAt = String(video.currentTime || 0);
-      video.dataset.wasPlaying = wasPlaying ? '1' : '0';
-    }
-    setSubtitlesOn((on) => !on);
-  };
-
-  /** Runs on every source swap: put the viewer back where they were. */
-  const restorePlayback = () => {
-    const video = dubbedVideoRef.current;
-    if (!video) return;
-    const resumeAt = Number(video.dataset.resumeAt);
-    if (Number.isFinite(resumeAt) && resumeAt > 0) {
-      try {
-        video.currentTime = resumeAt;
-      } catch {
-        /* Seeking before metadata is ready is not possible; it starts at 0. */
-      }
-    }
-    if (video.dataset.wasPlaying === '1') {
-      void video.play().catch(() => {
-        /* The browser may refuse autoplay; the visitor presses play again. */
-      });
-    }
-    delete video.dataset.resumeAt;
-    delete video.dataset.wasPlaying;
-  };
+  const playableUrl = getSubtitledVideoUrl(job.id);
 
   /** The Khmer lines of this video, oldest first — the text the dub speaks. */
   const lines = (job.segments || [])
@@ -121,56 +76,20 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
                 <span>វីដេអូសំឡេងខ្មែរ (Khmer Dubbed Video)</span>
               </h3>
             </div>
-            {/* The switch below is the honest control now, so the old
-                "subtitles are burned in" badge would only repeat it. */}
-            {hasCleanCopy ? null : (
-              <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-lg bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 text-[10px] font-semibold">
-                <Captions className="w-3.5 h-3.5" />
-                អក្សរខ្មែរបញ្ចូលក្នុងវីដេអូរួច
-              </span>
-            )}
           </div>
 
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
             <video
-              ref={dubbedVideoRef}
               src={playableUrl}
               controls
               playsInline
-              onLoadedMetadata={restorePlayback}
               className="w-full h-full object-contain"
             />
           </div>
 
-          {/* The switch only appears once a subtitle-free copy exists, which is
-              what makes turning the text off real rather than cosmetic. */}
-          {hasCleanCopy && (
-            <button
-              type="button"
-              onClick={toggleSubtitles}
-              aria-pressed={subtitlesOn}
-              className={`flex w-full items-center justify-center gap-2 rounded-xl border px-4 py-2.5 text-xs font-semibold transition-colors min-h-[44px] ${
-                subtitlesOn
-                  ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 hover:bg-emerald-500/20'
-                  : 'border-slate-700 bg-slate-800/80 text-slate-300 hover:bg-slate-700/80'
-              }`}
-            >
-              {subtitlesOn ? (
-                <CaptionsOff className="w-4 h-4" />
-              ) : (
-                <Captions className="w-4 h-4" />
-              )}
-              {subtitlesOn ? 'បិទអក្សរខ្មែរ' : 'បើកអក្សរខ្មែរ'}
-              <span className="font-normal opacity-70">
-                {subtitlesOn ? '(Hide subtitles)' : '(Show subtitles)'}
-              </span>
-            </button>
-          )}
-
           <p className="text-[11px] text-slate-400 leading-relaxed">
             អក្សរខ្មែរត្រូវបានបញ្ចូលទៅក្នុងវីដេអូនេះផ្ទាល់ ដូច្នេះវាលេចឡើងគ្រប់កម្មវិធី និងគ្រប់ទូរស័ព្ទ។
             (The Khmer subtitles are burned into this video, so they show in every player.)
-            {hasCleanCopy && ' ប៊ូតុងខាងលើប្តូរវីដេអូដែលគ្មានអក្សរបាន ដោយមិនប៉ះពាល់សំឡេងខ្មែរទេ។'}
           </p>
         </div>
       </div>
@@ -182,7 +101,7 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
         </h3>
 
         <div className="grid grid-cols-1 gap-3">
-          {/* Main Video Download */}
+          {/* The one download: the dubbed MP4, subtitles included. */}
           <a
             href={finalVideoUrl}
             download={`khmer-dubbed-${job.id}.mp4`}
@@ -191,19 +110,6 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
             <Download className="w-4 h-4" />
             <span>ទាញយក MP4 (Khmer Video)</span>
           </a>
-
-          {/* The same render without the painted text, for anyone who does not
-              want subtitles on the video they post. */}
-          {hasCleanCopy && (
-            <a
-              href={getCleanVideoUrl(job.id)}
-              download={`khmer-dubbed-nosubtitles-${job.id}.mp4`}
-              className="flex items-center justify-center gap-2 rounded-xl border border-slate-700 bg-slate-800/80 hover:bg-slate-700/80 px-4 py-3 text-slate-200 hover:text-white text-xs font-semibold transition-colors min-h-[44px]"
-            >
-              <Download className="w-4 h-4" />
-              <span>ទាញយក MP4 ដោយគ្មានអក្សរ (No subtitles)</span>
-            </a>
-          )}
 
         </div>
       </div>
