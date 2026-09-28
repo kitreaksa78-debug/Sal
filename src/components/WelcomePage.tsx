@@ -51,12 +51,12 @@ const STEPS = [
   {
     icon: Languages,
     title: 'AI បកប្រែ និងបង្កើតសំឡេង',
-    detail: 'Whisper large-v3 ស្តាប់ → បកប្រែខ្មែរ → Edge TTS',
+    detail: 'Demucs ញែកភ្លេង → Whisper ស្តាប់ → បកប្រែខ្មែរ → Khmer TTS',
   },
   {
     icon: Download,
     title: 'ទាញយកលទ្ធផល',
-    detail: 'MP4 សំឡេងខ្មែរ · អក្សររត់ SRT/VTT · WAV',
+    detail: 'វីដេអូ MP4 សំឡេងខ្មែរ · អក្សររត់ខ្មែរនៅក្នុងវីដេអូ',
   },
 ];
 

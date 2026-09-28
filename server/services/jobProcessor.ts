@@ -71,20 +71,29 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
   failed: 'Processing failed',
 };
 
-// Progress percentage mapping
+/**
+ * Progress percentage mapping, spread across the six steps the studio shows:
+ *
+ *   Video → Demucs → Whisper → Gemini/Translator → Khmer TTS → ដាក់សំឡេងចូលវីដេអូ
+ *
+ * `detecting_speakers` and `syncing` are no longer reported — speaker naming
+ * happens inside the Whisper pass and the dialogue track is laid on the
+ * timeline while mixing — but they stay in the map because jobs recorded before
+ * that change still carry those statuses.
+ */
 const STATUS_PROGRESS: Record<JobStatus, number> = {
   queued: 5,
   uploading: 10,
-  extracting_audio: 18,
-  separating_audio: 28,
+  extracting_audio: 16,
+  separating_audio: 26,
   transcribing: 40,
   detecting_speakers: 48,
-  translating: 58,
-  generating_voice: 70,
+  translating: 56,
+  generating_voice: 68,
   syncing: 80,
-  mixing: 88,
-  rendering: 94,
-  quality_check: 98,
+  mixing: 84,
+  rendering: 92,
+  quality_check: 97,
   completed: 100,
   failed: 100,
 };
@@ -238,7 +247,7 @@ export class JobProcessor {
       const vocalsTrack = separationResult.vocalsPath;
       const noVocalsTrack = separationResult.noVocalsPath; // music/background track
 
-      // STEP 4: SPEECH-TO-TEXT & DETECTION
+      // STEP 3: SPEECH-TO-TEXT (Whisper)
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'transcribing');
       const transcriptionProvider = getTranscriptionProvider();
@@ -281,13 +290,14 @@ export class JobProcessor {
         ];
       }
 
-      // STEP 5: SPEAKER IDENTIFICATION
-      await this.throwIfCancelled(jobId);
-      await this.updateJobState(jobId, 'detecting_speakers');
+      // Speaker names and voice genders are settled here, inside the Whisper
+      // step instead of as a stage of their own: it is in-memory bookkeeping
+      // with no model call behind it, so a separate "identifying speakers" row
+      // only made the pipeline look longer than it is.
       const speakerProfiles = SpeakerDetector.identifySpeakers(dialogueSegments);
       await db.updateJob(jobId, { speakers: speakerProfiles });
 
-      // STEP 6: CONTEXT ANALYSIS & KHMER TRANSLATION
+      // STEP 4: CONTEXT ANALYSIS & KHMER TRANSLATION
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'translating');
       const translationService = getTranslationService();
@@ -302,12 +312,12 @@ export class JobProcessor {
             // Translation is the longest stage: honour a cancel between blocks
             // so a two-minute video does not keep burning quota after the stop.
             await this.throwIfCancelled(jobId);
-            const pct = 58 + Math.round((completedLines / Math.max(1, totalLines)) * 10);
+            const pct = 56 + Math.round((completedLines / Math.max(1, totalLines)) * 8);
             await this.updateJobState(
               jobId,
               'translating',
               `កំពុងបកប្រែជាភាសាខ្មែរ ${completedLines}/${totalLines} បន្ទាត់...`,
-              { progress: Math.min(pct, 68) }
+              { progress: Math.min(pct, 64) }
             );
           }
         );
@@ -329,7 +339,7 @@ export class JobProcessor {
 
       await db.saveSegments(jobId, dialogueSegments);
 
-      // STEP 7: KHMER TTS SPEECH SYNTHESIS & TIMING MATCH
+      // STEP 5: KHMER TTS SPEECH SYNTHESIS & TIMING MATCH
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'generating_voice');
       const ttsProvider = getTTSProvider();
@@ -414,12 +424,12 @@ export class JobProcessor {
           }
 
           voicedSoFar++;
-          const pct = 70 + Math.round((voicedSoFar / dialogueSegments.length) * 9);
+          const pct = 68 + Math.round((voicedSoFar / dialogueSegments.length) * 8);
           await this.updateJobState(
             jobId,
             'generating_voice',
             `កំពុងបង្កើតសំឡេងខ្មែរ ${voicedSoFar}/${dialogueSegments.length} បន្ទាត់...`,
-            { progress: Math.min(pct, 79) }
+            { progress: Math.min(pct, 75) }
           );
         });
       }
@@ -457,9 +467,13 @@ export class JobProcessor {
       const finalMixedAudioTrack = path.join(jobTempDir, 'final_mixed_audio.wav');
 
       if (canDub) {
-        // STEP 8: SYNC & ASSEMBLE DIALOGUE TRACK
+        // STEP 6: PUT THE KHMER VOICE BACK INTO THE VIDEO
+        //
+        // Laying each voiced line on the original timeline and mixing it under
+        // the kept music read as two stages to the user, so they are one stage
+        // here as well — no extra status round-trip in between.
         await this.throwIfCancelled(jobId);
-        await this.updateJobState(jobId, 'syncing');
+        await this.updateJobState(jobId, 'mixing');
         const masterSpeechTrack = path.join(jobTempDir, 'master_khmer_speech.wav');
         await AudioMixingService.assembleDialogueTrack(
           dialogueSegments,
@@ -468,10 +482,6 @@ export class JobProcessor {
           jobTempDir,
           { speechWindows }
         );
-
-        // STEP 9: AUDIO MIXING (Dubbed Speech + Kept Music/Background)
-        await this.throwIfCancelled(jobId);
-        await this.updateJobState(jobId, 'mixing');
 
         // Mixing walks the whole track and is the slowest step on a small host,
         // so it reports how much audio it has written instead of leaving the bar
@@ -510,15 +520,17 @@ export class JobProcessor {
         fs.copyFileSync(rawAudioPath, finalMixedAudioTrack);
       }
 
-      // Save mixed audio file to outputs
-      const audioOutputFilename = `khmer-audio-${jobId}.wav`;
-      const savedAudioPath = await storage.saveFile('outputs', audioOutputFilename, finalMixedAudioTrack);
+      // The mixed track is deliberately not exported as its own WAV any more.
+      // A full-length 44.1 kHz WAV is hundreds of megabytes on a long video and
+      // has to be written and uploaded before the MP4 is even started, while
+      // the studio ships exactly one deliverable — the dubbed MP4. Dropping it
+      // removes that write and upload from every job.
 
-      // STEP 10: SUBTITLES
+      // STEP 7: SUBTITLES
       //
-      // The Khmer lines are written out before the video is rendered, because
-      // the same script is painted onto every frame: whoever downloads the MP4
-      // should see the Khmer text without having to hunt for a side-car file.
+      // The Khmer lines are written out before the video is rendered and are
+      // carried inside the MP4 as a caption track, so whoever downloads the
+      // video gets the Khmer text without having to hunt for a side-car file.
       // The SRT/VTT copies are still saved as well, so the subtitles can be
       // edited or switched on as a track in a player.
       const srtContent = VideoRenderingService.generateSrt(dialogueSegments);
@@ -543,7 +555,7 @@ export class JobProcessor {
         logger.info(`Subtitles are turned off for job ${jobId}; shipping a video without captions.`);
       }
 
-      // STEP 11: RENDER FINAL MP4 VIDEO (H.264 / AAC)
+      // STEP 8: RENDER FINAL MP4 VIDEO (H.264 / AAC)
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'rendering');
       const tempFinalMp4 = path.join(jobTempDir, `khmer-dubbed-${jobId}.mp4`);
@@ -577,7 +589,8 @@ export class JobProcessor {
         captionsEnabled && fs.existsSync(srtOnDisk) ? srtOnDisk : undefined
       );
 
-      // STEP 12: QUALITY CHECK
+      // Final check before the file is published — still part of the same
+      // "dub into video" step, not a stage the user has to wait through.
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'quality_check');
       const qualityResult = await FFmpegHelper.verifyOutputQuality(tempFinalMp4);
@@ -589,10 +602,9 @@ export class JobProcessor {
       const finalMp4Filename = `khmer-dubbed-${jobId}.mp4`;
       const savedMp4Path = await storage.saveFile('outputs', finalMp4Filename, tempFinalMp4);
 
-      // STEP 13: COMPLETED
+      // STEP 9: COMPLETED
       await this.updateJobState(jobId, 'completed', KHMER_STEP_MESSAGES.completed, {
         outputFile: savedMp4Path,
-        outputAudioFile: savedAudioPath,
         outputSubtitlesSrt: savedSrtPath,
         outputSubtitlesVtt: savedVttPath,
         completedAt: new Date().toISOString(),

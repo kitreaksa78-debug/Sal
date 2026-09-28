@@ -9,66 +9,62 @@ interface ProcessingProgressProps {
 }
 
 interface StepItem {
-  id: JobStatus | 'detect_transcribe';
+  id: JobStatus;
   khmer: string;
   english: string;
   associatedStatuses: JobStatus[];
 }
 
+/**
+ * The pipeline the studio actually runs, in order:
+ *
+ *   Video → Demucs → Whisper → Gemini/Translator → Khmer TTS → ដាក់សំឡេងចូលវីដេអូ
+ *
+ * Six rows, one per real step. The old list also listed audio extraction,
+ * speaker identification, synchronisation and mixing as their own rows, which
+ * made a six-step job look like nine without telling the user anything: the
+ * extraction and the separation are both Demucs, the speaker names come out of
+ * the same Whisper pass, and sync + mix + render all happen while the Khmer
+ * voice is written back into the picture. Each row below therefore owns every
+ * status the server reports inside that step, so the checklist still lights up
+ * from top to bottom as the job moves.
+ */
 const PIPELINE_STAGES: StepItem[] = [
   {
     id: 'uploading',
     khmer: 'បញ្ចូលវីដេអូ',
-    english: 'Upload video',
+    english: 'Video upload',
     associatedStatuses: ['uploading'],
   },
   {
-    id: 'extracting_audio',
-    khmer: 'ស្រង់សំឡេងចេញពីវីដេអូ',
-    english: 'Audio extraction',
-    associatedStatuses: ['extracting_audio'],
-  },
-  {
     id: 'separating_audio',
-    khmer: 'ញែកសំឡេងមនុស្ស និងភ្លេង',
-    english: 'Voice & music separation',
-    associatedStatuses: ['separating_audio'],
+    khmer: 'ញែកភ្លេង និងបំបែកសំឡេងមនុស្សចេញ',
+    english: 'Demucs — vocals / music separation',
+    associatedStatuses: ['extracting_audio', 'separating_audio'],
   },
   {
-    id: 'detect_transcribe',
-    khmer: 'សម្គាល់អ្នកនិយាយ & ស្តាប់ពាក្យ',
-    english: 'Speech detection & STT',
+    id: 'transcribing',
+    khmer: 'បម្លែងសំឡេងទៅជាអក្សរ',
+    english: 'Whisper — speech to text',
     associatedStatuses: ['transcribing', 'detecting_speakers'],
   },
   {
     id: 'translating',
-    khmer: 'បកប្រែជាខ្មែរនិយាយបែបធម្មជាតិ',
-    english: 'AI context translation',
+    khmer: 'បកប្រែទៅជាភាសាខ្មែរ',
+    english: 'Gemini / Translator — Khmer translation',
     associatedStatuses: ['translating'],
   },
   {
     id: 'generating_voice',
-    khmer: 'បង្កើតសំឡេងខ្មែរ AI',
-    english: 'Khmer voice generation (TTS)',
+    khmer: 'បង្កើតសំឡេងខ្មែរ',
+    english: 'Khmer TTS — voice generation',
     associatedStatuses: ['generating_voice'],
   },
   {
-    id: 'syncing',
-    khmer: 'តម្រឹមចង្វាក់ & ពេលវេលា',
-    english: 'Audio synchronization',
-    associatedStatuses: ['syncing'],
-  },
-  {
-    id: 'mixing',
-    khmer: 'បញ្ចូលសំឡេងជាមួយភ្លេងដើម',
-    english: 'Intelligent audio mixing',
-    associatedStatuses: ['mixing'],
-  },
-  {
     id: 'rendering',
-    khmer: 'Render វីដេអូ MP4 ចុងក្រោយ',
-    english: 'Final MP4 rendering',
-    associatedStatuses: ['rendering', 'quality_check'],
+    khmer: 'ដាក់សំឡេងខ្មែរចូលវីដេអូ',
+    english: 'Dub into video — final MP4',
+    associatedStatuses: ['syncing', 'mixing', 'rendering', 'quality_check'],
   },
 ];
 

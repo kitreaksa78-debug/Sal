@@ -1,3 +1,9 @@
+/**
+ * Every state a run can be in. `detecting_speakers` and `syncing` are no longer
+ * reported — speaker naming happens inside the Whisper pass, and the dialogue
+ * track is laid on the timeline while mixing — but they stay in the union
+ * because jobs recorded before that change still carry them.
+ */
 export type JobStatus =
   | 'queued'
   | 'uploading'
@@ -112,6 +118,7 @@ export interface JobRecord {
   outputFileClean?: string;
   outputSubtitlesSrt?: string;
   outputSubtitlesVtt?: string;
+  /** Legacy mixed-audio WAV from before the single-MP4 release; new jobs leave it unset. */
   outputAudioFile?: string;
   warning?: string;
   error?: string;
