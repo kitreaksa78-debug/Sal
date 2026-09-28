@@ -315,6 +315,15 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
         }
 
         try {
+          // One call may never outlive the whole walk's budget. The deadline is
+          // checked between calls, so a call that started at second 29 with a
+          // 20-second ceiling used to hold the job until second 49 — measured on
+          // this project's own keys, the caller waited through exactly that
+          // before it could fall back to its other provider.
+          const callTimeoutMs = Math.max(
+            1_000,
+            Math.min(GEMINI_REQUEST_TIMEOUT_MS, sweepDeadline - Date.now())
+          );
           const response = await clientFor(key).models.generateContent({
             model,
             contents: request.userPrompt,
@@ -325,8 +334,8 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
               responseSchema: request.responseSchema as never,
               // Bounded per call; the abort signal is the hard stop in case the
               // SDK's own timeout is not applied to this request.
-              httpOptions: { timeout: GEMINI_REQUEST_TIMEOUT_MS },
-              abortSignal: AbortSignal.timeout(GEMINI_REQUEST_TIMEOUT_MS + 5_000),
+              httpOptions: { timeout: callTimeoutMs },
+              abortSignal: AbortSignal.timeout(callTimeoutMs + 5_000),
             },
           });
 
@@ -431,12 +440,21 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
 
     // Every model on every key has been tried in this sweep.
     if (round < maxAttempts) {
+      // A second sweep is only worth starting while there is time for it;
+      // sleeping past the deadline just makes the caller wait for nothing.
+      const sleepMs = Math.min(backoffMs, sweepDeadline - Date.now());
+      if (sleepMs < 1_000) {
+        logger.warn(
+          `Gemini ${request.operationName}: out of time for another sweep, reporting the failure.`
+        );
+        break;
+      }
       logger.warn(
         `Gemini ${request.operationName}: every configured model and key is spent or throttled, waiting ${Math.round(
-          backoffMs / 1000
+          sleepMs / 1000
         )}s before sweep ${round + 1}/${maxAttempts}.`
       );
-      await new Promise((resolve) => setTimeout(resolve, backoffMs));
+      await new Promise((resolve) => setTimeout(resolve, sleepMs));
       backoffMs = Math.min(backoffMs * 2, 60_000);
     }
   }

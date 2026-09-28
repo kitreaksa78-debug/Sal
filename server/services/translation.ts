@@ -5,6 +5,14 @@ import { groqChatJson, isGroqConfigured, sleep, GroqRateLimit } from '../utils/g
 import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
 import { DIALOGUE_GAP_SECONDS } from './audioMixing.js';
+import {
+  buildConfirmedNameSection,
+  buildProperNameSection,
+  detectProperNames,
+  enforceProperNames,
+  namesInText,
+  reportedNamesById,
+} from './nameProtection.js';
 
 export interface TranslationResult {
   segments: DialogueSegment[];
@@ -70,6 +78,11 @@ export interface ContextLine {
 /**
  * The JSON shape every model answers with. Declared once so the schema a model
  * is constrained by is exactly the one the caller parses.
+ *
+ * `names` is part of the required shape rather than an extra field a model may
+ * add: both providers are asked for strict JSON, and a strict schema rejects a
+ * property that is not in its `required` list — a line with no proper name is
+ * simply asked for `"names": []`.
  */
 const TRANSLATION_SCHEMA = {
   type: Type.OBJECT,
@@ -88,8 +101,28 @@ const TRANSLATION_SCHEMA = {
             type: Type.STRING,
             description: 'Detected emotion (e.g. neutral, energetic, calm, dramatic)',
           },
+          names: {
+            type: Type.ARRAY,
+            description:
+              'Every proper name this line speaks, with the Khmer spelling used for it. Empty array when the line speaks none.',
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: {
+                  type: Type.STRING,
+                  description: 'The name exactly as it appears in the source line',
+                },
+                khmer: {
+                  type: Type.STRING,
+                  description:
+                    'The Khmer spelling of that name as used in this line, carrying every part of the name',
+                },
+              },
+              required: ['name', 'khmer'],
+            },
+          },
         },
-        required: ['id', 'khmer', 'emotion'],
+        required: ['id', 'khmer', 'emotion', 'names'],
       },
     },
   },
@@ -354,6 +387,10 @@ export class KhmerDubTranslationService {
   private primaryDownUntil = 0;
   /** Serialises fallback calls; see `askFallback`. */
   private fallbackQueue: Promise<void> = Promise.resolve();
+  /** One agreed Khmer spelling per name, filled in as blocks answer; see buildConfirmedNameSection. */
+  private confirmedNames = new Map<string, { name: string; khmer: string }>();
+  /** Providers that actually answered a block; reported by the job's log line. */
+  private answeredProviders = new Set<TranslationProviderName>();
 
   constructor() {
     this.provider = resolveTranslationProvider();
@@ -439,8 +476,20 @@ export class KhmerDubTranslationService {
       chunks.push(segments.slice(i, i + chunkSize));
     }
 
-    const systemInstruction = this.buildSystemInstruction(settings);
+    // The video's own names, read from the transcript before a single line is
+    // translated, so every block is told which words must survive as names.
+    const properNames = detectProperNames(segments);
+    const systemInstruction = this.buildSystemInstruction(settings, properNames);
     const glossary = parseGlossary(settings.glossary);
+    this.confirmedNames.clear();
+    this.answeredProviders.clear();
+    if (properNames.length > 0) {
+      logger.info(
+        `Name protection: ${properNames.length} proper name(s) detected in the transcript (${properNames
+          .slice(0, 8)
+          .join(', ')}${properNames.length > 8 ? ', …' : ''}).`
+      );
+    }
     // The room each line will have on the timeline. The prompt quotes it per
     // line, and the same numbers are re-measured once every block has answered.
     const speechWindows = speechWindowsFor(segments);
@@ -478,7 +527,14 @@ export class KhmerDubTranslationService {
       const requestStartedAt = Date.now();
 
       try {
-        const userPrompt = this.buildChunkPrompt(chunk, context, i, chunks.length, speechWindows);
+        const userPrompt = this.buildChunkPrompt(
+          chunk,
+          context,
+          i,
+          chunks.length,
+          speechWindows,
+          properNames
+        );
         // Fallback estimate in case the provider does not report usage.
         const estimatedTokens = estimateTokens(systemInstruction + userPrompt) + chunk.length * 45;
 
@@ -489,6 +545,9 @@ export class KhmerDubTranslationService {
           `Translation block ${i + 1}/${chunks.length}: ${chunk.length} line(s), ${billedTokens} tokens.`
         );
         const parsed = this.parseChunkResponse(response.content);
+        // The names this block reported it carried, straight from the same answer:
+        // the translation parser only keeps the Khmer text and the emotion.
+        const blockReportedNames = reportedNamesById(response.content, chunk);
 
         let missing = 0;
         const blockContext: ContextLine[] = [];
@@ -543,6 +602,18 @@ export class KhmerDubTranslationService {
         }
 
         await this.enforceGlossary(chunk, translations, glossary, systemInstruction, warnings);
+
+        await enforceProperNames({
+          chunk,
+          translations,
+          properNames,
+          reportedNames: blockReportedNames,
+          confirmedNames: this.confirmedNames,
+          systemInstruction,
+          requestTranslation: (instruction, prompt) =>
+            this.requestTranslation(instruction, prompt),
+          addWarning,
+        });
 
         // Final per-block sanitization: any Thai/Lao that survived the repair is
         // stripped locally so it never reaches the output. This guarantees the
@@ -646,19 +717,24 @@ export class KhmerDubTranslationService {
       logger.error(`Post-translation audit: ${auditBad} line(s) still have Thai/Lao script after sanitization!`);
     }
 
+    // Which provider answered is not always the configured one: blocks fall back
+    // to the other provider as soon as the first one cannot answer, and the log
+    // line used to name the configured provider no matter who replied.
+    const answeredBy =
+      this.answeredProviders.size > 0
+        ? [...this.answeredProviders].join(' + ')
+        : `${this.provider} (no block answered)`;
+
     logger.info(
-      `Translated ${translations.size}/${segments.length} dialogue lines to Cambodian Khmer via ${
-        this.provider
-      } in ${chunks.length} block(s), ${concurrency} at a time, ${(
-        (Date.now() - startedAt) /
-        1000
-      ).toFixed(1)}s.`
+      `Translated ${translations.size}/${segments.length} dialogue lines to Cambodian Khmer via ${answeredBy} in ${
+        chunks.length
+      } block(s), ${concurrency} at a time, ${((Date.now() - startedAt) / 1000).toFixed(1)}s.`
     );
 
     return { segments: translatedSegments, warnings };
   }
 
-  private buildSystemInstruction(settings: JobSettings): string {
+  private buildSystemInstruction(settings: JobSettings, properNames: string[] = []): string {
     const isFormal = settings.translationStyle === 'formal';
     const voiceStyle = settings.voiceStyle || 'natural';
 
@@ -668,7 +744,7 @@ export class KhmerDubTranslationService {
 
     return `You are a professional Cambodian Khmer dubbing director and translator for movies and videos.
 Your mission is to translate spoken ${sourceLanguage || 'English/original'} dialogue into natural, authentic spoken Cambodian Khmer (ភាសាខ្មែរនិយាយបែបធម្មជាតិ).
-${sourceLanguage ? `The dialogue you receive is ${sourceLanguage}. Read it as a native speaker of that language before translating, and keep proper names, numbers and units exactly as spoken.\n` : ''}${buildGlossarySection(parseGlossary(settings.glossary))}
+${sourceLanguage ? `The dialogue you receive is ${sourceLanguage}. Read it as a native speaker of that language before translating, and keep proper names, numbers and units exactly as spoken.\n` : ''}${buildGlossarySection(parseGlossary(settings.glossary))}${buildProperNameSection(properNames)}
 CRITICAL DUBBING TRANSLATION RULES:
 1. NEVER translate word-by-word if it sounds stiff, robotic, or unnatural.
 2. PRESERVE MEANING & EMOTIONAL CONTEXT: Translate into authentic Cambodian conversational phrases that actors actually speak in Cambodia.
@@ -680,6 +756,7 @@ CRITICAL DUBBING TRANSLATION RULES:
    - Maintain consistent pronouns, honorifics, and speaking styles based on character relationships (e.g. older to younger, friends, polite business, parent to child).
    - Keep names and key terms consistent across all lines.
    - A NAME IS NEVER A WORD TO TRANSLATE. Never translate a person's, brand's, product's or place's name by its meaning ("Apple" the company is never ផ្លែប៉ោម; "Mark" a person is never សម្គាល់). Spell it the way it sounds in the original, and spell it the same way every time.
+   - EVERY PART OF A NAME STAYS. A given name and a surname are never reduced to one of them: "Vladimir Putin" is never "ពូទីន" alone, and a title the speaker uses ("President", "Mr") is translated as a title while the name it precedes stays whole.
 4. FIT ORIGINAL DURATION (LIP-SYNC / TIMING CONSTRAINT):
    - Cambodian Khmer audio takes time to speak.
    - Calculate duration = end - start seconds.
@@ -701,6 +778,7 @@ CRITICAL DUBBING TRANSLATION RULES:
 12. COMPLETENESS — NEVER TRADE MEANING FOR TIME:
    - Every piece of information in the source line must still be there in the Khmer line. Never summarize, never drop a clause, never answer with a shorter sentence that loses what was said.
    - When the line is too long for its duration, condense the WORDING (shorter Khmer words, dropped pleasantries, tighter phrasing) — never delete facts, names, numbers or requests.
+   - A name is NEVER the part that gets dropped to save time: keep every name whole and shorten the wording around it.
    - Numbers, dates, money and units stay exactly as spoken. Do not round, convert or invent them.
 
 13. SCRIPT PURITY — ABSOLUTE REQUIREMENT:
@@ -716,7 +794,8 @@ CRITICAL DUBBING TRANSLATION RULES:
     context: ContextLine[],
     chunkIndex: number,
     chunkCount: number,
-    speechWindows: Map<string, number>
+    speechWindows: Map<string, number>,
+    properNames: string[] = []
   ): string {
     const formattedInput = chunk.map((s) => ({
       id: s.id,
@@ -733,6 +812,21 @@ CRITICAL DUBBING TRANSLATION RULES:
       text: s.text,
     }));
 
+    // Only this block's names are listed here: the system instruction names them
+    // all, and repeating them per block is what keeps the model from reading a
+    // name as just another word while it works through these lines.
+    const blockNames = properNames.length > 0
+      ? [...new Set(chunk.flatMap((segment) => namesInText(segment.text, properNames)))]
+      : [];
+    const namesSection =
+      blockNames.length > 0
+        ? `\nThese lines speak these names — carry every one of them in full, in Khmer script: ${blockNames.join(
+            ', '
+          )}.\n`
+        : '';
+
+    const confirmedSection = buildConfirmedNameSection(this.confirmedNames);
+
     const contextSection =
       context.length > 0
         ? `\nEarlier lines from the same conversation (keep names, pronouns and terminology consistent with these):\n${JSON.stringify(
@@ -743,7 +837,7 @@ CRITICAL DUBBING TRANSLATION RULES:
         : '';
 
     return `Block ${chunkIndex + 1} of ${chunkCount} from the video's dialogue sequence. Translate ONLY the lines listed below. Output pure Khmer script only (U+1780-U+17FF) — zero Thai/Lao characters allowed.
-${contextSection}
+${namesSection}${confirmedSection}${contextSection}
 Lines to translate:
 ${JSON.stringify(formattedInput, null, 2)}
 
@@ -775,7 +869,7 @@ Return JSON containing exactly ${
         .map(m => m.trim())
         .filter(m => m && m !== groqModel); // Exclude primary model from fallbacks
       
-      return groqChatJson({
+      const answer = await groqChatJson({
         model: groqModel,
         systemInstruction,
         userPrompt,
@@ -797,8 +891,23 @@ Return JSON containing exactly ${
                     id: { type: 'string' },
                     khmer: { type: 'string' },
                     emotion: { type: 'string' },
+                    // Required, and `[]` when the line speaks no name: a strict
+                    // JSON schema may only carry properties it lists in
+                    // `required`, and Groq is asked for exactly that.
+                    names: {
+                      type: 'array',
+                      items: {
+                        type: 'object',
+                        properties: {
+                          name: { type: 'string' },
+                          khmer: { type: 'string' },
+                        },
+                        required: ['name', 'khmer'],
+                        additionalProperties: false,
+                      },
+                    },
                   },
-                  required: ['id', 'khmer', 'emotion'],
+                  required: ['id', 'khmer', 'emotion', 'names'],
                   additionalProperties: false,
                 },
               },
@@ -808,6 +917,10 @@ Return JSON containing exactly ${
           },
         },
       });
+
+      // Recorded after the call: a provider that threw did not answer this block.
+      this.answeredProviders.add('groq');
+      return answer;
     }
 
     // The rotation lives in `utils/gemini.ts`: it walks the free-tier models and
@@ -821,6 +934,7 @@ Return JSON containing exactly ${
       operationName: 'Khmer dubbing translation',
       responseSchema: TRANSLATION_SCHEMA as unknown as Record<string, unknown>,
     });
+    this.answeredProviders.add('gemini');
 
     return {
       content: answer.content,
