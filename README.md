@@ -44,8 +44,14 @@ Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 | Host | How |
 | --- | --- |
 | Phone (Termux) | `tools/demucs-termux/` starts the API and a tunnel |
+| **Google Colab (GPU)** | `tools/demucs-colab/` — one cell installs, serves and tunnels the API |
 | Home server / VPS | `tools/demucs-termux/run-local.sh` |
 | Bundled sidecar | `tools/audio-separator-server/` |
+
+Colab is the fast option: the same `demucs_api.py` runs on a free GPU, so the API
+answers with `"device":"cuda"` and the pipeline then sends it far bigger pieces
+(`AUDIO_SEPARATOR_GPU_CHUNK_SECONDS`, 90s by default) instead of the 15s pieces a
+phone needs — a CPU service keeps the phone-sized default.
 
 The app owner can also paste the URL into the `ញែកភ្លេង · Demucs API` panel in the
 studio, and that value wins over the environment variable — a phone tunnel gets a

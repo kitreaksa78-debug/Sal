@@ -30,6 +30,7 @@ GET  /stems/<job>/<name>      -> ឯកសារ WAV
 បរិស្ថាន (Environment)
 ----------------------
 DEMUCS_MODEL     ម៉ូឌែល ដូច `htdemucs` (default) ឬ `htdemucs_ft`
+DEMUCS_DEVICE    `auto` (default: GPU បើមាន — នេះជាអ្វីដែលធ្វើឲ្យ Colab លឿន), `cuda`, `mps`, ឬ `cpu`
 DEMUCS_DATA_DIR  កន្លែងទុក stems (default: ~/demucs-api/stems)
 DEMUCS_API_KEY   key សម្រាប់ការពារ (បើទទេ = គ្មានការពារ ដូច្នេះកុំបើកចេញក្រៅដោយគ្មានវា)
 DEMUCS_TTL_HOURS លុប stems ចាស់ក្រោយប៉ុន្មានម៉ោង (default 12)
@@ -66,7 +67,7 @@ log = logging.getLogger("demucs-api")
 
 # ជំនាន់នៃសេវានេះ។ វាបង្ហាញក្នុងចម្លើយ `/` ដូច្នេះស្គ្រីបលើទូរស័ព្ទ និងគេហទំព័រ
 # ដឹងថាឯកសារនេះជាជំនាន់ណា។ `1.1` = ម៉ូឌែលត្រូវបានទុកក្នុងមេម៉ូរី (គ្មាន cold start).
-VERSION = "1.1"
+VERSION = "1.2"
 
 DATA_DIR = Path(os.environ.get("DEMUCS_DATA_DIR", Path.home() / "demucs-api" / "stems")).expanduser().resolve()
 MODEL = os.environ.get("DEMUCS_MODEL", "htdemucs").strip() or "htdemucs"
@@ -79,6 +80,34 @@ PORT = int(os.environ.get("PORT", "8000"))
 HOST = os.environ.get("DEMUCS_HOST", "127.0.0.1").strip() or "127.0.0.1"
 # ទុកម៉ូឌែលក្នុងមេម៉ូរី (default)។ កំណត់ `DEMUCS_WARM=0` បើទូរស័ព្ទមាន RAM តិច។
 WARM = os.environ.get("DEMUCS_WARM", "1").strip() not in {"0", "false", "no"}
+
+
+def _pick_device() -> str:
+    """ឧបករណ៍ដែលម៉ូឌែលនឹងរត់លើ។
+
+    `auto` (default) ប្រើ GPU បើមាន — នេះជាមូលហេតុដែលការរត់លើ **Google Colab** លឿន
+    ជាងទូរស័ព្ទច្រើនដង៖ លើ CPU ការញែកចំណាយ ~១០–៣០ ដងនៃរយៈពេលសំឡេង តែលើ GPU វា
+    ត្រឹមប៉ុន្មានវិនាទី។ `DEMUCS_DEVICE=cpu` បង្ខំ CPU វិញ បើ GPU មានបញ្ហា។
+    """
+    requested = os.environ.get("DEMUCS_DEVICE", "auto").strip().lower()
+    if requested and requested != "auto":
+        return requested
+
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        # Apple Silicon (មិនមានលើទូរស័ព្ទ តែមានលើ Mac)។
+        mps = getattr(torch.backends, "mps", None)
+        if mps is not None and mps.is_available():
+            return "mps"
+    except Exception:  # torch ខ្វះ ឬ CUDA មានបញ្ហា — CPU ត្រូវបានជានិច្ច
+        pass
+    return "cpu"
+
+
+DEVICE = _pick_device()
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -102,6 +131,9 @@ def _info() -> dict:
         "service": "Demucs API",
         "version": VERSION,
         "model": MODEL,
+        # គេហទំព័រអាន field នេះ៖ ពេលឃើញ GPU វាផ្ញើអូឌីយ៉ូវែងជាងមុនក្នុង ១ request
+        # (ដូច្នេះការញែកលឿនជាង ព្រោះកាត់តិចតួច និងស្នាមតិច)។ លើ CPU វានៅ ១៥ វិនាទីដដែល។
+        "device": DEVICE,
         "busy": _busy,
     }
 
@@ -185,7 +217,7 @@ def _run_demucs_warm(source: Path, out_dir: Path) -> bool:
 
     with torch.no_grad():
         separated = apply_model(
-            model, normalized[None], device="cpu", split=True, overlap=0.25, progress=False
+            model, normalized[None], device=DEVICE, split=True, overlap=0.25, progress=False
         )[0]
     separated = separated * reference.std() + reference.mean()
 
@@ -316,5 +348,5 @@ async def stem(job_id: str, name: str):
 if __name__ == "__main__":
     import uvicorn
 
-    log.info("Demucs API on http://%s:%s (model: %s)", HOST, PORT, MODEL)
+    log.info("Demucs API on http://%s:%s (model: %s, device: %s)", HOST, PORT, MODEL, DEVICE)
     uvicorn.run(app, host=HOST, port=PORT)

@@ -3,9 +3,11 @@ import {
   AudioWaveform,
   CheckCircle2,
   ChevronDown,
+  KeyRound,
   Link2,
   Loader2,
   Plug,
+  Rocket,
   Smartphone,
   TriangleAlert,
   Unplug,
@@ -53,6 +55,12 @@ function formatBytes(bytes: number): string {
 export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
   const [connection, setConnection] = useState<SeparatorConnectionView | null>(null);
   const [url, setUrl] = useState('');
+  /**
+   * The service's own bearer token. Colab and the phone's Demucs API both hand
+   * one out, and a public tunnel URL without a key lets anyone spend the GPU — so
+   * the panel keeps this settable. An empty field means "keep the stored key".
+   */
+  const [apiKey, setApiKey] = useState('');
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<'load' | 'save' | 'test' | 'full' | 'clear' | null>('load');
   const [status, setStatus] = useState<{ tone: 'ok' | 'warn' | 'error'; text: string } | null>(null);
@@ -95,7 +103,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
     setBusy('save');
     setStatus(null);
     try {
-      const next = await saveSeparatorConnection({ url });
+      const next = await saveSeparatorConnection({ url, apiKey: apiKey.trim() });
       apply(next);
       setStatus({
         tone: 'ok',
@@ -116,8 +124,12 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
       // whatever is in the field is saved first — no separate save step to
       // forget, and no developer needed when the phone's tunnel is reopened.
       const typed = url.trim().replace(/\/+$/, '');
-      if (typed && typed !== connection?.url) {
-        apply(await saveSeparatorConnection({ url: typed }));
+      const keyTyped = apiKey.trim();
+      // Pasting a new tunnel URL — and, for a Colab/GPU service, its key — and
+      // pressing this button is the whole job: both fields are saved first, so
+      // there is no separate save step to forget.
+      if (typed && (typed !== connection?.url || keyTyped)) {
+        apply(await saveSeparatorConnection({ url: typed, apiKey: keyTyped }));
       }
       const result: SeparatorTestResult = await testSeparatorConnection(full);
       if (result.ok) {
@@ -198,6 +210,32 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
 
       {open && (
         <div className="px-4 sm:px-5 pb-5 space-y-4 border-t border-slate-800/80 pt-4">
+          <div className="flex items-start gap-2.5 p-3 rounded-xl bg-cyan-950/20 border border-cyan-500/30">
+            <Rocket className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
+            <div className="text-[11px] text-slate-300 leading-relaxed space-y-1">
+              <p className="font-semibold text-cyan-200">⭐ លឿនជាង — បើក Demucs API លើ Google Colab (GPU)</p>
+              <p>
+                ១. បើក <code className="text-cyan-300">tools/demucs-colab/demucs_colab.ipynb</code> ក្នុង Colab រួចជ្រើស
+                Runtime → Change runtime type → <b>T4 GPU</b>។ (មិនចង់ប្រើ notebook? paste បន្ទាត់ខាងក្រោមក្នុង cell មួយ។)
+              </p>
+              <p className="break-all">
+                <code className="text-cyan-300">
+                  !curl -fsSL
+                  https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-colab/colab-start.sh | sh
+                </code>
+              </p>
+              <p>
+                ២. វាបង្ហាញ <b>URL</b> និង <b>API Key</b> — paste ទាំងពីរក្នុងប្រអប់ខាងក្រោម រួចចុច «រក្សាទុក និងសាកល្បង»។
+                ពេលជោគជ័យ វាបង្ហាញ <code className="text-cyan-300">cuda</code> — មានន័យថា GPU កំពុងធ្វើការ
+                ហើយគេហទំព័រផ្ញើអូឌីយ៉ូវែងជាងមុនក្នុង ១ request ដោយស្វ័យប្រវត្តិ (ញែកលឿន និងស្នាមតិច)។
+              </p>
+              <p>
+                ៣. ទុក tab Colab ចោលបើកចុះ — បិទ tab ឬទុក idle ~៩០ នាទី = session ដាច់ ហើយ URL ស្លាប់។
+                ពេលនោះ រត់ cell នោះម្ដងទៀត រួច paste URL ថ្មី (Key ដដែល) ក្នុងប្រអប់ខាងក្រោម។
+              </p>
+            </div>
+          </div>
+
           <div className="flex items-start gap-2.5 p-3 rounded-xl bg-slate-900/60 border border-slate-800">
             <Smartphone className="w-4 h-4 text-cyan-300 shrink-0 mt-0.5" />
             <div className="text-[11px] text-slate-300 leading-relaxed space-y-1">
@@ -257,6 +295,31 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
                   : 'bg-slate-900/60 text-slate-200 focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20'
               }`}
             />
+          </div>
+
+          <div className="space-y-1.5">
+            <label className="text-[11px] font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+              <KeyRound className="w-3.5 h-3.5 text-cyan-400" />
+              <span>API Key</span>
+              {connection?.hasApiKey && (
+                <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 tracking-normal normal-case">
+                  បានរក្សាទុក
+                </span>
+              )}
+            </label>
+            <input
+              type="text"
+              autoComplete="off"
+              spellCheck={false}
+              value={apiKey}
+              onChange={(e) => setApiKey(e.target.value)}
+              placeholder={connection?.hasApiKey ? 'ទុកទទេ = ប្រើ key ដែលរក្សាទុករួច' : 'key របស់ម៉ាស៊ីនញែកភ្លេង (បើមាន)'}
+              className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/60 text-slate-200 border border-slate-800 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20"
+            />
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              Colab និង Termux បង្ហាញ key នេះពេលបើក API — ដាក់វាឱ្យដូចគ្នា ដើម្បីកុំឱ្យអ្នកណាមាន URL អាចប្រើ
+              ម៉ាស៊ីនរបស់អ្នកបាន។ ទុកទទេ = រក្សា key ដែលបានរក្សាទុកពីមុន។
+            </p>
           </div>
 
           <div className="flex flex-wrap gap-2">

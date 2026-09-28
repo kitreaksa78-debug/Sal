@@ -5,7 +5,10 @@ import { Readable } from 'stream';
 import { pipeline } from 'stream/promises';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
-import { getSeparatorConnection } from './separatorSettings.js';
+import {
+  ResolvedSeparatorConnection,
+  getSeparatorConnection,
+} from './separatorSettings.js';
 
 /**
  * How much audio one request may carry.
@@ -54,6 +57,21 @@ const GROW_FRACTION = 0.35;
 const GROW_AFTER = 3;
 /** How much more audio to try then. */
 const GROW_STEP_SECONDS = 2;
+
+/**
+ * How much audio one piece may carry when the service reports a GPU.
+ *
+ * The 15 second default exists for a phone: a quick Cloudflare tunnel cuts a
+ * request at roughly 100 seconds, and a phone needs most of that window for 15
+ * seconds of audio. A service running on a GPU (a Google Colab runtime, a home
+ * machine with CUDA) separates a minute and a half of audio in a few seconds, so
+ * the same request window buys far more audio per round trip — and fewer piece
+ * boundaries in the joined stems. The cap stays under the tunnel's cutoff so the
+ * bigger piece is never the reason a request is cut.
+ */
+const GPU_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_GPU_CHUNK_SECONDS || '90');
+/** Devices that mean the model is not being run on a CPU. */
+const ACCELERATOR_DEVICES = /^(cuda|mps|metal|gpu|xpu|rocm|directml)/i;
 
 /**
  * The largest piece the service has proved it can finish in time.
@@ -419,6 +437,12 @@ function oldServiceHint(payload: unknown): string {
 export class RemoteStemSeparationProvider implements AudioSeparationProvider {
   name: string;
 
+  /**
+   * How long a piece may be on this run. Set once per separation, after the
+   * service has been asked what it is running on: see `resolveChunkSeconds`.
+   */
+  private activeChunkSeconds = 0;
+
   constructor(name = 'demucs_api') {
     this.name = name;
   }
@@ -456,6 +480,11 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stem-pieces-'));
 
     try {
+      // Ask what this service is running on before the pieces are planned: a GPU
+      // takes far more audio per request than a phone, so it should be sent
+      // bigger pieces (see `resolveChunkSeconds`).
+      this.activeChunkSeconds = await this.resolveChunkSeconds(connection);
+
       const duration = await FFmpegHelper.getAudioDuration(inputWavPath).catch(() => 0);
       const pieces = this.planPieces(duration, this.pieceLimit());
 
@@ -510,6 +539,12 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       logger.warn(`Stem separation via ${connection.url} failed:`, reason);
       // The reason travels with the error; the pipeline reports it on the job
       // and continues on the untouched mix rather than losing the translation.
+      // A Colab-hosted service only answers while that notebook session is alive,
+      // which is a way for a service to disappear that no other host has.
+      const colabHint = isColabHost(connection.url)
+        ? ' Colab session បានឈប់ ឬដាច់ — បើក notebook ឡើងវិញ រួច paste URL ថ្មីក្នុងកាត «ញែកភ្លេង»។ (The Colab session stopped: reopen the notebook and paste its new URL.)'
+        : '';
+
       const slowHint =
         err instanceof SlowSeparationError
           ? ' ការភ្ជាប់ត្រូវបានកាត់ដោយ tunnel (ប្រហែល ១០០ វិនាទី) ទោះបានបែងចែកជាកំណាត់តូចរួចហើយ។ សូមសាកល្បងវីដេអូខ្លីជាង ឬបិទកម្មវិធីផ្សេងលើទូរស័ព្ទ។ (The tunnel cut the request even after the audio was split; the phone needs a shorter video or fewer apps running.)'
@@ -517,7 +552,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       throw new Error(
         `ញែកភ្លេងដោយ Demucs បរាជ័យ៖ ${reason} (Demucs stem separation failed.)${connectionHint(
           err
-        )}${slowHint}`
+        )}${slowHint}${colabHint}`
       );
     } finally {
       fs.rmSync(workDir, { recursive: true, force: true });
@@ -534,7 +569,35 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
    * lowered to what this phone has proved it can finish in one request.
    */
   private pieceLimit(): number {
-    return Math.min(this.getChunkSeconds(), learnedChunkSeconds);
+    return Math.min(this.activeChunkSeconds || this.getChunkSeconds(), learnedChunkSeconds);
+  }
+
+  /**
+   * How much audio one piece may carry on this service.
+   *
+   * A phone on CPU is the reason the default is short, and a service that does
+   * not say what it runs on keeps that default. A service that reports an
+   * accelerator is worth sending much bigger pieces: the upload/download round
+   * trip dominates a GPU's own running time, and every piece boundary is a place
+   * where the joined stems can seam. Nothing is assumed from the URL — a Colab
+   * tunnel looks exactly like a phone tunnel over the network — so this reads
+   * what the service itself reports on its health answer.
+   */
+  private async resolveChunkSeconds(
+    connection: ResolvedSeparatorConnection
+  ): Promise<number> {
+    const configured = this.getChunkSeconds();
+    if (!Number.isFinite(GPU_CHUNK_SECONDS) || GPU_CHUNK_SECONDS <= configured) {
+      return configured;
+    }
+
+    const device = await probeServiceDevice(connection.url, connection.apiKey);
+    if (!ACCELERATOR_DEVICES.test(device)) return configured;
+
+    logger.info(
+      `The stem service runs on ${device}: pieces may now carry up to ${GPU_CHUNK_SECONDS}s of audio each.`
+    );
+    return GPU_CHUNK_SECONDS;
   }
 
   /**
@@ -1005,6 +1068,51 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
  * up answers in well under a second, and one that is down should say so just as
  * quickly instead of holding the button for half a minute.
  */
+/**
+ * True when the stem service is reached through a Google Colab session.
+ *
+ * Colab can serve the API through its own proxy hostnames, and those only answer
+ * while that notebook session is alive. Nothing else looks like that, so a
+ * failure on one of these hostnames is worth naming: the fix is to reopen the
+ * notebook, not to look for a fault in the app.
+ */
+function isColabHost(base: string): boolean {
+  try {
+    return /(^|\.)colab\.dev$/i.test(new URL(base).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What a stem service says it is running the model on — `cuda`, `mps`, `cpu`.
+ *
+ * The phone's Demucs API reports it in `/health` and `/`; anything else that
+ * does not answer, or answers without the field, is treated as a CPU. Failures
+ * are swallowed on purpose: this is a hint about how much audio one request may
+ * carry, and a service that will not say should never make a job fail.
+ */
+async function probeServiceDevice(base: string, apiKey: string): Promise<string> {
+  const headers: Record<string, string> = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+
+  for (const path of ['/health', '/']) {
+    try {
+      const res = await fetch(`${base}${path}`, {
+        headers,
+        signal: AbortSignal.timeout(4_000),
+      });
+      if (!res.ok) continue;
+      const data = JSON.parse(await res.text()) as Record<string, unknown>;
+      const device = typeof data.device === 'string' ? data.device.trim() : '';
+      if (device) return device;
+    } catch {
+      // Try the next path; an unknown device is not an error.
+    }
+  }
+
+  return '';
+}
+
 export async function describeRemoteService(
   base: string,
   apiKey: string,
@@ -1023,7 +1131,10 @@ export async function describeRemoteService(
         if (typeof label === 'string' && label.trim()) {
           const version = typeof data.version === 'string' ? ` v${data.version}` : '';
           const model = typeof data.model === 'string' ? ` · ${data.model}` : '';
-          return `${label.trim()}${version}${model}`;
+          // `cuda` here is what tells the owner the Colab GPU is really in use.
+          const device =
+            typeof data.device === 'string' && data.device.trim() ? ` · ${data.device.trim()}` : '';
+          return `${label.trim()}${version}${model}${device}`;
         }
       } catch {
         if (text.trim()) return text.trim().slice(0, 120);
