@@ -109,6 +109,14 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 | `TRANSLATION_PROVIDER` | optional | `groq` (default) |
 | `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service |
 | `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
+| `FFMPEG_RENDER_ARGS` | optional | x264 settings for the release MP4 (default `-preset veryfast -crf 21`) |
+
+The release encode is the slowest step on a free host, which has a fraction of
+one CPU, so its settings are chosen for that: the measurements behind
+`RENDER_ENCODER_ARGS` in `server/utils/ffmpeg.ts` are written next to the
+constant. `-preset ultrafast -crf 24` is roughly 3x faster again but writes a
+much larger file, which is the trade `FFMPEG_RENDER_ARGS` exists to make
+without a code change.
 
 Optional — keep results after a restart. A Space's disk is **ephemeral**, so
 uploads and outputs are lost whenever the container restarts. Point the app at a
