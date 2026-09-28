@@ -5,7 +5,7 @@ import { DialogueSegment } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { withRetry } from '../utils/retry.js';
 import { getGeminiApiKey } from '../utils/aiKeys.js';
-import { groqFetch, isGroqConfigured } from '../utils/groq.js';
+import { groqFetch, isGroqConfigured, GROQ_UPLOAD_TIMEOUT_MS } from '../utils/groq.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 
 /**
@@ -244,7 +244,10 @@ export class GroqTranscriptionProvider implements TranscriptionProvider {
         const response = await groqFetch(
           '/audio/transcriptions',
           { method: 'POST', body: buildForm(withWords) },
-          'Whisper transcription'
+          'Whisper transcription',
+          // The upload carries the whole soundtrack, so it gets the long ceiling;
+          // the default is tuned for a chat answer that should arrive in seconds.
+          { timeoutMs: GROQ_UPLOAD_TIMEOUT_MS }
         );
         return (await response.json()) as { segments?: any[]; words?: any[] };
       };

@@ -187,6 +187,22 @@ export class JobProcessor {
 
     // Degraded-but-usable runs collect their reasons here instead of failing.
     const warnings: string[] = [];
+
+    // How long each stage of this run really took.
+    //
+    // "It is slow" is only actionable once the log says *which* stage spent the
+    // time: the model calls, the stem service, the ffmpeg passes and the render
+    // all look identical from the progress bar. The numbers are logged as one
+    // line when the job ends, so a slow job can be diagnosed from its own log
+    // instead of by guessing.
+    const stageTimings: { stage: string; ms: number }[] = [];
+    let stageStartedAt = Date.now();
+    const markStage = (stage: string) => {
+      stageTimings.push({ stage, ms: Date.now() - stageStartedAt });
+      stageStartedAt = Date.now();
+    };
+    const timingsLine = () =>
+      stageTimings.map((entry) => `${entry.stage}=${(entry.ms / 1000).toFixed(1)}s`).join(' ');
     const addWarning = async (message: string) => {
       if (!warnings.includes(message)) warnings.push(message);
       await db.updateJob(jobId, { warning: warnings.join('\n\n') });
@@ -244,6 +260,8 @@ export class JobProcessor {
         separationResult = await new UnseparatedAudioProvider().separate(rawAudioPath, jobTempDir);
       }
 
+      markStage('demucs');
+
       const vocalsTrack = separationResult.vocalsPath;
       const noVocalsTrack = separationResult.noVocalsPath; // music/background track
 
@@ -289,6 +307,8 @@ export class JobProcessor {
           },
         ];
       }
+
+      markStage('whisper');
 
       // Speaker names and voice genders are settled here, inside the Whisper
       // step instead of as a stage of their own: it is in-memory bookkeeping
@@ -338,6 +358,8 @@ export class JobProcessor {
       }
 
       await db.saveSegments(jobId, dialogueSegments);
+
+      markStage('translate');
 
       // STEP 5: KHMER TTS SPEECH SYNTHESIS & TIMING MATCH
       await this.throwIfCancelled(jobId);
@@ -394,6 +416,11 @@ export class JobProcessor {
         );
 
         let voicedSoFar = 0;
+        // One database write (and one SSE frame) per line is a lot of chatter for
+        // a bar that moves the same way whether it is told 40 times or 400: on a
+        // long video the writes themselves become part of the wait. At most one
+        // update a second, plus the final line, keeps the bar smooth.
+        let lastVoiceProgressAt = 0;
 
         await mapWithConcurrency(dialogueSegments, ttsConcurrency, async (seg, i) => {
           // Stop asking for new lines as soon as the cancel arrives; the lines
@@ -424,13 +451,18 @@ export class JobProcessor {
           }
 
           voicedSoFar++;
-          const pct = 68 + Math.round((voicedSoFar / dialogueSegments.length) * 8);
-          await this.updateJobState(
-            jobId,
-            'generating_voice',
-            `កំពុងបង្កើតសំឡេងខ្មែរ ${voicedSoFar}/${dialogueSegments.length} បន្ទាត់...`,
-            { progress: Math.min(pct, 75) }
-          );
+          const isLastVoiceLine = voicedSoFar === dialogueSegments.length;
+          const nowMs = Date.now();
+          if (isLastVoiceLine || nowMs - lastVoiceProgressAt >= 1000) {
+            lastVoiceProgressAt = nowMs;
+            const pct = 68 + Math.round((voicedSoFar / dialogueSegments.length) * 8);
+            await this.updateJobState(
+              jobId,
+              'generating_voice',
+              `កំពុងបង្កើតសំឡេងខ្មែរ ${voicedSoFar}/${dialogueSegments.length} បន្ទាត់...`,
+              { progress: Math.min(pct, 75) }
+            );
+          }
         });
       }
 
@@ -463,6 +495,8 @@ export class JobProcessor {
           `សំឡេងខ្មែរបង្កើតបានតែ ${voicedSegments.length}/${dialogueSegments.length} បន្ទាត់។ បន្ទាត់ដែលនៅសល់រក្សាសំឡេងដើម។ (Khmer voice generated for ${voicedSegments.length}/${dialogueSegments.length} lines; the rest keep the original audio.)`
         );
       }
+
+      markStage('tts');
 
       const finalMixedAudioTrack = path.join(jobTempDir, 'final_mixed_audio.wav');
 
@@ -525,6 +559,8 @@ export class JobProcessor {
       // has to be written and uploaded before the MP4 is even started, while
       // the studio ships exactly one deliverable — the dubbed MP4. Dropping it
       // removes that write and upload from every job.
+
+      markStage('mix');
 
       // STEP 7: SUBTITLES
       //
@@ -589,6 +625,8 @@ export class JobProcessor {
         captionsEnabled && fs.existsSync(srtOnDisk) ? srtOnDisk : undefined
       );
 
+      markStage('render');
+
       // Final check before the file is published — still part of the same
       // "dub into video" step, not a stage the user has to wait through.
       await this.throwIfCancelled(jobId);
@@ -610,6 +648,8 @@ export class JobProcessor {
         completedAt: new Date().toISOString(),
       });
 
+      markStage('verify+save');
+      logger.info(`Job ${jobId} stage timings — ${timingsLine()}`);
       logger.info(`Job ${jobId} successfully completed! Output: ${savedMp4Path}`);
 
       // Clean up temporary processing folder
@@ -631,6 +671,7 @@ export class JobProcessor {
       }
 
       logger.error(`Job ${jobId} processing failed with error:`, err);
+      logger.info(`Job ${jobId} stage timings before failure — ${timingsLine()}`);
 
       // Friendly Khmer error messages
       let friendlyKhmer = 'មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត។';

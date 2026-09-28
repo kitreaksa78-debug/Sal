@@ -1,7 +1,7 @@
 import { Type } from '@google/genai';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
-import { groqChatJson, isGroqConfigured, sleep } from '../utils/groq.js';
+import { groqChatJson, isGroqConfigured, sleep, GroqRateLimit } from '../utils/groq.js';
 import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
 import { DIALOGUE_GAP_SECONDS } from './audioMixing.js';
@@ -24,7 +24,19 @@ export type TranslationProgressCallback = (
 
 export type TranslationProviderName = 'groq' | 'gemini';
 
-const DEFAULT_CHUNK_SIZE = 20;
+/**
+ * How many dialogue lines go into one translation request.
+ *
+ * Every block is billed for the same system prompt — the whole dubbing rule
+ * book — so short blocks spend a large share of the per-minute token budget
+ * repeating instructions the model has already read, and every block is also one
+ * more round trip of provider latency. Wider blocks amortise both: the same
+ * lines cost fewer total tokens and fewer round trips, which matters most on the
+ * free tier where a job is paced against that budget. A block that fails still
+ * costs at most its own lines, because the rescue path asks for those again.
+ * `TRANSLATION_CHUNK_SIZE` overrides this.
+ */
+const DEFAULT_CHUNK_SIZE = 32;
 
 /**
  * How many transcript blocks are translated at the same time. Blocks are separate
@@ -446,6 +458,9 @@ export class KhmerDubTranslationService {
           : recentContext;
 
       let billedTokens = 0;
+      // The key's real allowance, straight from the provider's answer. Used to
+      // pace the next block instead of guessing the smallest free tier.
+      let rateLimit: GroqRateLimit | undefined;
       const requestStartedAt = Date.now();
 
       try {
@@ -455,6 +470,7 @@ export class KhmerDubTranslationService {
 
         const response = await this.requestTranslation(systemInstruction, userPrompt);
         billedTokens = response.totalTokens || estimatedTokens;
+        rateLimit = response.rateLimit;
         logger.info(
           `Translation block ${i + 1}/${chunks.length}: ${chunk.length} line(s), ${billedTokens} tokens.`
         );
@@ -566,7 +582,16 @@ export class KhmerDubTranslationService {
       // nothing left to protect after the final block, so don't wait for it.
       // A concurrent run has no next request of its own to pace.
       if (concurrency === 1 && i < chunks.length - 1) {
-        await this.paceRequest(billedTokens, requestStartedAt);
+        // Groq reports the key's real remaining allowance on every answer, so
+        // the wait is only paid when the next block would actually not fit: an
+        // account with room to spare moves straight on instead of sleeping out
+        // a guessed 7,800-token window on every block.
+        const hasHeadroom = Boolean(
+          rateLimit && rateLimit.remainingTokens >= billedTokens * 1.5
+        );
+        if (!hasHeadroom) {
+          await this.paceRequest(billedTokens, requestStartedAt);
+        }
       }
     });
 
@@ -719,7 +744,7 @@ Return JSON containing exactly ${
   private async requestTranslation(
     systemInstruction: string,
     userPrompt: string
-  ): Promise<{ content: string; totalTokens: number }> {
+  ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
     if (this.provider === 'groq') {
       // Fallback models when primary is rate-limited (429)
       // These are ordered by preference: smaller/faster models first as they often have separate rate limits

@@ -3,6 +3,56 @@ import { logger } from './logger.js';
 const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
 
 /**
+ * How long one chat call may take before it is abandoned.
+ *
+ * Groq enforces no server-side deadline, so a connection that stalls keeps the
+ * whole stage waiting on a socket that will never answer — and nothing else in
+ * the job can move until this call returns. A stalled request is therefore not a
+ * slow request, it is a stuck one. The Gemini rotation already bounds its calls;
+ * this gives Groq the same ceiling so the retry below can take over instead.
+ */
+const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS || '60000');
+
+/**
+ * How long an audio upload may take. A transcription request carries the whole
+ * soundtrack, so it needs far more room than a chat call: the ceiling is here to
+ * catch a dead connection, not to police a large file on a slow uplink.
+ */
+export const GROQ_UPLOAD_TIMEOUT_MS = Number(process.env.GROQ_UPLOAD_TIMEOUT_MS || '600000');
+
+/**
+ * What Groq's own headers say about the key a call just used.
+ *
+ * Every answer carries the remaining per-minute allowance
+ * (`x-ratelimit-remaining-tokens`) and when it refills
+ * (`x-ratelimit-reset-tokens`). Reading them lets the caller pace with the
+ * account's real budget instead of assuming the smallest free tier for everyone.
+ */
+export interface GroqRateLimit {
+  /** Tokens still available in the current window. */
+  remainingTokens: number;
+  /** Milliseconds until that window refills. */
+  resetMs: number;
+}
+
+/** "7.66s" / "7.66" / "1m2.5s" -> milliseconds. */
+function parseGroqDuration(raw: string | null): number | undefined {
+  if (!raw) return undefined;
+  const match = /^(?:(\d+)m)?([\d.]+)s?$/.exec(raw.trim());
+  if (!match) return undefined;
+  const ms = (Number(match[1] || 0) * 60 + Number(match[2] || 0)) * 1000;
+  return Number.isFinite(ms) ? ms : undefined;
+}
+
+/** The rate-limit window Groq reported, or undefined when it reported none. */
+export function readGroqRateLimit(response: Response): GroqRateLimit | undefined {
+  const remainingTokens = Number(response.headers.get('x-ratelimit-remaining-tokens'));
+  const resetMs = parseGroqDuration(response.headers.get('x-ratelimit-reset-tokens'));
+  if (!Number.isFinite(remainingTokens) || resetMs === undefined) return undefined;
+  return { remainingTokens, resetMs };
+}
+
+/**
  * Groq keys, in priority order. Extra keys are optional and let requests rotate
  * past a key that was revoked or rate limited (Groq's free tier is tight).
  */
@@ -51,7 +101,8 @@ export function sleep(ms: number): Promise<void> {
 export async function groqFetch(
   pathname: string,
   init: RequestInit,
-  operationName: string
+  operationName: string,
+  options: { timeoutMs?: number } = {}
 ): Promise<Response> {
   const keys = getGroqApiKeys();
   if (keys.length === 0) {
@@ -66,7 +117,11 @@ export async function groqFetch(
       Authorization: `Bearer ${keys[i]}`,
     };
 
-    const response = await fetch(`${GROQ_BASE_URL}${pathname}`, { ...init, headers });
+    const response = await fetch(`${GROQ_BASE_URL}${pathname}`, {
+      ...init,
+      headers,
+      signal: AbortSignal.timeout(options.timeoutMs ?? GROQ_REQUEST_TIMEOUT_MS),
+    });
 
     if (response.ok) {
       return response;
@@ -135,6 +190,8 @@ export interface GroqChatJsonResult {
   content: string;
   /** Tokens the model actually billed, used to pace the next request. */
   totalTokens: number;
+  /** The key's real allowance as Groq reported it, when it reported it. */
+  rateLimit?: GroqRateLimit;
 }
 
 export async function groqChatJson(request: GroqChatJsonRequest): Promise<GroqChatJsonResult> {
@@ -269,6 +326,7 @@ export async function groqChatJson(request: GroqChatJsonRequest): Promise<GroqCh
     return {
       content: data.choices?.[0]?.message?.content?.trim() || '',
       totalTokens: Number(data.usage?.total_tokens) || 0,
+      rateLimit: readGroqRateLimit(response),
     };
   }
 }
