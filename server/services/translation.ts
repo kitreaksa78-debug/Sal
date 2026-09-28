@@ -47,6 +47,16 @@ const DEFAULT_CHUNK_SIZE = 32;
 const DEFAULT_CONCURRENCY = 4;
 
 /**
+ * How long the configured translation provider is skipped after it fails a
+ * block.
+ *
+ * A provider that just could not answer — every model out of quota, a project
+ * denied access — does not recover inside the same job, and asking it again on
+ * every block is what turns a slow stage into a stalled one.
+ */
+const PRIMARY_DOWN_COOLDOWN_MS = Number(process.env.TRANSLATION_PRIMARY_DOWN_MS || '300000');
+
+/**
  * One line of context handed to a block so names, pronouns and terminology stay
  * consistent across block boundaries.
  */
@@ -340,6 +350,10 @@ const SOURCE_LANGUAGE_NAMES: Record<string, string> = {
 export class KhmerDubTranslationService {
   private modelName: string;
   private provider: TranslationProviderName;
+  /** Wall-clock time until which the configured provider is not asked again. */
+  private primaryDownUntil = 0;
+  /** Serialises fallback calls; see `askFallback`. */
+  private fallbackQueue: Promise<void> = Promise.resolve();
 
   constructor() {
     this.provider = resolveTranslationProvider();
@@ -740,21 +754,29 @@ Return JSON containing exactly ${
     } entries, in the same order, each with the line's original "id", its natural spoken Khmer "khmer" translation (pure Khmer Unicode, no Thai/Lao), and the detected "emotion".`;
   }
 
-  /** Dispatch one block to the configured provider and return its raw JSON text. */
-  private async requestTranslation(
+  /**
+   * Dispatch one block to one provider and return its raw JSON text.
+   *
+   * The Groq model is named here rather than read from `this.modelName`: Groq is
+   * also reached as the *fallback* while Gemini is the configured provider, and
+   * the two model names must never be confused with each other.
+   */
+  private async askProvider(
+    provider: TranslationProviderName,
     systemInstruction: string,
     userPrompt: string
   ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
-    if (this.provider === 'groq') {
+    if (provider === 'groq') {
+      const groqModel = process.env.GROQ_TRANSLATION_MODEL || 'openai/gpt-oss-120b';
       // Fallback models when primary is rate-limited (429)
       // These are ordered by preference: smaller/faster models first as they often have separate rate limits
       const fallbackModels = (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || 'openai/gpt-oss-20b,qwen/qwen3.8-27b')
         .split(',')
         .map(m => m.trim())
-        .filter(m => m && m !== this.modelName); // Exclude primary model from fallbacks
+        .filter(m => m && m !== groqModel); // Exclude primary model from fallbacks
       
       return groqChatJson({
-        model: this.modelName,
+        model: groqModel,
         systemInstruction,
         userPrompt,
         temperature: 0.3,
@@ -806,6 +828,94 @@ Return JSON containing exactly ${
       // answer that comes back without it (the caller uses this to pace blocks).
       totalTokens: answer.totalTokens || estimateTokens(systemInstruction + userPrompt) + 400,
     };
+  }
+
+  /**
+   * Ask the configured provider for one block, and — when it cannot answer —
+   * the other configured provider for exactly the same JSON.
+   *
+   * A free tier runs dry in ways the model rotation cannot paper over: measured
+   * on this project, one Gemini key was denied access for its whole project
+   * (403) while the other answered "high demand" (503) for every model and then
+   * "exceeded your current quota" (429), with a single stalled call taking 52
+   * seconds. Retrying that inside every block is what makes the translation
+   * stage the slow one, so a provider that has just failed is put aside for a
+   * while (`primaryDownUntil`) and the blocks that follow go straight to the
+   * provider that is actually answering. Nothing about the requested JSON
+   * changes — the same lines, in the same shape, from the other service.
+   */
+  private async requestTranslation(
+    systemInstruction: string,
+    userPrompt: string
+  ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
+    const secondary = this.secondaryProviderName();
+    if (!secondary) return this.askProvider(this.provider, systemInstruction, userPrompt);
+
+    if (Date.now() < this.primaryDownUntil) {
+      return this.askFallback(secondary, systemInstruction, userPrompt);
+    }
+
+    try {
+      return await this.askProvider(this.provider, systemInstruction, userPrompt);
+    } catch (err: any) {
+      // Not a per-block problem (that is handled by the rescue passes): the
+      // provider itself could not answer, so stop asking it for a while.
+      this.primaryDownUntil = Date.now() + PRIMARY_DOWN_COOLDOWN_MS;
+      logger.warn(
+        `${this.provider} could not answer a translation block (${
+          err?.message ?? err
+        }); continuing on ${secondary} for the next ${Math.round(
+          PRIMARY_DOWN_COOLDOWN_MS / 60_000
+        )} minute(s).`
+      );
+      return this.askFallback(secondary, systemInstruction, userPrompt);
+    }
+  }
+
+  /**
+   * Run one fallback call at a time, waiting for the key's window when needed.
+   *
+   * The two providers have different shapes: Gemini tolerates several blocks in
+   * flight, while Groq's free tier caps tokens per minute and answers a second
+   * simultaneous block with 429 — and a 429 costs up to a minute of waiting, so
+   * trading one slow provider for another would be no improvement. Fallback
+   * calls are therefore chained (one in flight, ever) and paced against the
+   * allowance Groq itself reports on the answer.
+   */
+  private async askFallback(
+    provider: TranslationProviderName,
+    systemInstruction: string,
+    userPrompt: string
+  ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
+    const run = async () => {
+      const answer = await this.askProvider(provider, systemInstruction, userPrompt);
+      if (provider === 'groq' && answer.rateLimit && answer.totalTokens > 0) {
+        if (answer.rateLimit.remainingTokens < answer.totalTokens * 1.5) {
+          const waitMs = Math.min(65_000, answer.rateLimit.resetMs);
+          if (waitMs >= 250) {
+            logger.info(
+              `Waiting ${(waitMs / 1000).toFixed(1)}s for the fallback provider's token window to refill.`
+            );
+            await sleep(waitMs);
+          }
+        }
+      }
+      return answer;
+    };
+
+    const queued = this.fallbackQueue.then(run, run);
+    // The queue itself must never reject: the next block still has to run.
+    this.fallbackQueue = queued.then(
+      () => undefined,
+      () => undefined
+    );
+    return queued;
+  }
+
+  /** The other provider this project has credentials for, if any. */
+  private secondaryProviderName(): TranslationProviderName | null {
+    if (this.provider === 'groq') return isGeminiConfigured() ? 'gemini' : null;
+    return isGroqConfigured() ? 'groq' : null;
   }
 
   /**

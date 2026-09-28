@@ -102,7 +102,20 @@ const THROTTLE_COOLDOWN_MS = Number(process.env.GEMINI_THROTTLE_COOLDOWN_MS || '
  * single call that never returned — and while it waits the sweep cannot reach a
  * model that would have answered in a second.
  */
-const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || '45000');
+const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS || '20000');
+
+/**
+ * How long one call may spend walking models before it gives up.
+ *
+ * The rotation only helps while a model answers; when a whole free tier is
+ * returning "high demand" and "exceeded your current quota" the walk itself
+ * becomes the slowest part of the job — a measured sweep of the default list
+ * spent 52 seconds inside one stalled model alone, and the caller had no way to
+ * move on. The budget bounds that: after this long the call reports failure and
+ * the caller can use its other configured provider instead of waiting for a
+ * twelve-model list to fail one model at a time.
+ */
+const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '30000');
 
 /**
  * The model that answered last, tried first from then on. Without it every block
@@ -240,6 +253,8 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
   let lastError: GeminiError | null = null;
   let schemaRejections = 0;
   let backoffMs = 5_000;
+  /** Hard stop for the whole walk; see GEMINI_SWEEP_BUDGET_MS. */
+  const sweepDeadline = Date.now() + GEMINI_SWEEP_BUDGET_MS;
   /** Pairs this call walked past, reported so the rotation stays visible in logs. */
   let skippedPairs = 0;
 
@@ -277,6 +292,26 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
         if (isThrottled(pair)) {
           skippedPairs++;
           continue;
+        }
+
+        // Out of time for this call: report what went wrong so the caller can
+        // fall back to its other provider, rather than grinding through the
+        // rest of the list (and a second sweep) first.
+        if (Date.now() > sweepDeadline) {
+          logger.warn(
+            `Gemini ${request.operationName}: giving up after ${Math.round(
+              GEMINI_SWEEP_BUDGET_MS / 1000
+            )}s — ${skippedPairs + 1} option(s) unavailable or throttled so far.`
+          );
+          throw (
+            lastError ??
+            new GeminiError(
+              `Gemini ${request.operationName} could not be answered within ${Math.round(
+                GEMINI_SWEEP_BUDGET_MS / 1000
+              )}s (${models.length} models × ${keys.length} keys).`,
+              0
+            )
+          );
         }
 
         try {
