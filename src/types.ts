@@ -108,7 +108,7 @@ export interface JobRecord {
   segments?: DialogueSegment[];
   speakers?: SpeakerInfo[];
   outputFile?: string;
-  /** The same video with no burned-in subtitles, for the player's on/off switch. */
+  /** Legacy subtitle-free twin from the old burn-in flow; new jobs only set `outputFile`. */
   outputFileClean?: string;
   outputSubtitlesSrt?: string;
   outputSubtitlesVtt?: string;

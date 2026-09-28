@@ -529,19 +529,18 @@ export class JobProcessor {
       const savedSrtPath = await storage.saveFile('outputs', srtFilename, Buffer.from(srtContent, 'utf8'));
       const savedVttPath = await storage.saveFile('outputs', vttFilename, Buffer.from(vttContent, 'utf8'));
 
-      // `subtitle: false` is the only way to ask for a clean picture; the studio
-      // defaults it to on.
-      const burnedSubtitles =
-        job.settings.subtitle === false
-          ? null
-          : VideoRenderingService.writeAssFile(
-              dialogueSegments,
-              path.join(jobTempDir, 'khmer-subtitles.ass'),
-              meta.width,
-              meta.height
-            );
-      if (job.settings.subtitle === false) {
-        logger.info(`Subtitles are turned off for job ${jobId}; rendering a clean picture.`);
+      // The picture stays clean. The Khmer lines are carried **inside** the MP4
+      // as a caption track instead of being painted onto every frame: the video
+      // keeps its own image, and the captions still play in sync because the
+      // player lines them up against the audio. They stay hidden until the
+      // viewer asks for them (the toggle on the result page, or the CC button of
+      // any phone player).
+      const captionsEnabled = job.settings.subtitle !== false;
+      const srtOnDisk = path.join(jobTempDir, 'khmer-subtitles.srt');
+      if (captionsEnabled && srtContent.trim()) {
+        fs.writeFileSync(srtOnDisk, srtContent, 'utf8');
+      } else {
+        logger.info(`Subtitles are turned off for job ${jobId}; shipping a video without captions.`);
       }
 
       // STEP 11: RENDER FINAL MP4 VIDEO (H.264 / AAC)
@@ -565,19 +564,17 @@ export class JobProcessor {
         void this.updateJobState(jobId, 'rendering', undefined, { progress: pct });
       };
 
-      // The same render also produces a subtitle-free copy. The player switches
-      // between the two files, which is what makes the on/off toggle possible
-      // without a second job.
-      const tempCleanMp4 = path.join(jobTempDir, `khmer-dubbed-clean-${jobId}.mp4`);
-
+      // One render, one file: no text is painted on the picture, so there is no
+      // second "clean" variant to keep in step with the first.
       await VideoRenderingService.renderMp4(
         videoFilePath,
         finalMixedAudioTrack,
         tempFinalMp4,
         job.settings,
         reportRenderProgress,
-        burnedSubtitles ?? undefined,
-        tempCleanMp4
+        undefined,
+        undefined,
+        captionsEnabled && fs.existsSync(srtOnDisk) ? srtOnDisk : undefined
       );
 
       // STEP 12: QUALITY CHECK
@@ -592,19 +589,9 @@ export class JobProcessor {
       const finalMp4Filename = `khmer-dubbed-${jobId}.mp4`;
       const savedMp4Path = await storage.saveFile('outputs', finalMp4Filename, tempFinalMp4);
 
-      // The subtitle-free twin only exists when the burn-in actually produced a
-      // different picture. Without a clean copy the toggle has nothing to switch
-      // to, and the player keeps showing the one file it was given.
-      let savedCleanMp4Path: string | undefined;
-      if (fs.existsSync(tempCleanMp4)) {
-        const cleanFilename = `khmer-dubbed-clean-${jobId}.mp4`;
-        savedCleanMp4Path = await storage.saveFile('outputs', cleanFilename, tempCleanMp4);
-      }
-
       // STEP 13: COMPLETED
       await this.updateJobState(jobId, 'completed', KHMER_STEP_MESSAGES.completed, {
         outputFile: savedMp4Path,
-        ...(savedCleanMp4Path ? { outputFileClean: savedCleanMp4Path } : {}),
         outputAudioFile: savedAudioPath,
         outputSubtitlesSrt: savedSrtPath,
         outputSubtitlesVtt: savedVttPath,

@@ -277,7 +277,7 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     // A restart wipes the local disk, so the file usually has to come back from
     // object storage before it can be streamed.
     const videoFile = await resolveStoredArtifact(
-      wantsClean ? job.outputFileClean : job.outputFile
+      wantsClean ? job.outputFileClean || job.outputFile : job.outputFile
     );
     if (job.status !== 'completed' || !videoFile) {
       return res.status(400).send('វីដេអូបកប្រែមិនទាន់រួចរាល់ ឬមានបញ្ហា។ (Output video not ready)');

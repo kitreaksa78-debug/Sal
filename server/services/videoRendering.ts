@@ -21,13 +21,27 @@ export function wrapForSubtitles(text: string, maxChars: number, maxLines = 3): 
   if (!cleaned) return '';
   if (cleaned.length <= maxChars) return cleaned;
 
+  // Cut the line into a fixed number of rows that all fit. The old version
+  // stopped cutting after `maxLines - 1` rows and dumped **everything that was
+  // left** into the final one, so a long sentence became a single enormous row
+  // that libass then wrapped into a wall of text covering the whole picture.
+  const wanted = Math.min(maxLines, Math.ceil(cleaned.length / maxChars));
   const rows: string[] = [];
   let rest = cleaned;
 
-  while (rest.length > maxChars && rows.length < maxLines - 1) {
-    const window = rest.slice(0, maxChars + 1);
+  for (let row = 0; row < wanted && rest; row++) {
+    const rowsLeft = wanted - row;
+    // Every remaining row must be able to carry what is left, so the share of
+    // this one shrinks as the rows run out — nothing can spill past the last row.
+    const share = Math.min(maxChars, Math.ceil(rest.length / rowsLeft));
+    if (rest.length <= share) {
+      rows.push(rest);
+      rest = '';
+      break;
+    }
+    const window = rest.slice(0, share + 1);
     const lastSpace = window.lastIndexOf(' ');
-    const cut = lastSpace > maxChars * 0.5 ? lastSpace : maxChars;
+    const cut = lastSpace > share * 0.5 ? lastSpace : share;
     rows.push(rest.slice(0, cut).trim());
     rest = rest.slice(cut).trim();
   }
@@ -223,11 +237,15 @@ export class VideoRenderingService {
     /** ASS script painted onto the picture; omitted when subtitles are off. */
     subtitleAssPath?: string,
     /** Same video with no painted subtitles, so the player can switch them off. */
-    cleanOutputMp4Path?: string
+    cleanOutputMp4Path?: string,
+    /** Khmer SRT carried inside the MP4 as a caption (CC) track. */
+    subtitleSrtPath?: string
   ): Promise<string> {
     logger.info(
       subtitleAssPath
         ? `Rendering final MP4 with burned-in Khmer subtitles: ${outputMp4Path}`
+        : subtitleSrtPath
+        ? `Rendering final MP4 with a Khmer caption track: ${outputMp4Path}`
         : `Rendering final MP4: ${outputMp4Path}`
     );
     return await FFmpegHelper.renderFinalMp4(
@@ -237,7 +255,8 @@ export class VideoRenderingService {
       settings.outputQuality || 'original',
       onProgress,
       subtitleAssPath,
-      cleanOutputMp4Path
+      cleanOutputMp4Path,
+      subtitleSrtPath
     );
   }
 }

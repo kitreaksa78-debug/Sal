@@ -1,7 +1,7 @@
 import React from 'react';
 import { Download, CheckCircle2, RefreshCw, Captions } from 'lucide-react';
 import { JobRecord } from '../types';
-import { getDownloadUrl, getSubtitledVideoUrl } from '../lib/api';
+import { getDownloadUrl, getSubtitledVideoUrl, getSubtitlesUrl } from '../lib/api';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -19,10 +19,27 @@ function formatClock(seconds: number): string {
 export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
   const finalVideoUrl = getDownloadUrl(job.id);
   /**
-   * The release cut, and the only video this page plays or hands out: the Khmer
-   * text is painted into the picture, so there is nothing to switch off.
+   * The release cut, and the only video this page plays or hands out: nothing is
+   * painted onto the picture, and the Khmer lines ride along as a caption track.
    */
   const playableUrl = getSubtitledVideoUrl(job.id);
+
+  const videoRef = React.useRef<HTMLVideoElement | null>(null);
+  /**
+   * Captions start hidden — the owner asked for a video with no text over it —
+   * and can be brought back at any moment. They are a real track inside the file,
+   * so the player lines them up against the audio itself: they cannot drift away
+   * from what is being said.
+   */
+  const [captionsOn, setCaptionsOn] = React.useState(false);
+
+  const toggleCaptions = () => {
+    const tracks = videoRef.current?.textTracks;
+    if (!tracks || tracks.length === 0) return;
+    const next = !captionsOn;
+    for (let i = 0; i < tracks.length; i++) tracks[i].mode = next ? 'showing' : 'hidden';
+    setCaptionsOn(next);
+  };
 
   /** The Khmer lines of this video, oldest first — the text the dub speaks. */
   const lines = (job.segments || [])
@@ -80,16 +97,45 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
 
           <div className="relative rounded-xl overflow-hidden bg-black aspect-video flex items-center justify-center border border-slate-800">
             <video
+              ref={videoRef}
               src={playableUrl}
               controls
               playsInline
               className="w-full h-full object-contain"
-            />
+            >
+              <track
+                kind="captions"
+                src={getSubtitlesUrl(job.id, 'vtt')}
+                srcLang="km"
+                label="ខ្មែរ"
+              />
+            </video>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={toggleCaptions}
+              className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl text-xs font-semibold border transition-colors min-h-[40px] ${
+                captionsOn
+                  ? 'bg-emerald-500/20 text-emerald-200 border-emerald-500/40 hover:bg-emerald-500/30'
+                  : 'bg-slate-900/60 text-slate-300 border-slate-700 hover:border-emerald-500/40 hover:text-emerald-200'
+              }`}
+            >
+              <Captions className="w-4 h-4" />
+              {captionsOn ? 'លាក់អក្សររត់' : 'បង្ហាញអក្សររត់'}
+            </button>
+            <span className="text-[10px] text-slate-500">
+              {captionsOn ? 'Captions on · ស៊ីគ្នានឹងសំឡេង' : 'Captions off'}
+            </span>
           </div>
 
           <p className="text-[11px] text-slate-400 leading-relaxed">
-            អក្សរខ្មែរត្រូវបានបញ្ចូលទៅក្នុងវីដេអូនេះផ្ទាល់ ដូច្នេះវាលេចឡើងគ្រប់កម្មវិធី និងគ្រប់ទូរស័ព្ទ។
-            (The Khmer subtitles are burned into this video, so they show in every player.)
+            វីដេអូនេះមិនមានអក្សររត់គូសពីលើរូបភាពទេ។ អក្សរខ្មែរទាំងអស់ស្ថិតនៅក្នុងឯកសារវីដេអូ
+            ជា subtitle (CC) ដាច់ដោយឡែក ដូច្នេះវាត្រឹមត្រូវ និងស៊ីគ្នាជានិច្ចនឹងសំឡេង — ចុច
+            «បង្ហាញអក្សររត់» ខាងលើ ឬប្រើប៊ូតុង CC ក្នុងកម្មវិធីលេងវីដេអូ។ (No text is painted
+            onto the picture: the Khmer lines ship as a caption track, hidden until you turn it
+            on and always in sync.)
           </p>
         </div>
       </div>

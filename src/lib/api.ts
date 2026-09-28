@@ -198,7 +198,8 @@ export function getDownloadUrl(jobId: string): string {
 }
 
 /**
- * The dubbed video with the burned-in Khmer text, played in the page.
+ * The dubbed video, played in the page. Its Khmer captions ride along as a
+ * caption track inside the MP4 (hidden until the viewer turns them on).
  * `inline=1` makes the browser play it instead of saving it.
  */
 export function getSubtitledVideoUrl(jobId: string): string {

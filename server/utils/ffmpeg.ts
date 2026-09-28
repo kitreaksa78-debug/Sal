@@ -797,7 +797,17 @@ export class FFmpegHelper {
     /** ASS file to burn into the picture. Omitted when the studio turned subtitles off. */
     subtitleAssPath?: string,
     /** Where to keep the same video with no painted subtitles, for the toggle. */
-    cleanOutputPath?: string
+    cleanOutputPath?: string,
+    /**
+     * Khmer SRT to carry **inside** the MP4 as a caption track.
+     *
+     * Painting the text onto every frame was a one-way door: the words cover
+     * the picture, follow the viewer's screen around, and can never be switched
+     * off. A caption track keeps them in the file instead — hidden until the
+     * viewer asks for them (the player's CC button, or the toggle on the result
+     * page), and timed by the player against the audio, so they cannot drift.
+     */
+    subtitleSrtPath?: string
   ): Promise<string> {
     // Check if original video stream is already H.264
     const meta = await this.probeVideo(originalVideoPath);
@@ -807,7 +817,10 @@ export class FFmpegHelper {
 
     const buildArgs = (subtitleFilter: string | null, destination: string): string[] => {
       const chain = [scale, subtitleFilter].filter(Boolean).join(',');
+      // The caption track rides along as a third input when there is one.
+      const srt = subtitleSrtPath && fs.existsSync(subtitleSrtPath) ? subtitleSrtPath : null;
       const args: string[] = ['-y', '-i', originalVideoPath, '-i', mixedAudioPath];
+      if (srt) args.push('-i', srt);
 
       if (isH264 && quality === 'original' && !subtitleFilter) {
         // Fast stream copy for video — only possible when nothing is drawn on top.
@@ -822,11 +835,26 @@ export class FFmpegHelper {
         '-c:a', 'aac',
         '-b:a', '192k',
         '-map', '0:v:0',
-        '-map', '1:a:0',
-        '-movflags', '+faststart', // web streaming friendly
-        '-shortest',
-        destination
+        '-map', '1:a:0'
       );
+      if (srt) {
+        args.push(
+          '-map', '2:0',
+          '-c:s', 'mov_text',
+          '-metadata:s:s:0', 'language=khm' // the CC badge shows Khmer, not "und"
+        );
+      }
+      args.push('-movflags', '+faststart'); // web streaming friendly
+      // `-shortest` ends the file when the *shortest* stream ends, and a caption
+      // stream ends at its last cue — with captions that silently cut the video
+      // at the final line. Capping at the video's own length keeps the picture
+      // whole while still trimming a stray longer audio track.
+      if (srt && Number.isFinite(meta.duration) && meta.duration > 0) {
+        args.push('-t', String(meta.duration));
+      } else {
+        args.push('-shortest');
+      }
+      args.push(destination);
       return args;
     };
 
@@ -839,6 +867,12 @@ export class FFmpegHelper {
       '-c:v', 'libx264',
       ...RENDER_ENCODER_ARGS,
       '-c:a', 'copy',
+      // Explicit maps: without them FFmpeg picks a stream of every type itself,
+      // and the caption track of the source must be carried over untouched.
+      '-map', '0:v:0',
+      '-map', '0:a:0',
+      '-map', '0:s?',
+      '-c:s', 'copy',
       '-movflags', '+faststart',
       destination,
     ];

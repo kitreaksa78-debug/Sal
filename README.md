@@ -59,33 +59,32 @@ new URL every time it is reopened, so re-pointing it must not need a redeploy.
 
 ## Khmer subtitles
 
-The finished MP4 carries the Khmer text on the picture: the lines are written to
-an ASS script and painted onto every frame with libass, so the subtitles show up
-in every player, on every phone, with no separate file to find. `subtitles-<id>.srt`
-and `.vtt` are still produced next to it, for editing or for loading as a track.
+The finished MP4 carries the Khmer text as a caption track inside the file
+(`mov_text`, language `khm`), never painted onto the picture: the frame stays
+clean, and every cue comes from the same timeline as the audio, so the words
+always stay in sync with what is being said. The result panel starts with the
+text hidden — **បង្ហាញអក្សររត់** shows it, **លាក់អក្សររត់** hides it again, and any
+player's own CC button does the same. `subtitles-<id>.srt` and `.vtt` are still
+produced next to the file, for editing or for loading as a separate track.
 
-Drawing Khmer needs a Khmer font, which the hosts this runs on do not have, so
-`assets/fonts/NotoSansKhmer-*.ttf` travels with the repository. If a host is
-missing them the server downloads the same font into `data/fonts` once
-(`SUBTITLE_FONTS_DIR` overrides where it looks); if it still cannot find one, the
-video is rendered without burned-in subtitles rather than failing the job. The
-font size and margins follow the real frame size, and lines are wrapped by hand
-because Khmer has almost no spaces for libass to break on.
+Painting Khmer onto frames — how jobs were made before this change — needs a
+Khmer font, which the hosts this runs on do not have, so
+`assets/fonts/NotoSansKhmer-*.ttf` travels with the repository, and a missing one
+is downloaded into `data/fonts` once (`SUBTITLE_FONTS_DIR` overrides where it
+looks). New jobs skip drawing entirely: captions are a track, so no font can
+fail a render and no text can cover the picture.
 
 ### Turning the subtitles off
 
-Painted-in text cannot be switched off inside a player, so each job also keeps a
-subtitle-free twin of the same render (`khmer-dubbed-clean-<id>.mp4`). The result
-panel uses it for a **បិទអក្សរខ្មែរ / បើកអក្សរខ្មែរ** switch, and offers it as a second
-download.
+Nothing has to be switched off at render time: every job produces a single clean
+MP4 with the captions inside it as a hidden track, and the panel's
+**បង្ហាញអក្សររត់ / លាក់អក្សររត់** button only shows or hides them while watching.
+The one download button hands over that same file — clean picture, Khmer
+captions included. Jobs made before this change still have their burned-in text
+plus the subtitle-free twin (`khmer-dubbed-clean-<id>.mp4`), and their old links
+keep working.
 
-The twin is not a second render of the job: the clean picture is produced first —
-a plain stream copy when the upload is already H.264 at the requested size — and
-the subtitles are then burned onto that file, so the video is re-encoded once,
-exactly as before. Both files share the same audio track, and switching in the
-player keeps the current playback position.
-
-Set `subtitle: false` in a job's settings for a clean picture.
+Set `subtitle: false` in a job's settings to leave the caption track out.
 
 ## Voice timing
 
