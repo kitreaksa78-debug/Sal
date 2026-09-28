@@ -1,5 +1,5 @@
 import express, { Request, Response } from 'express';
-import { FFmpegHelper } from '../utils/ffmpeg.js';
+import { FFmpegHelper, RENDER_ENCODER_ARGS } from '../utils/ffmpeg.js';
 import { getStorage } from '../services/storage.js';
 import { getTranscriptionProvider } from '../services/transcription.js';
 import { getTranslationService } from '../services/translation.js';
@@ -107,6 +107,10 @@ router.get('/status', async (req: Request, res: Response) => {
       configured: ffmpegInfo.available,
       version: ffmpegInfo.version,
     },
+    // What the release MP4 is encoded with. The final render is the longest step
+    // on a free host, so "why is this slow today" should be answerable here
+    // rather than by reading the code that runs on the server.
+    rendering: { encoder: RENDER_ENCODER_ARGS.join(' ') },
     maxVideoSizeMb,
     videoSegmentSeconds,
   };

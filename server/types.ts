@@ -221,6 +221,8 @@ export interface SystemConfigStatus {
     message?: string;
   };
   ffmpeg: { configured: boolean; version?: string };
+  /** x264 settings the release MP4 is encoded with (see `RENDER_ENCODER_ARGS`). */
+  rendering?: { encoder: string };
   maxVideoSizeMb: number;
   videoSegmentSeconds: number;
 }

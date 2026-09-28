@@ -53,7 +53,7 @@ const FFMPEG_TIMEOUT_MS = Number(process.env.FFMPEG_TIMEOUT_MS || '1800000');
  * step lower than the old value so the faster preset does not quietly cost
  * quality: the encoded size stays where it was.
  */
-const RENDER_ENCODER_ARGS = (process.env.FFMPEG_RENDER_ARGS || '-preset veryfast -crf 21')
+export const RENDER_ENCODER_ARGS = (process.env.FFMPEG_RENDER_ARGS || '-preset veryfast -crf 21')
   .split(/\s+/)
   .filter(Boolean);
 
