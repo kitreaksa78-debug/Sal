@@ -68,6 +68,24 @@ export function isGeminiConfigured(): boolean {
 }
 
 /**
+ * Whether at least one configured key can still be asked.
+ *
+ * Callers use this to skip the provider entirely instead of paying for its sweep.
+ * Measured on this project: a Gemini project that was denied access made every
+ * call walk the model list and both keys, and the job only reached its other
+ * provider after the sweeps and backoff rounds had run out — the slowest part of
+ * a translation stage that should take seconds. A provider with nothing left to
+ * try is not asked again until a denial cools off (see `keyDeniedUntil`).
+ */
+export function hasUsableGeminiKey(): boolean {
+  const keys = getGeminiApiKeys();
+  for (let index = 0; index < keys.length; index++) {
+    if (!isKeyDenied(index)) return true;
+  }
+  return false;
+}
+
+/**
  * What the rotation has learned about this process's keys and models.
  *
  * Kept at module scope rather than per request: a key whose project was denied
@@ -77,8 +95,34 @@ export function isGeminiConfigured(): boolean {
  */
 const spentForToday = new Set<string>();
 const spentModelNames = new Set<string>();
-const deniedKeys = new Set<number>();
 const keyRejections = new Map<number, number>();
+
+/**
+ * Keys the API rejected outright, with the time each may be tried again.
+ *
+ * A key whose project has no access fails on every call, so it is put aside — but
+ * only for a while. Access can be granted again (a quota bump, a project fix),
+ * and a key written off for the life of the process would never notice; the
+ * cooldown is long enough that a job never re-pays the discovery, short enough
+ * that a fixed account is picked up without a redeploy.
+ */
+const keyDeniedUntil = new Map<number, number>();
+const KEY_DENIAL_COOLDOWN_MS = Number(process.env.GEMINI_KEY_DENIAL_MS || '900000');
+
+/** Whether `keyIndex` is still inside its denial cooldown. */
+function isKeyDenied(keyIndex: number): boolean {
+  const until = keyDeniedUntil.get(keyIndex);
+  if (until === undefined) return false;
+  if (until <= Date.now()) {
+    keyDeniedUntil.delete(keyIndex);
+    return false;
+  }
+  return true;
+}
+
+function denyKey(keyIndex: number): void {
+  keyDeniedUntil.set(keyIndex, Date.now() + KEY_DENIAL_COOLDOWN_MS);
+}
 
 /**
  * Pairs that failed a moment ago, with the time they may be asked again.
@@ -115,7 +159,7 @@ const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS |
  * the caller can use its other configured provider instead of waiting for a
  * twelve-model list to fail one model at a time.
  */
-const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '30000');
+const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '20000');
 
 /**
  * The shortest request deadline the Gemini API accepts.
@@ -253,6 +297,15 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
     throw new GeminiError('GEMINI_API_KEY is not configured.', 0);
   }
 
+  // Nothing left to ask: fail here rather than walk the list and the backoff for
+  // a provider whose every key has already been rejected.
+  if (!hasUsableGeminiKey()) {
+    throw new GeminiError(
+      `Gemini ${request.operationName}: every configured key has been rejected — not sweeping ${getGeminiModels().length} model(s) again.`,
+      403
+    );
+  }
+
   const models = getGeminiModels();
   const maxAttempts = Math.max(1, request.maxAttempts ?? 2);
 
@@ -291,7 +344,7 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
     if (round > 1) throttledUntil.clear();
 
     for (let keyIndex = 0; keyIndex < keys.length; keyIndex++) {
-      if (deniedKeys.has(keyIndex)) continue;
+      if (isKeyDenied(keyIndex)) continue;
       const key = keys[keyIndex];
       // 1-based everywhere it is mentioned; the key itself is never logged.
       const keyNumber = keyIndex + 1;
@@ -397,7 +450,7 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
             spentForToday.add(pair);
 
             if (rejections >= 2) {
-              deniedKeys.add(keyIndex);
+              denyKey(keyIndex);
               logger.warn(
                 `Gemini ${request.operationName}: key #${keyNumber} was rejected twice (${
                   error.status || 'no status'
@@ -456,7 +509,16 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
       }
     }
 
-    // Every model on every key has been tried in this sweep.
+    // Every model on every key has been tried in this sweep. Waiting for another
+    // one is only worth the job's time while some key can still be asked: with
+    // every key rejected, the next sweep asks exactly the same nothing.
+    if (round < maxAttempts && !hasUsableGeminiKey()) {
+      logger.warn(
+        `Gemini ${request.operationName}: every configured key is rejected, not waiting for another sweep.`
+      );
+      break;
+    }
+
     if (round < maxAttempts) {
       // A second sweep is only worth starting while there is time for it;
       // sleeping past the deadline just makes the caller wait for nothing.

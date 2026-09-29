@@ -2,7 +2,12 @@ import { Type } from '@google/genai';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { groqChatJson, isGroqConfigured, sleep, GroqRateLimit } from '../utils/groq.js';
-import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
+import {
+  geminiGenerateJson,
+  getGeminiModels,
+  hasUsableGeminiKey,
+  isGeminiConfigured,
+} from '../utils/gemini.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
 import { DIALOGUE_GAP_SECONDS } from './audioMixing.js';
 import {
@@ -356,11 +361,22 @@ function buildGlossarySection(glossary: Glossary): string {
 /**
  * Pick the translation backend: an explicit TRANSLATION_PROVIDER wins, otherwise
  * whichever provider actually has a key configured.
+ *
+ * The one case where the configured provider is overridden is a Gemini account
+ * whose keys have all been rejected: it cannot answer a single line, and starting
+ * on it would cost the first block of every job a full model/key sweep and its
+ * backoff before the same lines were translated by Groq anyway. Groq is answered
+ * in a couple of seconds -- measured 2.3s for a five-line block against 8.0s for
+ * a healthy Gemini and up to 94s for a rejected one -- so a provider with nothing
+ * to ask is skipped instead of waited on.
  */
 export function resolveTranslationProvider(): TranslationProviderName {
   const configured = (process.env.TRANSLATION_PROVIDER || '').toLowerCase();
   if (configured === 'groq') return 'groq';
-  if (configured === 'gemini') return 'gemini';
+  if (configured === 'gemini') {
+    if (!hasUsableGeminiKey() && isGroqConfigured()) return 'groq';
+    return 'gemini';
+  }
   return isGroqConfigured() ? 'groq' : 'gemini';
 }
 
@@ -385,6 +401,16 @@ export class KhmerDubTranslationService {
   private provider: TranslationProviderName;
   /** Wall-clock time until which the configured provider is not asked again. */
   private primaryDownUntil = 0;
+  /**
+   * The other provider, once the configured one has failed this job.
+   *
+   * Once the configured provider is down, asking it again is pure loss, so every
+   * remaining block goes to this one. `direct` says how: Gemini tolerates several
+   * blocks in flight, so it is asked straight from the block; Groq's free tier
+   * caps tokens per minute, so its blocks keep queueing through the paced fallback
+   * path instead of trading a dead provider for a 429 storm.
+   */
+  private promotedProvider: { name: TranslationProviderName; direct: boolean } | null = null;
   /** Serialises fallback calls; see `askFallback`. */
   private fallbackQueue: Promise<void> = Promise.resolve();
   /** One agreed Khmer spelling per name, filled in as blocks answer; see buildConfirmedNameSection. */
@@ -962,10 +988,19 @@ Return JSON containing exactly ${
     systemInstruction: string,
     userPrompt: string
   ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
+    // The promoted provider is the stage's provider from here on, so no block
+    // ever re-tests the one that just failed.
+    if (this.promotedProvider) {
+      return this.promotedProvider.direct
+        ? this.askProvider(this.promotedProvider.name, systemInstruction, userPrompt)
+        : this.askFallback(this.promotedProvider.name, systemInstruction, userPrompt);
+    }
+
     const secondary = this.secondaryProviderName();
     if (!secondary) return this.askProvider(this.provider, systemInstruction, userPrompt);
 
     if (Date.now() < this.primaryDownUntil) {
+      this.promoteSecondary(secondary);
       return this.askFallback(secondary, systemInstruction, userPrompt);
     }
 
@@ -973,14 +1008,17 @@ Return JSON containing exactly ${
       return await this.askProvider(this.provider, systemInstruction, userPrompt);
     } catch (err: any) {
       // Not a per-block problem (that is handled by the rescue passes): the
-      // provider itself could not answer, so stop asking it for a while.
+      // provider itself could not answer, so the rest of the job runs on the
+      // other one — which is also remembered here, so the next job starts there
+      // instead of repeating a sweep that just failed.
       this.primaryDownUntil = Date.now() + PRIMARY_DOWN_COOLDOWN_MS;
+      this.promoteSecondary(secondary);
       logger.warn(
         `${this.provider} could not answer a translation block (${
           err?.message ?? err
-        }); continuing on ${secondary} for the next ${Math.round(
+        }); the rest of this job runs on ${secondary}, and ${secondary} is used for the next ${Math.round(
           PRIMARY_DOWN_COOLDOWN_MS / 60_000
-        )} minute(s).`
+        )} minute(s) without asking ${this.provider} first.`
       );
       return this.askFallback(secondary, systemInstruction, userPrompt);
     }
@@ -1024,6 +1062,15 @@ Return JSON containing exactly ${
       () => undefined
     );
     return queued;
+  }
+
+  /**
+   * Hand the rest of the job to `provider`; see `promotedProvider` for what
+   * "direct" buys and when it is withheld.
+   */
+  private promoteSecondary(provider: TranslationProviderName): void {
+    if (this.promotedProvider) return;
+    this.promotedProvider = { name: provider, direct: provider !== 'groq' };
   }
 
   /** The other provider this project has credentials for, if any. */
