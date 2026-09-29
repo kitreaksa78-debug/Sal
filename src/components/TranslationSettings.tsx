@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sliders, Sparkles, Mic, Music, Video, Languages, Globe } from 'lucide-react';
+import { Sliders, Sparkles, Mic, Music, Languages, Globe } from 'lucide-react';
 import { JobSettings, SOURCE_LANGUAGES } from '../types';
 
 interface TranslationSettingsProps {
@@ -211,35 +211,12 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
           </div>
         </div>
 
-        {/* Output Resolution Quality */}
-        <div className="space-y-2">
-          <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
-            <Video className="w-3.5 h-3.5 text-emerald-400" />
-            <span>គុណភាពវីដេអូ (Output Quality)</span>
-          </label>
-          <div className="grid grid-cols-3 gap-2">
-            {[
-              { id: 'original', km: 'ទំហំដើម', en: 'Original' },
-              { id: '1080p', km: '1080p', en: 'Full HD' },
-              { id: '720p', km: '720p', en: 'HD' },
-            ].map((q) => (
-              <button
-                key={q.id}
-                type="button"
-                disabled={disabled}
-                onClick={() => update('outputQuality', q.id as any)}
-                className={`px-2 py-2 rounded-xl text-xs font-medium border text-center transition-all min-h-[44px] flex flex-col justify-center items-center ${
-                  settings.outputQuality === q.id
-                    ? 'bg-emerald-500/20 text-emerald-300 border-emerald-500/50'
-                    : 'bg-slate-900/60 text-slate-400 border-slate-800 hover:border-slate-700'
-                }`}
-              >
-                <span className="font-bold text-xs">{q.km}</span>
-                <span className="text-[10px] text-slate-400 opacity-80">{q.en}</span>
-              </button>
-            ))}
-          </div>
-        </div>
+        {/*
+         * No output-quality choice on purpose: the final MP4 keeps the source
+         * frame size and only the audio is replaced, so there was nothing to
+         * pick between — every option but "original" came from an older build
+         * and would only have made the picture smaller.
+         */}
       </div>
     </div>
   );
