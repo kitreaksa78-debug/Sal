@@ -1,8 +1,9 @@
 /**
- * Every state a run can be in. `detecting_speakers` and `syncing` are no longer
- * reported — speaker naming happens inside the Whisper pass, and the dialogue
- * track is laid on the timeline while mixing — but they stay in the union
- * because jobs recorded before that change still carry them.
+ * Every state a run can be in. `detecting_speakers` is no longer reported —
+ * speaker naming happens inside the Whisper pass — but it stays in the union
+ * because jobs recorded before that change still carry it. `syncing` is a real
+ * stage again: the generated voice is measured against the picture before it is
+ * mixed in (see `AudioMixingService.syncDialogueToTimeline`).
  */
 export type JobStatus =
   | 'queued'

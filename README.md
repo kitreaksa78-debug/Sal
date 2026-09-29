@@ -27,8 +27,29 @@ Six steps, in the order the studio shows them:
 | 2. បំបែកសំឡេងមនុស្សចេញ | Demucs (remote stem API) |
 | 3. បម្លែងសំឡេងទៅជាអក្សរ | Whisper via Groq `whisper-large-v3` |
 | 4. បកប្រែទៅខ្មែរ | Gemini / Groq — the only step any language model runs |
-| 5. បង្កើតសំឡេងខ្មែរ | Microsoft Edge TTS (free, unlimited) |
-| 6. ដាក់សំឡេងខ្មែរចូលវីដេអូ | FFmpeg (bundled in the image) — mix + render MP4 |
+| 5. បង្កើតសំឡេងពីអក្សរ | Microsoft Edge TTS (free, unlimited) |
+| 6. Sync | FFmpeg — line the generated voice up with the picture |
+| 7. ដាក់សំឡេងខ្មែរចូលវីដេអូ | FFmpeg (bundled in the image) — mix + render MP4 |
+
+### Sync
+
+Sync is the step that lets the video be called synchronised, and it does two
+things (see `AudioMixingService.syncDialogueToTimeline`):
+
+- It **measures** the assembled dialogue track with FFmpeg `silencedetect` and
+  reports, per line, whether the voice really starts where the mouth starts
+  (full detail in the job log: `Sync: N/M line(s) start on the mouth …`). A line
+  that cannot be confirmed where the picture expects it puts a Khmer warning on
+  the job.
+- It **fits** the track to the video's exact length, padding or trimming it, and
+  the render is capped at the video's own length too. Nothing downstream can
+  therefore end the file a frame early or leave the last frames in silence.
+
+The measured voice windows are also what the background is ducked around, so the
+music rises the moment a Khmer line ends instead of when the original speaker's
+mouth window ended. `SYNC_TOLERANCE_MS` (default `250`) is how far a line may sit
+from its mouth start before it counts as unconfirmed, and `SYNC_SILENCE_DB`
+(default `-35`) / `SYNC_SILENCE_SECONDS` (default `0.12`) tune the measurement.
 
 ## Stem separation (Demucs required)
 
