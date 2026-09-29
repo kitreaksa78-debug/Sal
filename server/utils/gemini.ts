@@ -118,6 +118,19 @@ const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS |
 const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '30000');
 
 /**
+ * The shortest request deadline the Gemini API accepts.
+ *
+ * It rejects anything below ten seconds with `INVALID_ARGUMENT` — "Manually set
+ * deadline 4s is too short. Minimum allowed deadline is 10s." — so a sweep that
+ * squeezed its last call into whatever the budget had left (four seconds, say)
+ * collected a 400 that reads like a malformed request rather than a timeout, and
+ * the rotation counted it as a model that cannot take the schema. Stopping while
+ * ten seconds remain costs nothing: a call that short had no chance of
+ * answering a translation block anyway.
+ */
+const GEMINI_MIN_CALL_TIMEOUT_MS = Number(process.env.GEMINI_MIN_CALL_TIMEOUT_MS || '10000');
+
+/**
  * The model that answered last, tried first from then on. Without it every block
  * starts at the top of the list and walks the same unavailable models again.
  */
@@ -296,12 +309,16 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
 
         // Out of time for this call: report what went wrong so the caller can
         // fall back to its other provider, rather than grinding through the
-        // rest of the list (and a second sweep) first.
-        if (Date.now() > sweepDeadline) {
+        // rest of the list (and a second sweep) first. The budget has to hold
+        // one call the API will actually accept — see
+        // GEMINI_MIN_CALL_TIMEOUT_MS — so the walk stops one call early instead
+        // of spending its last seconds on a request that can only be rejected.
+        const remainingMs = sweepDeadline - Date.now();
+        if (remainingMs < GEMINI_MIN_CALL_TIMEOUT_MS) {
           logger.warn(
             `Gemini ${request.operationName}: giving up after ${Math.round(
               GEMINI_SWEEP_BUDGET_MS / 1000
-            )}s — ${skippedPairs + 1} option(s) unavailable or throttled so far.`
+            )}s — only ${Math.max(0, Math.round(remainingMs / 1000))}s of the budget left, too little for one call; ${skippedPairs} option(s) unavailable or throttled so far.`
           );
           throw (
             lastError ??
@@ -315,14 +332,15 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
         }
 
         try {
-          // One call may never outlive the whole walk's budget. The deadline is
-          // checked between calls, so a call that started at second 29 with a
-          // 20-second ceiling used to hold the job until second 49 — measured on
-          // this project's own keys, the caller waited through exactly that
+          // One call may never outlive the whole walk's budget, and never goes
+          // below the API's minimum deadline. The deadline is only checked
+          // between calls, so a call that started at second 29 with a
+          // 20-second ceiling used to hold the job until second 49 — measured
+          // on this project's own keys, the caller waited through exactly that
           // before it could fall back to its other provider.
           const callTimeoutMs = Math.max(
-            1_000,
-            Math.min(GEMINI_REQUEST_TIMEOUT_MS, sweepDeadline - Date.now())
+            GEMINI_MIN_CALL_TIMEOUT_MS,
+            Math.min(GEMINI_REQUEST_TIMEOUT_MS, remainingMs)
           );
           const response = await clientFor(key).models.generateContent({
             model,
