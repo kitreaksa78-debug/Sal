@@ -80,7 +80,6 @@ export interface JobSettings {
   subtitle: boolean;
   outputQuality: '720p' | '1080p' | 'original';
   translationStyle: 'natural' | 'formal';
-  smartVoice: boolean;
   sourceLanguage: SourceLanguage;
   /**
    * Brand glossary: names, brands and technical terms the translator must leave
@@ -137,7 +136,7 @@ export interface SystemConfigStatus {
   translation: { configured: boolean; provider: string; model: string; fallbackModels?: string[] };
   stt: { configured: boolean; provider: string; model: string };
   tts: { configured: boolean; provider: string; model: string };
-  audioSeparation: { configured: boolean; provider: string };
+  audioSeparation: { configured: boolean; provider: string; model?: string; message?: string };
   storage: {
     configured: boolean;
     provider: string;

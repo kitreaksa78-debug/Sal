@@ -16,6 +16,12 @@ interface UploadPanelProps {
   uploadProgress: number;
   /** The signed-in account's server-synced usage, owned by the app. */
   usageStats?: ReturnType<typeof getUsageStats>;
+  /**
+   * No Demucs service is connected. Stem separation is required, so the server
+   * refuses the upload — holding the button back here means the studio says why
+   * before a video is picked, instead of after one has been uploaded.
+   */
+  startBlocked?: boolean;
 }
 
 export const UploadPanel: React.FC<UploadPanelProps> = ({
@@ -28,6 +34,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
   isUploading,
   uploadProgress,
   usageStats,
+  startBlocked = false,
 }) => {
   const [isDragOver, setIsDragOver] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -156,16 +163,25 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
               </div>
             </div>
 
-            <button
-              type="button"
-              onClick={onStartDubbing}
-              disabled={isUploading}
-              className="w-full sm:w-auto px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-sm shadow-lg shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 min-h-[48px]"
-            >
-              <Sparkles className="w-4 h-4" />
-              <span>{isUploading ? 'កំពុងផ្ទុកឡើង...' : 'ចាប់ផ្តើមបញ្ចូលសំឡេង (Start Dubbing)'}</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            <div className="w-full sm:w-auto space-y-2">
+              <button
+                type="button"
+                onClick={onStartDubbing}
+                disabled={isUploading || startBlocked}
+                title={startBlocked ? 'ត្រូវភ្ជាប់ Demucs API សិន (Demucs is required first)' : undefined}
+                className="w-full px-6 py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold text-sm shadow-lg shadow-emerald-500/20 active:scale-95 transition-all flex items-center justify-center gap-2 min-h-[48px] disabled:opacity-50 disabled:cursor-not-allowed disabled:active:scale-100"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span>{isUploading ? 'កំពុងផ្ទុកឡើង...' : 'ចាប់ផ្តើមបញ្ចូលសំឡេង (Start Dubbing)'}</span>
+                <ArrowRight className="w-4 h-4" />
+              </button>
+
+              {startBlocked && (
+                <p className="text-[11px] text-amber-300 text-center sm:text-left">
+                  ត្រូវភ្ជាប់ Demucs API សិន — បើគ្មានវា ការបញ្ចូលសំឡេងមិនដំណើរការទេ។
+                </p>
+              )}
+            </div>
           </div>
 
           {/* Upload Progress Bar if active */}

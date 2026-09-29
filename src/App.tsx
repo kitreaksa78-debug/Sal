@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { AlertCircle } from 'lucide-react';
 import { Header } from './components/Header';
 import { UploadPanel } from './components/UploadPanel';
 import { TranslationSettings } from './components/TranslationSettings';
@@ -18,6 +19,7 @@ import {
   activatePurchase,
   getMe,
   getUsage,
+  getSystemConfigStatus,
   listUsers,
   signOut,
   ApiError,
@@ -34,6 +36,13 @@ import {
   setPlan,
   setAdmin,
 } from './lib/usage';
+
+/**
+ * Shown when the status endpoint reports no stem service and sent no reason of
+ * its own — the same rule the server enforces, in the studio's own words.
+ */
+const DEMUCS_REQUIRED_NOTICE =
+  'បើគ្មានម៉ាស៊ីនញែកភ្លេង (Demucs) ទេ ការបញ្ចូលសំឡេងខ្មែរមិនដំណើរការទេ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API»។';
 
 export function App() {
   const [activeTab, setActiveTab] = useState<'welcome' | 'studio' | 'history' | 'pricing'>('welcome');
@@ -52,10 +61,19 @@ export function App() {
     subtitle: true,
     outputQuality: 'original',
     translationStyle: 'natural',
-    smartVoice: true,
     sourceLanguage: 'auto',
     glossary: '',
   });
+
+  /**
+   * Demucs is part of the product, so the studio has to say so before a video is
+   * chosen rather than after the upload is refused. `null` means "a stem service
+   * is connected" or "the probe failed" — in the second case the studio stays
+   * open, because the upload endpoint makes the same check again on the server.
+   */
+  const [demucsNotice, setDemucsNotice] = useState<string | null>(null);
+  /** Bumped when the stem-separation panel changes the connection. */
+  const [demucsCheckToken, setDemucsCheckToken] = useState(0);
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -261,8 +279,40 @@ export function App() {
     };
   };
 
+  /**
+   * Re-read the stem-service state whenever the studio is opened: the owner may
+   * have just reconnected a phone tunnel, and the panel that stores it is on this
+   * very screen.
+   */
+  useEffect(() => {
+    if (activeTab !== 'studio') return;
+    let cancelled = false;
+
+    getSystemConfigStatus()
+      .then((status) => {
+        if (cancelled) return;
+        setDemucsNotice(
+          status.audioSeparation.configured
+            ? null
+            : status.audioSeparation.message || DEMUCS_REQUIRED_NOTICE
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setDemucsNotice(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [activeTab, demucsCheckToken]);
+
   const handleStartDubbing = async () => {
     if (!selectedFile) return;
+
+    if (demucsNotice) {
+      alert(demucsNotice);
+      return;
+    }
 
     // Check free plan limits
     const freeCheck = canUseFreePlan();
@@ -377,8 +427,25 @@ export function App() {
             {/* If no job in progress or finished, show Upload & Settings */}
             {!currentJob && (
               <div className="space-y-8 animate-in fade-in duration-300">
+                {/* Demucs is required: without it the server refuses the upload, so
+                    the reason is shown before anyone picks a video. */}
+                {demucsNotice && (
+                  <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs leading-relaxed flex items-start gap-3">
+                    <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
+                    <div>
+                      <div className="font-bold text-sm text-amber-300">
+                        Demucs ចាំបាច់ — បើគ្មានវា គេហទំព័រមិនដំណើរការទេ
+                      </div>
+                      <p className="mt-1 text-slate-300">{demucsNotice}</p>
+                    </div>
+                  </div>
+                )}
+
                 {/* Admin only: which Demucs/stem service does the separation. */}
-                <DemucsPanel visible={usageStats.admin} />
+                <DemucsPanel
+                  visible={usageStats.admin}
+                  onConnectionChange={() => setDemucsCheckToken((token) => token + 1)}
+                />
 
                 {/* Admin only: check the QR payment receipts and open Pro. */}
                 <ProRequestsPanel visible={usageStats.admin} />
@@ -395,6 +462,7 @@ export function App() {
                   isUploading={isUploading}
                   uploadProgress={uploadProgress}
                   usageStats={usageStats}
+                  startBlocked={Boolean(demucsNotice)}
                 />
 
                 {/* Settings Panel */}

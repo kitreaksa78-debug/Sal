@@ -77,7 +77,6 @@ export interface JobSettings {
   subtitle: boolean;
   outputQuality: '720p' | '1080p' | 'original';
   translationStyle: 'natural' | 'formal';
-  smartVoice: boolean;
   sourceLanguage?: SourceLanguage;
   /**
    * Brand glossary: names, brands and technical terms the translator must leave

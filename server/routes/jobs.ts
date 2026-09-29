@@ -7,6 +7,10 @@ import { getStorage, resolveStoredArtifact } from '../services/storage.js';
 import { requireSession } from '../middleware/session.js';
 import { isAppOwner } from '../services/accounts.js';
 import { JobProcessor, jobEvents, KHMER_CANCELLED_MESSAGE } from '../services/jobProcessor.js';
+import {
+  getAudioSeparationProvider,
+  DEMUCS_REQUIRED_MESSAGE,
+} from '../services/audioSeparation.js';
 import { JobRecord, JobSettings, SOURCE_LANGUAGES } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
@@ -71,6 +75,17 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       return res.status(400).json({ error: 'សូមជ្រើសរើសវីដេអូដើម្បីបញ្ចូល។ (No video file provided)' });
     }
 
+    // Demucs is part of the product, not an optional extra: the pipeline removes
+    // the original voices with it, so without a stem service there is nothing to
+    // translate that would not be heard over the source dialogue. The video is
+    // refused before it is stored, so no half-made job is left in the history.
+    if (!getAudioSeparationProvider().isConfigured()) {
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch {}
+      return res.status(400).json({ error: DEMUCS_REQUIRED_MESSAGE });
+    }
+
     const jobId = `kd_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     const storage = getStorage();
     const db = getDatabase();
@@ -83,7 +98,6 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       subtitle: true,
       outputQuality: 'original',
       translationStyle: 'natural',
-      smartVoice: true,
       sourceLanguage: 'auto',
     };
 

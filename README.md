@@ -19,25 +19,29 @@ This Space runs the **whole app** (frontend + API) from one container.
 
 ## Pipeline
 
+Six steps, in the order the studio shows them:
+
 | Step | Engine |
 | --- | --- |
-| Speech to text | Groq `whisper-large-v3` |
-| Translation | Groq `openai/gpt-oss-120b` (automatic model fallback) |
-| Khmer voice | Microsoft Edge TTS (free, unlimited) |
-| Audio separation | Demucs (remote stem API) |
-| Muxing / rendering | FFmpeg (bundled in the image) |
+| 1. Video | upload + FFmpeg audio extraction |
+| 2. បំបែកសំឡេងមនុស្សចេញ | Demucs (remote stem API) |
+| 3. បម្លែងសំឡេងទៅជាអក្សរ | Whisper via Groq `whisper-large-v3` |
+| 4. បកប្រែទៅខ្មែរ | Gemini / Groq — the only step any language model runs |
+| 5. បង្កើតសំឡេងខ្មែរ | Microsoft Edge TTS (free, unlimited) |
+| 6. ដាក់សំឡេងខ្មែរចូលវីដេអូ | FFmpeg (bundled in the image) — mix + render MP4 |
 
-## Stem separation (Demucs only)
+## Stem separation (Demucs required)
 
 Splitting the voices out of the mix runs on Demucs, reached over HTTP. Model
 separation is never faked: a job that reaches Demucs gets real stems.
 
-Demucs is an upgrade, not a requirement. When no service is connected — or a
-connected one fails — the pipeline keeps going on the untouched mix: the video is
-still transcribed, translated and dubbed, and the mixer dips the original audio
-under each Khmer line so the dub stays intelligible. The trade-off is that the
-original voices remain in the background at a low level, and the job carries a
-warning saying so. Connect Demucs for a clean background.
+Demucs is a **requirement**, not an upgrade. Removing the original voices is what
+lets the Khmer dub be the dialogue instead of a voice laid over the source one,
+and nothing else in the pipeline does it. So with no service connected the upload
+endpoint refuses the video (HTTP 400, `DEMUCS_REQUIRED_MESSAGE`), and a job whose
+service breaks mid-run fails with the service's own reason instead of publishing a
+dub played under the original voices. `getAudioSeparationProvider()` has no
+fallback provider for exactly this reason.
 
 Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 

@@ -25,6 +25,12 @@ import {
 interface DemucsPanelProps {
   /** Only the app owner sees this: the stem service belongs to the whole app. */
   visible: boolean;
+  /**
+   * The connection changed (saved, tested or cleared). The studio listens so its
+   * "Demucs is required" notice clears the moment a service is connected, without
+   * a reload.
+   */
+  onConnectionChange?: () => void;
 }
 
 /**
@@ -52,7 +58,7 @@ function formatBytes(bytes: number): string {
  * does anything: there is no key and no model to choose, because the phone's
  * Demucs service takes neither.
  */
-export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
+export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible, onConnectionChange }) => {
   const [connection, setConnection] = useState<SeparatorConnectionView | null>(null);
   const [url, setUrl] = useState('');
   /**
@@ -105,6 +111,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
     try {
       const next = await saveSeparatorConnection({ url, apiKey: apiKey.trim() });
       apply(next);
+      onConnectionChange?.();
       setStatus({
         tone: 'ok',
         text: 'រក្សាទុករួចរាល់។ ឥឡូវសាកល្បងការតភ្ជាប់ដើម្បីបញ្ជាក់ថាវាដំណើរការ។ (Saved — run the test to confirm.)',
@@ -131,6 +138,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
       if (typed && (typed !== connection?.url || keyTyped)) {
         apply(await saveSeparatorConnection({ url: typed, apiKey: keyTyped }));
       }
+      onConnectionChange?.();
       const result: SeparatorTestResult = await testSeparatorConnection(full);
       if (result.ok) {
         // The quick probe has no stem sizes; the full test does. Report whichever
@@ -165,9 +173,10 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible }) => {
     try {
       const next = await clearSeparatorConnection();
       apply(next);
+      onConnectionChange?.();
       setStatus({
         tone: 'warn',
-        text: 'បានផ្តាច់។ ការញែកភ្លេងនឹងឈប់ដំណើរការ រហូតដល់ភ្ជាប់ Demucs API ឡើងវិញ។ (Cleared — separation stays off until a Demucs API is connected again.)',
+        text: 'បានផ្តាច់។ ការងារថ្មីនឹងមិនដំណើរការទេ រហូតដល់ភ្ជាប់ Demucs API ឡើងវិញ។ (Cleared — new jobs are refused until a Demucs API is connected again.)',
       });
     } catch (err: any) {
       setStatus({ tone: 'error', text: err?.message || 'មិនអាចផ្តាច់បានទេ។' });

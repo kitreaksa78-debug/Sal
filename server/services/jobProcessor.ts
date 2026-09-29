@@ -7,7 +7,7 @@ import { getStorage } from './storage.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import {
   getAudioSeparationProvider,
-  UnseparatedAudioProvider,
+  DEMUCS_REQUIRED_MESSAGE,
   SeparationResult,
 } from './audioSeparation.js';
 import { getTranscriptionProvider } from './transcription.js';
@@ -40,16 +40,16 @@ export const KHMER_CANCELLED_MESSAGE =
 export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
   queued: 'កំពុងស្ថិតក្នុងជួររង់ចាំ...',
   uploading: 'កំពុងផ្ទុកវីដេអូឡើង...',
-  extracting_audio: 'កំពុងស្រង់សំឡេងចេញពីវីដេអូ...',
-  separating_audio: 'កំពុងញែកសំឡេងមនុស្ស និងភ្លេងផ្ទៃខាងក្រោយ...',
-  transcribing: 'កំពុងស្តាប់ និងបំប្លែងពាក្យសន្ទនា...',
+  extracting_audio: 'កំពុងញែកសំឡេងពីវីដេអូ...',
+  separating_audio: 'កំពុងបំបែកសំឡេងមនុស្សចេញដោយ Demucs...',
+  transcribing: 'កំពុងបម្លែងសំឡេងទៅជាអក្សរដោយ Whisper...',
   detecting_speakers: 'កំពុងកំណត់អត្តសញ្ញាណអ្នកនិយាយ...',
-  translating: 'កំពុងវិភាគបរិបទ និងបកប្រែជាភាសាខ្មែរនិយាយបែបធម្មជាតិ...',
-  generating_voice: 'កំពុងបង្កើតសំឡេងនិយាយខ្មែរតាមតួអង្គ...',
-  syncing: 'កំពុងតម្រឹមចង្វាក់សំឡេងឱ្យត្រូវតាមពេលវេលាដើម...',
-  mixing: 'កំពុងបញ្ចូលសំឡេងខ្មែរជាមួយភ្លេង និងសំឡេងផ្ទៃខាងក្រោយ...',
-  rendering: 'កំពុង Render វីដេអូ MP4 ចុងក្រោយ (H.264/AAC)...',
-  quality_check: 'កំពុងត្រួតពិនិត្យគុណភាពវីដេអូ...',
+  translating: 'កំពុងបកប្រែទៅខ្មែរ (Gemini / Translator)...',
+  generating_voice: 'កំពុងបង្កើតសំឡេងខ្មែរ (Khmer TTS)...',
+  syncing: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ...',
+  mixing: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ ជាមួយភ្លេងផ្ទៃខាងក្រោយ...',
+  rendering: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ — Render MP4 ចុងក្រោយ (H.264/AAC)...',
+  quality_check: 'កំពុងត្រួតពិនិត្យវីដេអូចុងក្រោយ...',
   completed: 'វីដេអូបកប្រែ និងបញ្ចូលសំឡេងរួចរាល់ជាស្ថាពរ!',
   failed: 'មានបញ្ហាក្នុងការដំណើរការ',
 };
@@ -57,16 +57,16 @@ export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
 export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
   queued: 'Job queued...',
   uploading: 'Uploading video...',
-  extracting_audio: 'Extracting audio from video...',
-  separating_audio: 'Separating human speech from music & background...',
-  transcribing: 'Transcribing spoken dialogue...',
+  extracting_audio: 'Splitting the audio out of the video...',
+  separating_audio: 'Demucs: separating human voices from the music...',
+  transcribing: 'Whisper: converting speech to text...',
   detecting_speakers: 'Identifying speakers and vocal characteristics...',
-  translating: 'Analyzing context & translating to natural spoken Khmer...',
-  generating_voice: 'Synthesizing character-matched Khmer speech...',
-  syncing: 'Synchronizing speech duration to original timestamps...',
-  mixing: 'Mixing Khmer speech with preserved background music...',
-  rendering: 'Rendering final H.264/AAC MP4 video...',
-  quality_check: 'Performing automated quality checks...',
+  translating: 'Gemini / Translator: translating to Khmer...',
+  generating_voice: 'Khmer TTS: generating Khmer voices...',
+  syncing: 'Writing the Khmer voice back into the video...',
+  mixing: 'Writing the Khmer voice back into the video, under the music...',
+  rendering: 'Writing the Khmer voice back into the video: final H.264/AAC MP4...',
+  quality_check: 'Checking the finished video...',
   completed: 'Khmer dubbed video completed successfully!',
   failed: 'Processing failed',
 };
@@ -238,27 +238,20 @@ export class JobProcessor {
       await this.throwIfCancelled(jobId);
       await this.updateJobState(jobId, 'separating_audio');
 
-      // Stem separation is what lets the music stay loud under the Khmer voice,
-      // but it must never be the reason a translation is lost. When no Demucs
-      // service is connected this is already the unseparated provider; when one
-      // is connected but breaks, the job drops to the same untouched-mix path
-      // (with a note on the job) instead of failing.
-      let separationResult: SeparationResult;
-      try {
-        separationResult = await getAudioSeparationProvider().separate(rawAudioPath, jobTempDir);
-      } catch (separationErr: any) {
-        if (separationErr instanceof JobCancelledError) throw separationErr;
-
-        logger.warn(
-          `Stem separation failed for job ${jobId}; continuing on the original mix: ${
-            separationErr?.message || separationErr
-          }`
-        );
-        await addWarning(
-          'ការញែកសំឡេង (Demucs) មិនបានសម្រេចទេ ដូច្នេះការងារបន្តដោយរក្សាសំឡេងដើម រួចបន្ថយសំឡេងដើមក្រោមសំឡេងខ្មែរ។ (Stem separation failed; the job continued on the original mix, dipped under the Khmer voice.)'
-        );
-        separationResult = await new UnseparatedAudioProvider().separate(rawAudioPath, jobTempDir);
+      // Stem separation is a requirement, not an enhancement: the only way the
+      // music can stay loud under the Khmer voice is if the original dialogue is
+      // gone from the background, and no other step in this pipeline removes it.
+      // So a job with no Demucs service, or with one that breaks, stops here with
+      // the reason instead of shipping a Khmer dub played over the source voices.
+      const separationProvider = getAudioSeparationProvider();
+      if (!separationProvider.isConfigured()) {
+        throw new Error(DEMUCS_REQUIRED_MESSAGE);
       }
+
+      const separationResult: SeparationResult = await separationProvider.separate(
+        rawAudioPath,
+        jobTempDir
+      );
 
       markStage('demucs');
 
@@ -677,9 +670,13 @@ export class JobProcessor {
       let friendlyKhmer = 'មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត។';
       const errMsg = err?.message || '';
 
-      if (errMsg.includes('ញែកភ្លេងដោយ Demucs') || errMsg.includes('ម៉ាស៊ីនញែកភ្លេង')) {
-        // Stem separation has no substitute, so the reason it failed is the whole
-        // story: show it instead of the generic "try another video" line.
+      if (
+        errMsg === DEMUCS_REQUIRED_MESSAGE ||
+        errMsg.includes('ញែកភ្លេងដោយ Demucs') ||
+        errMsg.includes('ម៉ាស៊ីនញែកភ្លេង')
+      ) {
+        // Demucs has no substitute, so the reason it failed is the whole story:
+        // show it instead of the generic "try another video" line.
         friendlyKhmer = errMsg;
       } else if (/\(429\)|rate limit|too many requests/i.test(errMsg)) {
         friendlyKhmer =

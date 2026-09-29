@@ -365,7 +365,9 @@ const FREE_FEATURES: PlanFeature[] = [
   // different allowance from the one the upload actually enforces.
   { label: `${FREE_DAILY_LIMIT} វីដេអូ`, english: 'per day' },
   { label: '2 នាទី', english: 'per video' },
-  { label: 'បង្ហាញ 720p', english: 'output' },
+  // The released MP4 keeps its own frame size — nothing is downscaled for the
+  // free tier — so this row describes what the file is, not a cap.
+  { label: 'គុណភាពដើម', english: 'no downscale' },
   { label: 'សំឡេងខ្មែរ', english: 'Khmer voice' },
   { label: 'បកប្រែ AI', english: 'AI translation' },
 ];
@@ -373,7 +375,7 @@ const FREE_FEATURES: PlanFeature[] = [
 const PRO_FEATURES: PlanFeature[] = [
   { label: 'វីដេអូឥតកំណត់', english: 'unlimited' },
   { label: '30 នាទី', english: 'per video' },
-  { label: 'បង្ហាញ 1080p', english: 'output' },
+  { label: 'គុណភាពដើមពេញលេញ', english: 'full resolution' },
   { label: 'ដំណើរការលឿនជាងគេ', english: 'priority processing' },
   { label: 'ប្រើប្រាស់ API', english: 'API access' },
   { label: 'គ្មានស្ទាត់', english: 'no watermark' },

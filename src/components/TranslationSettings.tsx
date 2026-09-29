@@ -1,5 +1,5 @@
 import React from 'react';
-import { Sliders, Sparkles, Mic, Music, Languages, Globe } from 'lucide-react';
+import { Sliders, Mic, Music, Languages, Globe } from 'lucide-react';
 import { JobSettings, SOURCE_LANGUAGES } from '../types';
 
 interface TranslationSettingsProps {
@@ -19,38 +19,13 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
 
   return (
     <div className="bg-[#111827]/80 rounded-2xl border border-slate-800/90 p-4 sm:p-6 backdrop-blur-sm shadow-xl space-y-5 sm:space-y-6">
-      {/* Smart Voice Hero Card */}
-      <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-950/40 via-teal-950/20 to-slate-900/40 border border-emerald-500/30">
-        <div className="flex items-start justify-between gap-3">
-          <div className="flex items-start gap-3 min-w-0">
-            <div className="w-10 h-10 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center shrink-0 border border-emerald-500/30">
-              <Sparkles className="w-5 h-5" />
-            </div>
-            <div className="min-w-0">
-              <div className="flex flex-wrap items-center gap-2">
-                <h3 className="text-sm sm:text-base font-semibold text-white">Smart Voice</h3>
-                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
-                  AI RECOMMEND
-                </span>
-              </div>
-              <p className="text-xs text-slate-300 mt-1 leading-relaxed">
-                Smart Voice automatically detects dialogue and prepares natural Khmer dubbing while preserving background audio.
-              </p>
-            </div>
-          </div>
-
-          <label className="relative inline-flex items-center cursor-pointer shrink-0 mt-1">
-            <input
-              type="checkbox"
-              checked={settings.smartVoice}
-              disabled={disabled}
-              onChange={(e) => update('smartVoice', e.target.checked)}
-              className="sr-only peer"
-            />
-            <div className="w-11 h-6 bg-slate-700 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-slate-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
-          </label>
-        </div>
-      </div>
+      {/*
+       * The old "Smart Voice" switch lived here. It was never read by the
+       * pipeline — dialogue detection, speaker naming and music preservation are
+       * what the run does with every video anyway — so it only looked like a
+       * setting that could make the job heavier. It is gone, and the options
+       * below are the ones that really change the result.
+       */}
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
         {/* Language & Style */}

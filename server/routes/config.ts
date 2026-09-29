@@ -4,7 +4,10 @@ import { getStorage } from '../services/storage.js';
 import { getTranscriptionProvider } from '../services/transcription.js';
 import { getTranslationService } from '../services/translation.js';
 import { getTTSProvider } from '../services/tts.js';
-import { getAudioSeparationProvider } from '../services/audioSeparation.js';
+import {
+  getAudioSeparationProvider,
+  DEMUCS_REQUIRED_MESSAGE,
+} from '../services/audioSeparation.js';
 import { getSeparatorConnection } from '../services/separatorSettings.js';
 import { SystemConfigStatus } from '../types.js';
 import { getGeminiApiKeys } from '../utils/aiKeys.js';
@@ -88,12 +91,7 @@ router.get('/status', async (req: Request, res: Response) => {
       ...(audioSeparationProvider === 'demucs_api'
         ? { model: audioSeparationConnection.model || 'service default' }
         : {}),
-      ...(audioSeparationConfigured
-        ? {}
-        : {
-            message:
-              'មិនទាន់ភ្ជាប់ម៉ាស៊ីនញែកភ្លេងទេ — ការងារបកប្រែនៅតែដំណើរការ តែរក្សាសំឡេងដើមក្នុងភ្លេងផ្ទៃខាងក្រោយ។ ភ្ជាប់ Demucs ដើម្បីបានគុណភាពខ្ពស់ជាង ដោយដាក់ URL ក្នុងផ្ទាំង «ញែកភ្លេង» ឬកំណត់ AUDIO_SEPARATOR_URL។ (No stem service is connected; jobs still run on the original mix. Connect Demucs in the Stem separation panel or via AUDIO_SEPARATOR_URL for a cleaner result.)',
-          }),
+      ...(audioSeparationConfigured ? {} : { message: DEMUCS_REQUIRED_MESSAGE }),
     },
     storage: {
       configured: storage.isConfigured(),

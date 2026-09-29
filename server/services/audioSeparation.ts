@@ -217,11 +217,12 @@ export interface SeparationResult {
 
 /**
  * Splitting the voices out of a video. Real model separation is the Demucs
- * service and nothing else, so a job that reaches Demucs gets genuine stems.
- * Failing the whole translation over it, though, is not acceptable: when no
- * service is connected the pipeline runs on the untouched mix instead (see
- * `UnseparatedAudioProvider`), which trades a clean background for a finished
- * video rather than losing the video altogether.
+ * service and nothing else — there is no substitute that removes the original
+ * voices, so a run without Demucs would lay Khmer over the untouched mix and
+ * keep the source dialogue audible underneath it. Demucs is therefore a
+ * requirement, not an enhancement: the website refuses to start a job and the
+ * pipeline refuses to continue when no stem service is connected (see
+ * `DEMUCS_REQUIRED_MESSAGE`).
  */
 export interface AudioSeparationProvider {
   name: string;
@@ -430,9 +431,9 @@ function oldServiceHint(payload: unknown): string {
  * 6 dB dip) instead of gating it down to -30 dB.
  *
  * This provider never substitutes a lesser separation: it either returns real
- * Demucs stems or throws with the reason. The pipeline catches that and carries
- * on unseparated (see `UnseparatedAudioProvider`) so a closed tunnel costs the
- * customer audio quality, not the finished video.
+ * Demucs stems or throws with the reason, and that reason ends the job. A run
+ * that cannot separate the voices is not a cheaper dub — it is a dub played on
+ * top of the original dialogue — so failing loudly is the honest answer.
  */
 export class RemoteStemSeparationProvider implements AudioSeparationProvider {
   name: string;
@@ -466,9 +467,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     const connection = getSeparatorConnection();
 
     if (!connection.url) {
-      throw new Error(
-        'មិនទាន់បានភ្ជាប់ម៉ាស៊ីនញែកភ្លេង (Demucs API) ទេ — សូមដាក់ URL ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API» ជាមុនសិន។ (No Demucs API is connected; set its URL in the stem separation panel first.)'
-      );
+      throw new Error(DEMUCS_REQUIRED_MESSAGE);
     }
 
     // The stems are streamed straight to disk, and the caller's directory may
@@ -1205,51 +1204,22 @@ export async function testRemoteSeparation(
 }
 
 /**
- * The provider used when Demucs is not connected (or when a connected service
- * failed): the pipeline still transcribes, translates and dubs the video, and
- * this hands the untouched mix back as both tracks.
- *
- * Both tracks are the same audio on purpose. The mixer only needs a background
- * track, and `backgroundHasOriginalVoice` tells it the original voices are still
- * in there so it dips that track hard under every Khmer line. The alternative —
- * aborting — would cost the customer the whole translation because a phone
- * tunnel happened to be closed.
- *
- * `isConfigured()` stays false: the status screen must keep reporting that no
- * stem service is set up, even while jobs are happily running without one.
+ * What the owner is told when Demucs is missing. One string, used by the upload
+ * endpoint and repeated on the status screen, so the studio and the API can
+ * never disagree about why a video was refused.
  */
-export class UnseparatedAudioProvider implements AudioSeparationProvider {
-  name = 'no-separation';
-
-  isConfigured(): boolean {
-    return false;
-  }
-
-  async separate(inputWavPath: string, outputDir: string): Promise<SeparationResult> {
-    const vocalsPath = path.join(outputDir, 'vocals.wav');
-    const noVocalsPath = path.join(outputDir, 'no_vocals.wav');
-    fs.mkdirSync(outputDir, { recursive: true });
-    fs.copyFileSync(inputWavPath, vocalsPath);
-    fs.copyFileSync(inputWavPath, noVocalsPath);
-
-    logger.info(
-      'No Demucs service is connected: continuing without stem separation (original voices stay in the mix and are dipped under the Khmer dub).'
-    );
-
-    return { vocalsPath, noVocalsPath, backgroundHasOriginalVoice: true };
-  }
-}
+export const DEMUCS_REQUIRED_MESSAGE =
+  'គេហទំព័រនេះត្រូវការ Demucs ជាចាំបាច់ — បើគ្មានម៉ាស៊ីនញែកភ្លេងទេ ការបញ្ចូលសំឡេងខ្មែរមិនដំណើរការទេ ព្រោះសំឡេងដើមនឹងនៅជាប់ក្នុងវីដេអូ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API» ឬកំណត់ AUDIO_SEPARATOR_URL សិន។ (Demucs is required: without stem separation the Khmer dub would play under the original voices, so jobs are refused until a Demucs API is connected.)';
 
 /**
  * The separation provider the pipeline uses.
  *
  * Where Demucs runs — a phone in Termux, a home server, the bundled sidecar —
  * comes from `AUDIO_SEPARATOR_URL` or the connection the owner saved from the
- * website. With neither set the pipeline drops to `UnseparatedAudioProvider`
- * rather than failing, so the translation itself never depends on the tunnel
- * being open.
+ * website. There is no fallback provider: `separate()` throws
+ * `DEMUCS_REQUIRED_MESSAGE`-worthy reasons when nothing is connected, and
+ * `isConfigured()` is what the upload endpoint checks before accepting a video.
  */
 export function getAudioSeparationProvider(): AudioSeparationProvider {
-  const remote = new RemoteStemSeparationProvider('demucs_api');
-  return remote.isConfigured() ? remote : new UnseparatedAudioProvider();
+  return new RemoteStemSeparationProvider('demucs_api');
 }

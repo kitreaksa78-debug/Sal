@@ -67,9 +67,9 @@ async function startServer() {
   // across the restarts that free hosts perform.
   await getBilling().hydrateFromRemote();
   // The stem service the owner pointed the app at from the website, so a job
-  // started right after a restart still uses the phone. When none is connected
-  // the pipeline runs unseparated rather than failing, so this is an upgrade
-  // for the result, not a prerequisite for the job.
+  // started right after a restart still uses the phone. Demucs is a prerequisite
+  // for a job — with no stem service connected the upload endpoint refuses the
+  // video — so this hydration is what makes the pipeline ready at boot.
   await hydrateSeparatorSettings();
 
   // Check system dependencies on start
