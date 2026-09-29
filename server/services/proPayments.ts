@@ -15,7 +15,7 @@ import { logger } from '../utils/logger.js';
 /** How long one approved payment buys. */
 export const PRO_DAYS = 30;
 /** What the customer is asked to pay, in USD. */
-export const PRO_PRICE_USD = 9.99;
+export const PRO_PRICE_USD = 15;
 /** A receipt is a phone photo of a payment screen; anything larger is not one. */
 export const MAX_RECEIPT_BYTES = 8 * 1024 * 1024;
 

@@ -18,7 +18,7 @@ export const FREE_DAILY_LIMIT = 1;
 export const FREE_MAX_DURATION = 120;
 /** Pro plan: 30 minutes per video. */
 export const PRO_MAX_DURATION = 1800;
-export const PRO_PRICE_USD = '9.99';
+export const PRO_PRICE_USD = '15';
 
 interface UsageData {
   date: string; // YYYY-MM-DD
