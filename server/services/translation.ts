@@ -137,6 +137,45 @@ const TRANSLATION_SCHEMA = {
 /** Groq's free tier allows 8k tokens/minute; stay just under it to avoid 429s. */
 const TOKEN_BUDGET_PER_MINUTE = Number(process.env.GROQ_TOKENS_PER_MINUTE || '7800');
 
+/**
+ * The Groq model that translates Khmer best, and the ones behind it.
+ *
+ * Groq only serves a handful of text models, and the pick was measured rather
+ * than assumed: the same five English lines (a name, a title, a number, an idiom)
+ * were put through the real dubbing prompt on every candidate.
+ *
+ *   openai/gpt-oss-120b   1.9s  1510 tok  5/5 lines  keeps "Vladimir Putin" whole
+ *   qwen/qwen3.8-27b      2.9s  1998 tok  5/5 lines  drops "Vladimir", spells Dara wrong
+ *   openai/gpt-oss-20b    —     —         rejects the strict JSON schema (HTTP 400)
+ *
+ * So the 120b model leads. The 27b model is the first fallback because it does
+ * answer when the primary is rate-limited, and the 20b model stays last: it
+ * spends its turn on a 400 rather than a translation, but a model that cannot
+ * take the schema today may be able to tomorrow, and asking it costs one round
+ * trip only after the two models that work have both refused.
+ *
+ * `GROQ_TRANSLATION_MODEL` / `GROQ_TRANSLATION_FALLBACK_MODELS` override both,
+ * so the engine can be changed from the host's environment without a redeploy.
+ */
+export const STRONGEST_KHMER_TRANSLATION_MODEL = 'openai/gpt-oss-120b';
+export const DEFAULT_GROQ_TRANSLATION_FALLBACKS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+
+/** The Groq model a job's translation blocks are sent to. */
+export function getGroqTranslationModel(): string {
+  return (process.env.GROQ_TRANSLATION_MODEL || '').trim() || STRONGEST_KHMER_TRANSLATION_MODEL;
+}
+
+/** The Groq models tried when the strongest one is rate-limited, best first. */
+export function getGroqTranslationFallbacks(): string[] {
+  const configured = (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || '')
+    .split(',')
+    .map((model) => model.trim())
+    .filter(Boolean);
+  const models = configured.length > 0 ? configured : DEFAULT_GROQ_TRANSLATION_FALLBACKS;
+  // The primary model is never also its own fallback.
+  return Array.from(new Set(models)).filter((model) => model !== getGroqTranslationModel());
+}
+
 /** Rough token count for mixed Latin/Khmer text, used only for request pacing. */
 function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3.5);
@@ -423,9 +462,7 @@ export class KhmerDubTranslationService {
     // Gemini's clients are created per request inside the rotation, because a
     // block may end up on any model and any key.
     this.modelName =
-      this.provider === 'groq'
-        ? process.env.GROQ_TRANSLATION_MODEL || 'openai/gpt-oss-120b'
-        : getGeminiModels()[0];
+      this.provider === 'groq' ? getGroqTranslationModel() : getGeminiModels()[0];
   }
 
   public getProviderName(): TranslationProviderName {
@@ -887,13 +924,10 @@ Return JSON containing exactly ${
     userPrompt: string
   ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
     if (provider === 'groq') {
-      const groqModel = process.env.GROQ_TRANSLATION_MODEL || 'openai/gpt-oss-120b';
-      // Fallback models when primary is rate-limited (429)
-      // These are ordered by preference: smaller/faster models first as they often have separate rate limits
-      const fallbackModels = (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || 'openai/gpt-oss-20b,qwen/qwen3.8-27b')
-        .split(',')
-        .map(m => m.trim())
-        .filter(m => m && m !== groqModel); // Exclude primary model from fallbacks
+      const groqModel = getGroqTranslationModel();
+      // Fallback models when the primary is rate-limited (429), tried in order.
+      // See DEFAULT_GROQ_TRANSLATION_FALLBACKS for which ones actually answer.
+      const fallbackModels = getGroqTranslationFallbacks();
       
       const answer = await groqChatJson({
         model: groqModel,

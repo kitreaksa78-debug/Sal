@@ -20,20 +20,33 @@ import { getGeminiApiKeys } from './aiKeys.js';
  */
 
 /**
- * Model order when nothing overrides it. The newest flash models translate
- * Khmer well and have the most generous free quota; the pro models are stronger
- * but spend their small allowance quickly, so they sit behind the flashes; the
- * lite models are the last resort before giving up.
+ * Model order when nothing overrides it: the strongest translator first.
+ *
+ * The Pro tier is the one that translates Khmer best, so it leads — `gemini-pro-latest`
+ * (Google's own alias for the newest Pro, which is where a request for the best
+ * model should start) followed by the pinned Pro preview that Google points
+ * users of the retired 2.5 Pro at:
+ *
+ *   404 "models/gemini-2.5-pro is no longer available to new users. Please update
+ *        your code to use models/gemini-3.1-pro-preview"
+ *
+ * The flash models still sit behind them, unchanged: a Pro allowance on the free
+ * tier is small and runs dry first, and the rotation walks on to the next model
+ * by itself, so the strongest model is tried without ever losing the fallbacks.
+ * An account that has already shown the Pro tier is out of quota skips it for
+ * the rest of the process (`throttledUntil` / `preferredModel`), which is what
+ * keeps the one wasted round trip a one-time cost. The lite models remain the
+ * last resort before giving up.
  */
 export const DEFAULT_GEMINI_MODELS = [
+  'gemini-pro-latest',
+  'gemini-3.1-pro-preview',
   'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
   'gemini-3-flash-preview',
   'gemini-flash-latest',
-  'gemini-3.1-pro-preview',
-  'gemini-pro-latest',
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
   'gemini-2.5-flash',

@@ -1,17 +1,24 @@
 import React from 'react';
-import { Sliders, Mic, Music, Languages, Globe } from 'lucide-react';
+import { Sliders, Mic, Music, Languages, Globe, Cpu } from 'lucide-react';
 import { JobSettings, SOURCE_LANGUAGES } from '../types';
 
 interface TranslationSettingsProps {
   settings: JobSettings;
   onChange: (settings: JobSettings) => void;
   disabled?: boolean;
+  /**
+   * `<provider> · <model>` the server will translate with, e.g.
+   * "groq · openai/gpt-oss-120b". Read from the config status; absent until the
+   * probe answers, so the line is simply not drawn while it is unknown.
+   */
+  engine?: string | null;
 }
 
 export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   settings,
   onChange,
   disabled = false,
+  engine = null,
 }) => {
   const update = <K extends keyof JobSettings>(key: K, val: JobSettings[K]) => {
     onChange({ ...settings, [key]: val });
@@ -26,6 +33,21 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
        * setting that could make the job heavier. It is gone, and the options
        * below are the ones that really change the result.
        */}
+
+      {/*
+       * The engine is part of what the settings mean: "translate this into
+       * Khmer" is a different promise depending on which model does it, and the
+       * strongest translation model is the one the server is configured with.
+       * The value comes from the server, so the text can never drift from what a
+       * job will really use.
+       */}
+      <div className="flex items-center gap-2 text-[11px] text-slate-400 border-b border-slate-800/80 pb-3.5">
+        <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+        <span>ម៉ាស៊ីនបកប្រែ (Translator):</span>
+        <span className="font-semibold text-emerald-300 truncate">
+          {engine ?? 'កំពុងពិនិត្យ…'}
+        </span>
+      </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">
         {/* Language & Style */}

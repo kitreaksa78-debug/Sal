@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import { FFmpegHelper, RENDER_ENCODER_ARGS } from '../utils/ffmpeg.js';
 import { getStorage } from '../services/storage.js';
 import { getTranscriptionProvider } from '../services/transcription.js';
-import { getTranslationService } from '../services/translation.js';
+import { getTranslationService, getGroqTranslationFallbacks } from '../services/translation.js';
 import { getTTSProvider } from '../services/tts.js';
 import {
   getAudioSeparationProvider,
@@ -38,13 +38,12 @@ router.get('/status', async (req: Request, res: Response) => {
       : process.env.STT_MODEL || 'gemini-3.5-transcribe';
 
   const translationService = getTranslationService();
+  // Reported from the same helpers the pipeline sends its requests with, so this
+  // screen can never name a model the job would not actually use.
   const translationFallbackModels =
     translationService.getProviderName() === 'gemini'
       ? translationService.getFallbackModelNames().slice(1)
-      : (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || 'openai/gpt-oss-20b,qwen/qwen3.8-27b')
-          .split(',')
-          .map((m) => m.trim())
-          .filter((m) => m && m !== translationService.getModelName());
+      : getGroqTranslationFallbacks().filter((m) => m !== translationService.getModelName());
 
   const ttsInstance = getTTSProvider();
   const ttsConfigured = ttsInstance.isConfigured();

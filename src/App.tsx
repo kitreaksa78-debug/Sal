@@ -74,6 +74,12 @@ export function App() {
   const [demucsNotice, setDemucsNotice] = useState<string | null>(null);
   /** Bumped when the stem-separation panel changes the connection. */
   const [demucsCheckToken, setDemucsCheckToken] = useState(0);
+  /**
+   * Which service and model translate the dialogue, read from the same status the
+   * pipeline reports. Shown in the settings panel so the engine is visible where
+   * the translation is configured, instead of only in the job log.
+   */
+  const [translationEngine, setTranslationEngine] = useState<string | null>(null);
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -296,9 +302,16 @@ export function App() {
             ? null
             : status.audioSeparation.message || DEMUCS_REQUIRED_NOTICE
         );
+        setTranslationEngine(
+          status.translation?.configured && status.translation.model
+            ? `${status.translation.provider} · ${status.translation.model}`
+            : null
+        );
       })
       .catch(() => {
-        if (!cancelled) setDemucsNotice(null);
+        if (cancelled) return;
+        setDemucsNotice(null);
+        setTranslationEngine(null);
       });
 
     return () => {
@@ -470,6 +483,7 @@ export function App() {
                   settings={settings}
                   onChange={setSettings}
                   disabled={isUploading}
+                  engine={translationEngine}
                 />
               </div>
             )}
