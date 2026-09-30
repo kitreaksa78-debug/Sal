@@ -9,7 +9,7 @@ import { JobHistory } from './components/JobHistory';
 import { PricingPage } from './components/PricingPage';
 import { DemucsPanel } from './components/DemucsPanel';
 import { ProRequestsPanel } from './components/ProRequestsPanel';
-import { WelcomePage } from './components/WelcomePage';
+import { SignInPanel } from './components/SignInPanel';
 import { JobRecord, JobSettings } from './types';
 import {
   uploadVideoJob,
@@ -45,7 +45,8 @@ const DEMUCS_REQUIRED_NOTICE =
   'បើគ្មានម៉ាស៊ីនញែកភ្លេង (Demucs) ទេ ការបញ្ចូលសំឡេងខ្មែរមិនដំណើរការទេ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API»។';
 
 export function App() {
-  const [activeTab, setActiveTab] = useState<'welcome' | 'studio' | 'history' | 'pricing'>('welcome');
+  // The app opens in the studio: there is no welcome screen to click through.
+  const [activeTab, setActiveTab] = useState<'studio' | 'history' | 'pricing'>('studio');
 
   const [usageStats, setUsageStats] = useState(getUsageStats());
   const [user, setUser] = useState<SignedInUser | null>(getSignedInUser());
@@ -96,7 +97,6 @@ export function App() {
    */
   useEffect(() => {
     const titles: Record<typeof activeTab, string> = {
-      welcome: 'បកប្រែវីដេអូជាភាសាខ្មែរ · AI translate video',
       studio: 'ស្ទូឌីយោបកប្រែវីដេអូ · AI translate video',
       history: 'ប្រវត្តិការងារ · AI translate video',
       pricing: 'តម្លៃ Pro · AI translate video',
@@ -193,9 +193,11 @@ export function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.id]);
 
-  // The studio, history and pricing all belong to a signed-in account.
+  // The studio, history and pricing all belong to a signed-in account. The studio
+  // is where a signed-out visitor lands (it shows the sign-in card), so the other
+  // two tabs simply fall back to it.
   useEffect(() => {
-    if (!user && activeTab !== 'welcome') setActiveTab('welcome');
+    if (!user && activeTab !== 'studio') setActiveTab('studio');
   }, [user, activeTab]);
 
   // LemonSqueezy sends the buyer back with ?upgraded=1 after a successful payment.
@@ -392,7 +394,7 @@ export function App() {
     setAdmin(false);
     // Never leave one account's video or result on screen for the next person.
     handleReset();
-    setActiveTab('welcome');
+    setActiveTab('studio');
     setUsageStats(getUsageStats());
   };
 
@@ -422,24 +424,19 @@ export function App() {
       <Header
         activeTab={activeTab}
         setActiveTab={setActiveTab}
-        /* The tab bar belongs to the app, not to the welcome screen. */
-        showNav={activeTab !== 'welcome'}
+        /* The tab bar belongs to the app: a signed-out visitor only has the
+           sign-in card, so the tabs stay hidden until there is an account. */
+        showNav={Boolean(user)}
         user={user}
         onSignOut={handleSignOut}
       />
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 space-y-6 sm:space-y-8">
-        {/* Welcome / landing screen */}
-        {activeTab === 'welcome' && (
-          <WelcomePage
-            onEnterApp={() => setActiveTab('studio')}
-            user={user}
-            onSignedIn={handleSignedIn}
-          />
-        )}
+        {/* Signed out: the studio's own sign-in card is the whole screen. */}
+        {!user && <SignInPanel user={user} onSignedIn={handleSignedIn} />}
 
-        {activeTab === 'studio' && (
+        {user && activeTab === 'studio' && (
           <>
             {/* If no job in progress or finished, show Upload & Settings */}
             {!currentJob && (
@@ -516,14 +513,14 @@ export function App() {
         )}
 
         {/* History Tab */}
-        {activeTab === 'history' && (
+        {user && activeTab === 'history' && (
           <div className="max-w-4xl mx-auto animate-in fade-in duration-300">
             <JobHistory onSelectJob={handleSelectJobFromHistory} />
           </div>
         )}
 
         {/* Pricing Tab */}
-        {activeTab === 'pricing' && (
+        {user && activeTab === 'pricing' && (
           <div className="animate-in fade-in duration-300">
             <PricingPage
               onSelectPlan={(plan) => {

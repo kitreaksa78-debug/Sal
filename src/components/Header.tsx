@@ -3,14 +3,14 @@ import { Sparkles, History, Crown, LogOut, type LucideIcon } from 'lucide-react'
 import type { SignedInUser } from '../lib/api';
 import { Logo } from './Logo';
 
-type Tab = 'welcome' | 'studio' | 'history' | 'pricing';
+type Tab = 'studio' | 'history' | 'pricing';
 
 interface HeaderProps {
   activeTab: Tab;
   setActiveTab: (tab: Tab) => void;
   /**
-   * Welcome screen before the visitor enters the app — the tab bars stay hidden
-   * so the landing page is nothing but the brand and its one CTA.
+   * The tab bars stay hidden until there is an account — a signed-out visitor
+   * only has the studio's sign-in card, and tabs that lead nowhere are noise.
    */
   showNav?: boolean;
   /** The Google account saved for this device. */
@@ -18,7 +18,7 @@ interface HeaderProps {
   onSignOut?: () => void;
 }
 
-const NAV_ITEMS: { id: Exclude<Tab, 'welcome'>; label: string; Icon: LucideIcon }[] = [
+const NAV_ITEMS: { id: Tab; label: string; Icon: LucideIcon }[] = [
   { id: 'studio', label: 'ស្ទូឌីយោ', Icon: Sparkles },
   { id: 'history', label: 'ប្រវត្តិ', Icon: History },
   { id: 'pricing', label: 'Pro', Icon: Crown },
@@ -38,16 +38,16 @@ export const Header: React.FC<HeaderProps> = ({
         : 'text-slate-300 border border-transparent hover:bg-slate-800/60 hover:text-white'
     }`;
 
-  const iconClass = (id: Exclude<Tab, 'welcome'>) =>
+  const iconClass = (id: Tab) =>
     `w-4 h-4 ${id === 'pricing' ? 'text-amber-400' : id === 'studio' ? 'text-emerald-400' : 'text-slate-400'}`;
 
   return (
     <header className="sticky top-0 z-40 bg-[#0b0f17]/95 backdrop-blur-md border-b border-slate-800/80">
       <div className="max-w-7xl mx-auto px-3 sm:px-6 py-2.5 sm:py-3">
         <div className="flex items-center justify-between gap-3">
-          {/* Brand — tap target that returns to the welcome screen */}
+          {/* Brand — tap target that returns to the studio */}
           <div
-            onClick={() => setActiveTab('welcome')}
+            onClick={() => setActiveTab('studio')}
             className="flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer select-none group"
           >
             {/* Same dark tone as the page, so the logo's pencil "cuts" the frame cleanly. */}
