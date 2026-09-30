@@ -1111,6 +1111,16 @@ Return JSON containing exactly ${
     this.promotedProvider = { name: provider, direct: provider !== 'groq' };
   }
 
+  /**
+   * The other provider this project has credentials for, if any — the one every
+   * remaining block goes to once the lead provider fails one. Public because the
+   * status screen reports it: "Gemini in front, Groq after an error" is a promise
+   * the owner should be able to read back, not just take on trust.
+   */
+  public getFallbackProviderName(): TranslationProviderName | null {
+    return this.secondaryProviderName();
+  }
+
   /** The other provider this project has credentials for, if any. */
   private secondaryProviderName(): TranslationProviderName | null {
     if (this.provider === 'groq') return isGeminiConfigured() ? 'gemini' : null;

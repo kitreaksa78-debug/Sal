@@ -73,6 +73,9 @@ router.get('/status', async (req: Request, res: Response) => {
       provider: translationService.getProviderName(),
       model: translationService.getModelName(),
       fallbackModels: translationFallbackModels,
+      // Which service takes over when the one above fails a block, so the panel
+      // can say "Gemini, then Groq" instead of leaving the order implicit.
+      fallbackProvider: translationService.getFallbackProviderName() ?? undefined,
     },
     stt: {
       configured: sttConfigured,
