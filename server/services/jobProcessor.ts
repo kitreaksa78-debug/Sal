@@ -44,7 +44,7 @@ export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
   separating_audio: 'កំពុងបំបែកសំឡេងមនុស្សចេញដោយ Demucs...',
   transcribing: 'កំពុងបម្លែងសំឡេងទៅជាអក្សរដោយ Whisper...',
   detecting_speakers: 'កំពុងកំណត់អត្តសញ្ញាណអ្នកនិយាយ...',
-  translating: 'កំពុងបកប្រែទៅខ្មែរ (Gemini / Translator)...',
+  translating: 'កំពុងបកប្រែអត្ថបទទៅភាសាគោលដៅដោយ Groq API...',
   generating_voice: 'កំពុងបង្កើតសំឡេងពីអក្សរ (Khmer TTS)...',
   mixing: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ ជាមួយភ្លេងផ្ទៃខាងក្រោយ...',
   rendering: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ — Render MP4 ចុងក្រោយ (H.264/AAC)...',
@@ -60,7 +60,7 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
   separating_audio: 'Demucs: separating human voices from the music...',
   transcribing: 'Whisper: converting speech to text...',
   detecting_speakers: 'Identifying speakers and vocal characteristics...',
-  translating: 'Gemini / Translator: translating to Khmer...',
+  translating: 'Groq API: translating the dialogue to Khmer...',
   generating_voice: 'Khmer TTS: generating Khmer voice from the Khmer text...',
   mixing: 'Writing the Khmer voice back into the video, under the music...',
   rendering: 'Writing the Khmer voice back into the video: final H.264/AAC MP4...',
@@ -72,7 +72,7 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
 /**
  * Progress percentage mapping, spread across the six steps the studio shows:
  *
- *   Video → Demucs → Whisper → Gemini/Translator → Khmer TTS → ដាក់សំឡេងចូលវីដេអូ
+ *   Upload → Demucs → Speech-to-Text → Groq → Subtitle · TTS → Sync into video
  *
  * `detecting_speakers` is no longer reported — speaker naming happens inside the
  * Whisper pass — but it stays in the map because jobs recorded before that change
@@ -397,7 +397,7 @@ export class JobProcessor {
         // Lines are independent, so synthesize several at once instead of the
         // old one-at-a-time loop; a 60-line video used to spend a full minute here.
         // Edge is a keyless public endpoint that serves many parallel lines, so it
-        // runs wider than the metered providers (Gemini TTS has a real quota).
+        // runs wide: it is the only voice engine the site uses.
         const defaultTtsConcurrency = ttsProvider.name === 'edge' ? 6 : 3;
         const ttsConcurrency = Math.max(
           1,
@@ -691,8 +691,9 @@ export class JobProcessor {
       } else if (/\(402\)|\(403\)|quota|billing/i.test(errMsg)) {
         friendlyKhmer =
           'គណនី AI គ្មានសិទ្ធិ ឬអស់កូតា។ សូមពិនិត្យគណនី Groq របស់អ្នក។ (AI account permission or quota problem.)';
-      } else if (errMsg.includes('API key') || errMsg.includes('Gemini')) {
-        friendlyKhmer = 'សេវាកម្ម AI Gemini មិនទាន់បានកំណត់រចនាសម្ព័ន្ធ ឬមានបញ្ហាតភ្ជាប់ទេ។';
+      } else if (errMsg.includes('API key')) {
+        friendlyKhmer =
+          'មិនទាន់បានកំណត់ API key សម្រាប់ AI ឬ key នោះមានបញ្ហាតភ្ជាប់ទេ។ សូមពិនិត្យ GROQ_API_KEY។';
       } else if (errMsg.includes('TTS') || errMsg.includes('synthesize')) {
         friendlyKhmer = 'មិនអាចបង្កើតសំឡេងខ្មែរបានទេ សូមពិនិត្យការកំណត់សំឡេង។';
       } else if (errMsg.includes('Quality verification')) {

@@ -80,8 +80,6 @@ export function App() {
    * the translation is configured, instead of only in the job log.
    */
   const [translationEngine, setTranslationEngine] = useState<string | null>(null);
-  /** The service that takes over if the one above fails, when there is one. */
-  const [translationFallback, setTranslationFallback] = useState<string | null>(null);
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -309,13 +307,11 @@ export function App() {
             ? `${status.translation.provider} · ${status.translation.model}`
             : null
         );
-        setTranslationFallback(status.translation?.fallbackProvider || null);
       })
       .catch(() => {
         if (cancelled) return;
         setDemucsNotice(null);
         setTranslationEngine(null);
-        setTranslationFallback(null);
       });
 
     return () => {
@@ -488,7 +484,6 @@ export function App() {
                   onChange={setSettings}
                   disabled={isUploading}
                   engine={translationEngine}
-                  engineFallback={translationFallback}
                 />
               </div>
             )}

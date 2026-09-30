@@ -8,8 +8,8 @@ const GROQ_BASE_URL = 'https://api.groq.com/openai/v1';
  * Groq enforces no server-side deadline, so a connection that stalls keeps the
  * whole stage waiting on a socket that will never answer — and nothing else in
  * the job can move until this call returns. A stalled request is therefore not a
- * slow request, it is a stuck one. The Gemini rotation already bounds its calls;
- * this gives Groq the same ceiling so the retry below can take over instead.
+ * slow request, it is a stuck one. Every provider call in this app goes to Groq,
+ * so this ceiling is what keeps the retry below able to take over instead.
  */
 const GROQ_REQUEST_TIMEOUT_MS = Number(process.env.GROQ_REQUEST_TIMEOUT_MS || '60000');
 

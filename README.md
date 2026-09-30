@@ -23,17 +23,17 @@ Six steps, in the order the studio shows them:
 
 | Step | Engine |
 | --- | --- |
-| 1. Video | upload + FFmpeg audio extraction |
-| 2. បំបែកសំឡេងមនុស្សចេញ | Demucs (remote stem API) |
-| 3. បម្លែងសំឡេងទៅជាអក្សរ | Whisper via Groq `whisper-large-v3` |
-| 4. បកប្រែទៅខ្មែរ | Gemini / Groq — the only step any language model runs |
-| 5. បង្កើតសំឡេងពីអក្សរ | Microsoft Edge TTS (free, unlimited) |
-| 6. ដាក់សំឡេងខ្មែរចូលវីដេអូ | FFmpeg (bundled in the image) — mix + render MP4 |
+| 1. Upload Video | upload + FFmpeg audio extraction |
+| 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
+| 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
+| 4. Groq API | Groq — the only language model the site runs |
+| 5. Subtitle · Piper TTS | subtitles + Khmer TTS (the keyless Edge `km-KH` voices) |
+| 6. FFmpeg → Sync Audio + Video | FFmpeg (bundled in the image) — mix on the original timestamps + render MP4 |
 
-### Timing
+### Sync (row 6)
 
-There is no separate timing step. The voice is already in time when the last row
-starts, and it costs nothing extra:
+There is no separate timing row: the sync happens inside the last step. The voice
+is already in time when that row starts, and it costs nothing extra:
 
 - The assembler places every line at its own timestamp (`adelay`), trims it to the
   window the synthesizer was given, and pads the track to the video's length

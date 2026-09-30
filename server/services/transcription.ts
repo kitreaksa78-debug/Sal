@@ -549,6 +549,8 @@ export function getTranscriptionProvider(): TranscriptionProvider {
     return new GroqTranscriptionProvider();
   }
 
-  // Default to high-performance Gemini Transcription
-  return new GeminiTranscriptionProvider();
+  // The site runs one speech-to-text service. Groq Whisper is the default even
+  // when no key is set, so the job reports a missing key instead of quietly
+  // reaching for a second provider.
+  return new GroqTranscriptionProvider();
 }

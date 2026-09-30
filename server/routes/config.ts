@@ -10,8 +10,6 @@ import {
 } from '../services/audioSeparation.js';
 import { getSeparatorConnection } from '../services/separatorSettings.js';
 import { SystemConfigStatus } from '../types.js';
-import { getGeminiApiKeys } from '../utils/aiKeys.js';
-import { getGeminiModels } from '../utils/gemini.js';
 
 const router = express.Router();
 
@@ -20,30 +18,21 @@ router.get('/status', async (req: Request, res: Response) => {
   const storage = getStorage();
   const storageInfo = storage.getInfo();
 
-  // Translation survives the free tier by rotating models and then keys, so both
-  // counts are reported: "why is it slower today" has an answer on this screen.
-  const geminiKeys = getGeminiApiKeys();
-  const geminiModels = getGeminiModels();
-  const geminiConfigured = geminiKeys.length > 0;
-  const geminiModel = geminiModels[0];
-
   const sttInstance = getTranscriptionProvider();
   const sttConfigured = sttInstance.isConfigured();
   const sttProvider = sttInstance.name;
   const sttModel =
     sttProvider === 'assemblyai'
       ? 'AssemblyAI Conformer-2 + Diarization'
-      : sttProvider === 'groq'
-      ? process.env.GROQ_STT_MODEL || 'whisper-large-v3'
-      : process.env.STT_MODEL || 'gemini-3.5-transcribe';
+      : process.env.GROQ_STT_MODEL || 'whisper-large-v3';
 
   const translationService = getTranslationService();
   // Reported from the same helpers the pipeline sends its requests with, so this
-  // screen can never name a model the job would not actually use.
-  const translationFallbackModels =
-    translationService.getProviderName() === 'gemini'
-      ? translationService.getFallbackModelNames().slice(1)
-      : getGroqTranslationFallbacks().filter((m) => m !== translationService.getModelName());
+  // screen can never name a model the job would not actually use. Groq is the
+  // only provider, so the rotation shown here is Groq's own model list.
+  const translationFallbackModels = getGroqTranslationFallbacks().filter(
+    (m) => m !== translationService.getModelName()
+  );
 
   const ttsInstance = getTTSProvider();
   const ttsConfigured = ttsInstance.isConfigured();
@@ -62,20 +51,11 @@ router.get('/status', async (req: Request, res: Response) => {
   const videoSegmentSeconds = parseInt(process.env.VIDEO_SEGMENT_SECONDS || '300', 10);
 
   const status: SystemConfigStatus = {
-    gemini: {
-      configured: geminiConfigured,
-      model: geminiModel,
-      keys: geminiKeys.length,
-      models: geminiModels,
-    },
     translation: {
       configured: translationService.isConfigured(),
       provider: translationService.getProviderName(),
       model: translationService.getModelName(),
       fallbackModels: translationFallbackModels,
-      // Which service takes over when the one above fails a block, so the panel
-      // can say "Gemini, then Groq" instead of leaving the order implicit.
-      fallbackProvider: translationService.getFallbackProviderName() ?? undefined,
     },
     stt: {
       configured: sttConfigured,
