@@ -16,28 +16,6 @@ function slotDuration(seg: DialogueSegment): number {
   return Math.max(0.3, seg.end - seg.start);
 }
 
-/** What the sync step found and what it changed. */
-export interface DialogueSyncReport {
-  /** Lines that carry generated Khmer audio. */
-  lines: number;
-  /** Spoken stretches measured in the assembled track. */
-  spoken: number;
-  /** Lines whose voice begins where their mouth begins, within the tolerance. */
-  onTime: number;
-  /** Largest distance between a mouth start and the voice placed for it, in ms. */
-  worstOnsetMs: number;
-  /** Lines with no measurable voice in the assembled track. */
-  silent: number;
-  /** Length of the dialogue track before it was fitted to the video. */
-  trackSeconds: number;
-  /**
-   * Where the voice really is, so the mixer can duck the background around it.
-   * Empty when the track could not be measured; the caller then falls back to the
-   * segments' own windows.
-   */
-  voiceWindows: { start: number; end: number }[];
-}
-
 export class AudioMixingService {
   /**
    * Assembles all individual dialogue audio segments onto a single master dialogue track
@@ -146,108 +124,14 @@ export class AudioMixingService {
   }
 
   /**
-   * Make the generated Khmer voice land on the picture.
-   *
-   * Two things have to hold for a dub to look synchronised, and this is the step
-   * that establishes both:
-   *
-   *  1. every line starts where its mouth starts. The assembler places each line at
-   *     its own timestamp; this measures the finished track (`silencedetect`) rather
-   *     than trusting the filter graph, so a line that ended up somewhere else is
-   *     reported to the job instead of shipped quietly;
-   *  2. the dialogue track is exactly as long as the video. A track that is short
-   *     makes the whole release end early and one that is long plays the last frames
-   *     in silence — see `FFmpegHelper.fitAudioToDuration`, and the render, which
-   *     now caps at the video's own length for the same reason.
-   *
-   * The measured voice windows come back so the mixer ducks the background around
-   * the voice that is really there: the music rises the moment the Khmer line ends,
-   * instead of staying dipped through the rest of the original speaker's window.
-   */
-  public static async syncDialogueToTimeline(
-    segments: DialogueSegment[],
-    totalDuration: number,
-    speechTrackPath: string,
-    options: { speechWindows?: Map<string, number> } = {}
-  ): Promise<DialogueSyncReport> {
-    const voiced = segments.filter((seg) => seg.audioFile && fs.existsSync(seg.audioFile));
-    const toleranceMs = Number(process.env.SYNC_TOLERANCE_MS || '250');
-
-    const trackSeconds = await FFmpegHelper.getAudioDuration(speechTrackPath);
-    const voiceWindows = await FFmpegHelper.detectSpeechWindows(speechTrackPath);
-
-    let onTime = 0;
-    let silent = 0;
-    let worstOnsetMs = 0;
-
-    for (const seg of voiced) {
-      // The spoken stretch that belongs to this line is the one nearest to its
-      // mouth start; anything further away than the tolerance means the voice for
-      // that line is not where the picture expects it.
-      let bestGap = Number.POSITIVE_INFINITY;
-      for (const window of voiceWindows) {
-        const gap = Math.abs(window.start - seg.start);
-        if (gap < bestGap) bestGap = gap;
-      }
-
-      if (!Number.isFinite(bestGap) || bestGap * 1000 > toleranceMs) {
-        silent++;
-        continue;
-      }
-
-      onTime++;
-      worstOnsetMs = Math.max(worstOnsetMs, Math.round(bestGap * 1000));
-    }
-
-    // Fit the track to the video before anything downstream uses it.
-    if (totalDuration > 0 && Math.abs(trackSeconds - totalDuration) > 0.01) {
-      const fittedPath = `${speechTrackPath}.synced.wav`;
-      const measured = await FFmpegHelper.fitAudioToDuration(
-        speechTrackPath,
-        fittedPath,
-        totalDuration
-      );
-      fs.renameSync(fittedPath, speechTrackPath);
-      logger.info(
-        `Sync: dialogue track ${trackSeconds.toFixed(2)}s -> ${measured.toFixed(
-          2
-        )}s to match the ${totalDuration.toFixed(2)}s video.`
-      );
-    } else if (voiced.length > 0) {
-      logger.info(
-        `Sync: dialogue track already matches the video (${trackSeconds.toFixed(2)}s).`
-      );
-    }
-
-    logger.info(
-      `Sync: ${onTime}/${voiced.length} line(s) start on the mouth (${
-        voiceWindows.length
-      } spoken stretch(es) measured, worst onset ${worstOnsetMs}ms).`
-    );
-
-    return {
-      lines: voiced.length,
-      spoken: voiceWindows.length,
-      onTime,
-      worstOnsetMs,
-      silent,
-      trackSeconds,
-      voiceWindows,
-    };
-  }
-
-  /**
    * Intelligently mix dubbed Khmer dialogue track with background music/ambient audio (no_vocals.wav)
    *
    * `segments` supplies the dialogue windows: the background is ducked inside them so
    * the original voices cannot be heard under the Khmer dub, while the music is kept
    * at full quality everywhere else. Windows are sorted and merged so the gate
-   * expression is short and never flickers on overlapping timestamps.
-   *
-   * `dialogueWindows` overrides them when the sync step has measured where the
-   * voice really is, which is the difference between the music coming back when the
-   * Khmer line ends and it coming back when the original speaker's mouth window
-   * ended.
+   * expression is short and never flickers on overlapping timestamps. These are the
+   * same windows the synthesizer was given, so the music comes back exactly where
+   * the Khmer line stops.
    */
   public static async mixDubbedWithBackground(
     speechTrackPath: string,
@@ -256,24 +140,19 @@ export class AudioMixingService {
     settings: JobSettings,
     options: {
       segments?: DialogueSegment[];
-      /** Measured voice windows; used instead of the segments' windows when given. */
-      dialogueWindows?: { start: number; end: number }[];
       backgroundHasOriginalVoice?: boolean;
       /** Reported while the mix is written, so a slow host still shows movement. */
       onProgress?: (writtenSeconds: number) => void;
     } = {}
   ): Promise<string> {
-    const source =
-      options.dialogueWindows && options.dialogueWindows.length > 0
-        ? options.dialogueWindows
-        : (options.segments || [])
-            .filter(
-              (segment) =>
-                Number.isFinite(segment.start) &&
-                Number.isFinite(segment.end) &&
-                segment.end > segment.start
-            )
-            .map((segment) => ({ start: segment.start, end: segment.end }));
+    const source = (options.segments || [])
+      .filter(
+        (segment) =>
+          Number.isFinite(segment.start) &&
+          Number.isFinite(segment.end) &&
+          segment.end > segment.start
+      )
+      .map((segment) => ({ start: segment.start, end: segment.end }));
 
     const raw = [...source].sort((a, b) => a.start - b.start);
 

@@ -46,7 +46,6 @@ export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
   detecting_speakers: 'កំពុងកំណត់អត្តសញ្ញាណអ្នកនិយាយ...',
   translating: 'កំពុងបកប្រែទៅខ្មែរ (Gemini / Translator)...',
   generating_voice: 'កំពុងបង្កើតសំឡេងពីអក្សរ (Khmer TTS)...',
-  syncing: 'កំពុងធ្វើឱ្យសំឡេងដែលបានបង្កើត ត្រូវពេលជាមួយវីដេអូ (Sync)...',
   mixing: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ ជាមួយភ្លេងផ្ទៃខាងក្រោយ...',
   rendering: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ — Render MP4 ចុងក្រោយ (H.264/AAC)...',
   quality_check: 'កំពុងត្រួតពិនិត្យវីដេអូចុងក្រោយ...',
@@ -63,7 +62,6 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
   detecting_speakers: 'Identifying speakers and vocal characteristics...',
   translating: 'Gemini / Translator: translating to Khmer...',
   generating_voice: 'Khmer TTS: generating Khmer voice from the Khmer text...',
-  syncing: 'Sync: lining the generated voice up with the video...',
   mixing: 'Writing the Khmer voice back into the video, under the music...',
   rendering: 'Writing the Khmer voice back into the video: final H.264/AAC MP4...',
   quality_check: 'Checking the finished video...',
@@ -72,15 +70,13 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
 };
 
 /**
- * Progress percentage mapping, spread across the seven steps the studio shows:
+ * Progress percentage mapping, spread across the six steps the studio shows:
  *
- *   Video → Demucs → Whisper → Gemini/Translator → Khmer TTS → Sync → ដាក់សំឡេងចូលវីដេអូ
+ *   Video → Demucs → Whisper → Gemini/Translator → Khmer TTS → ដាក់សំឡេងចូលវីដេអូ
  *
  * `detecting_speakers` is no longer reported — speaker naming happens inside the
  * Whisper pass — but it stays in the map because jobs recorded before that change
- * still carry it. `syncing` is the sync step: the generated voice is measured
- * against the picture and the dialogue track is fitted to the video's exact length
- * before the mix.
+ * still carry it.
  */
 const STATUS_PROGRESS: Record<JobStatus, number> = {
   queued: 5,
@@ -91,7 +87,6 @@ const STATUS_PROGRESS: Record<JobStatus, number> = {
   detecting_speakers: 48,
   translating: 56,
   generating_voice: 68,
-  syncing: 76,
   mixing: 84,
   rendering: 92,
   quality_check: 97,
@@ -511,30 +506,10 @@ export class JobProcessor {
           { speechWindows }
         );
 
-        // SYNC — the generated voice is lined up with the picture before it is
-        // mixed in. The lines were placed on their own timestamps by the
-        // assembler; this measures the result, fits the track to the video's exact
-        // length, and hands the real voice windows to the mixer so the music comes
-        // back the moment a Khmer line ends rather than when the original mouth
-        // window did.
-        await this.throwIfCancelled(jobId);
-        await this.updateJobState(jobId, 'syncing');
-        const syncReport = await AudioMixingService.syncDialogueToTimeline(
-          dialogueSegments,
-          meta.duration,
-          masterSpeechTrack,
-          { speechWindows }
-        );
-        markStage('sync');
-
-        if (syncReport.silent > 0) {
-          logger.warn(
-            `Job ${jobId}: ${syncReport.silent} of ${syncReport.lines} line(s) could not be found where the picture expects them.`
-          );
-          await addWarning(
-            `សំឡេងខ្មែរ ${syncReport.silent} បន្ទាត់ក្នុងចំណោម ${syncReport.lines} មិនអាចវាស់ទីតាំងត្រូវនឹងវីដេអូបានទេ — សូមពិនិត្យថាសំឡេងដើមក្នុងវីដេអូមិនមានការពន្យារពេល។ (${syncReport.silent} of ${syncReport.lines} Khmer line(s) could not be confirmed at their mouth position.)`
-          );
-        }
+        // The assembler already placed every line on its own timestamp and padded
+        // the track to the video's length, and the render caps the result at that
+        // same length, so the voice is in time without a measuring pass in
+        // between — which is one fewer full-length audio decode per job.
 
         // Mixing walks the whole track and is the slowest step on a small host,
         // so it reports how much audio it has written instead of leaving the bar
@@ -562,8 +537,6 @@ export class JobProcessor {
           job.settings,
           {
             segments: dialogueSegments,
-            // Duck around the voice that is really there, as the sync step measured it.
-            dialogueWindows: syncReport.voiceWindows,
             backgroundHasOriginalVoice: separationResult.backgroundHasOriginalVoice,
             onProgress: reportMixProgress,
           }

@@ -57,49 +57,6 @@ export const RENDER_ENCODER_ARGS = (process.env.FFMPEG_RENDER_ARGS || '-preset v
   .split(/\s+/)
   .filter(Boolean);
 
-/**
- * Turn FFmpeg's `silencedetect` log into the stretches where speech actually is.
- *
- * `silencedetect` reports only the silences (`silence_start` / `silence_end`), so
- * the spoken parts are what lies between them: from the previous silence's end (or
- * the file's start) to the next silence's start (or the file's end).
- */
-export function parseSpeechWindows(
-  log: string,
-  totalSeconds: number
-): { start: number; end: number }[] {
-  const openSilences: number[] = [];
-  const silences: { start: number; end: number }[] = [];
-
-  for (const line of log.split('\n')) {
-    const starts = /silence_start:\s*(-?[\d.]+)/.exec(line);
-    if (starts) {
-      openSilences.push(Math.max(0, Number(starts[1])));
-      continue;
-    }
-    const ends = /silence_end:\s*(-?[\d.]+)/.exec(line);
-    if (ends && openSilences.length > 0) {
-      const from = openSilences.pop()!;
-      silences.push({ start: from, end: Math.max(from, Number(ends[1])) });
-    }
-  }
-
-  silences.sort((a, b) => a.start - b.start);
-
-  const windows: { start: number; end: number }[] = [];
-  let cursor = 0;
-  for (const silence of silences) {
-    if (silence.start - cursor > 0.05) windows.push({ start: cursor, end: silence.start });
-    cursor = Math.max(cursor, silence.end);
-  }
-  // A track that ends in speech has no closing silence to close the window.
-  if (Number.isFinite(totalSeconds) && totalSeconds - cursor > 0.05) {
-    windows.push({ start: cursor, end: totalSeconds });
-  }
-
-  return windows;
-}
-
 /** Optional behaviour for one FFmpeg run. */
 export interface FfmpegRunOptions {
   /** Receives the seconds FFmpeg has written. Requires `totalSeconds`. */
@@ -300,77 +257,6 @@ export class FFmpegHelper {
     } catch (e) {
       logger.warn(`Failed to get duration for ${audioPath}:`, e);
       return 0;
-    }
-  }
-
-  /**
-   * Make a track exactly as long as the video.
-   *
-   * A dub that is a fraction of a second short makes a release end early (the
-   * render is capped at the shorter stream), and one that is longer plays the last
-   * frames in silence — both are the same complaint, that the sound and the picture
-   * do not match in time. So the dialogue track is padded or trimmed to the video's
-   * own length during the sync step, and the render is capped at that length too.
-   */
-  public static async fitAudioToDuration(
-    inputAudioPath: string,
-    outputAudioPath: string,
-    durationSeconds: number
-  ): Promise<number> {
-    if (!Number.isFinite(durationSeconds) || durationSeconds <= 0) {
-      if (path.resolve(inputAudioPath) !== path.resolve(outputAudioPath)) {
-        fs.copyFileSync(inputAudioPath, outputAudioPath);
-      }
-      return await this.getAudioDuration(outputAudioPath);
-    }
-
-    await this.execute([
-      '-y',
-      '-i',
-      inputAudioPath,
-      '-af',
-      `apad=whole_dur=${durationSeconds.toFixed(3)},atrim=end=${durationSeconds.toFixed(3)},asetpts=PTS-STARTPTS`,
-      '-ar',
-      '44100',
-      '-ac',
-      '2',
-      outputAudioPath,
-    ]);
-
-    return await this.getAudioDuration(outputAudioPath);
-  }
-
-  /**
-   * Where the voice actually is in a track, as FFmpeg measures it.
-   *
-   * The assembler places each line where the mouth is *supposed* to start; this
-   * is how the sync step checks that the finished track really does start there,
-   * instead of trusting its own filter graph. The same measurement is what the
-   * mixer ducks the music around: the background rises exactly where the Khmer
-   * voice stops, not where the original speaker's mouth window happened to end.
-   */
-  public static async detectSpeechWindows(
-    audioPath: string
-  ): Promise<{ start: number; end: number }[]> {
-    const threshold = process.env.SYNC_SILENCE_DB || '-35';
-    const minimum = Number(process.env.SYNC_SILENCE_SECONDS || '0.12');
-
-    try {
-      const { stderr } = await this.execute([
-        '-hide_banner',
-        '-nostats',
-        '-i',
-        audioPath,
-        '-af',
-        `silencedetect=noise=${threshold}dB:d=${minimum}`,
-        '-f',
-        'null',
-        '-',
-      ]);
-      return parseSpeechWindows(stderr, await this.getAudioDuration(audioPath));
-    } catch (err) {
-      logger.warn(`Could not measure where the voice sits in ${audioPath}:`, err);
-      return [];
     }
   }
 
