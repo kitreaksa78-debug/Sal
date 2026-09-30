@@ -44,7 +44,7 @@ export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
   separating_audio: 'កំពុងបំបែកសំឡេងមនុស្សចេញដោយ Demucs...',
   transcribing: 'កំពុងបម្លែងសំឡេងទៅជាអក្សរដោយ Whisper...',
   detecting_speakers: 'កំពុងកំណត់អត្តសញ្ញាណអ្នកនិយាយ...',
-  translating: 'កំពុងបកប្រែអត្ថបទទៅភាសាគោលដៅដោយ Groq API...',
+  translating: 'កំពុងបកប្រែអត្ថបទទៅភាសាគោលដៅ (Gemini → Groq)...',
   generating_voice: 'កំពុងបង្កើតសំឡេងពីអក្សរ (Khmer TTS)...',
   mixing: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ ជាមួយភ្លេងផ្ទៃខាងក្រោយ...',
   rendering: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ — Render MP4 ចុងក្រោយ (H.264/AAC)...',
@@ -60,7 +60,7 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
   separating_audio: 'Demucs: separating human voices from the music...',
   transcribing: 'Whisper: converting speech to text...',
   detecting_speakers: 'Identifying speakers and vocal characteristics...',
-  translating: 'Groq API: translating the dialogue to Khmer...',
+  translating: 'Gemini → Groq: translating the dialogue to Khmer...',
   generating_voice: 'Khmer TTS: generating Khmer voice from the Khmer text...',
   mixing: 'Writing the Khmer voice back into the video, under the music...',
   rendering: 'Writing the Khmer voice back into the video: final H.264/AAC MP4...',
@@ -72,7 +72,7 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
 /**
  * Progress percentage mapping, spread across the six steps the studio shows:
  *
- *   Upload → Demucs → Speech-to-Text → Groq → Subtitle · TTS → Sync into video
+ *   Upload → Demucs → Speech-to-Text → Gemini/Groq → Subtitle · TTS → Sync
  *
  * `detecting_speakers` is no longer reported — speaker naming happens inside the
  * Whisper pass — but it stays in the map because jobs recorded before that change

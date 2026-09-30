@@ -213,12 +213,16 @@ export interface GoogleProfile {
 }
 
 export interface SystemConfigStatus {
-  /** Groq is the only translator; `fallbackModels` is its own model rotation. */
+  /** `keys`/`models` describe the free-tier rotation the translator walks. */
+  gemini: { configured: boolean; model: string; keys?: number; models?: string[] };
+  /** `fallbackProvider` is the service that takes over when `provider` fails, and
+   * `fallbackModels` is the model rotation inside it. */
   translation: {
     configured: boolean;
     provider: string;
     model: string;
     fallbackModels?: string[];
+    fallbackProvider?: string;
   };
   stt: { configured: boolean; provider: string; model: string };
   tts: { configured: boolean; provider: string; model: string };

@@ -1,6 +1,13 @@
+import { Type } from '@google/genai';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { groqChatJson, isGroqConfigured, sleep, GroqRateLimit } from '../utils/groq.js';
+import {
+  geminiGenerateJson,
+  getGeminiModels,
+  hasUsableGeminiKey,
+  isGeminiConfigured,
+} from '../utils/gemini.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
 import { DIALOGUE_GAP_SECONDS } from './audioMixing.js';
 import {
@@ -28,7 +35,7 @@ export type TranslationProgressCallback = (
   totalLines: number
 ) => void | Promise<void>;
 
-export type TranslationProviderName = 'groq';
+export type TranslationProviderName = 'groq' | 'gemini';
 
 /**
  * How many dialogue lines go into one translation request.
@@ -45,6 +52,24 @@ export type TranslationProviderName = 'groq';
 const DEFAULT_CHUNK_SIZE = 32;
 
 /**
+ * How many transcript blocks are translated at the same time. Blocks are separate
+ * requests with no dependency between them (each carries the lines around it as
+ * context), so asking several at once is the difference between paying for the
+ * provider's latency once per wave and once per block.
+ */
+const DEFAULT_CONCURRENCY = 4;
+
+/**
+ * How long the configured translation provider is skipped after it fails a
+ * block.
+ *
+ * A provider that just could not answer — every model out of quota, a project
+ * denied access — does not recover inside the same job, and asking it again on
+ * every block is what turns a slow stage into a stalled one.
+ */
+const PRIMARY_DOWN_COOLDOWN_MS = Number(process.env.TRANSLATION_PRIMARY_DOWN_MS || '300000');
+
+/**
  * One line of context handed to a block so names, pronouns and terminology stay
  * consistent across block boundaries.
  */
@@ -55,33 +80,83 @@ export interface ContextLine {
   khmer?: string;
 }
 
+/**
+ * The JSON shape every model answers with. Declared once so the schema a model
+ * is constrained by is exactly the one the caller parses.
+ *
+ * `names` is part of the required shape rather than an extra field a model may
+ * add: both providers are asked for strict JSON, and a strict schema rejects a
+ * property that is not in its `required` list — a line with no proper name is
+ * simply asked for `"names": []`.
+ */
+const TRANSLATION_SCHEMA = {
+  type: Type.OBJECT,
+  properties: {
+    segments: {
+      type: Type.ARRAY,
+      items: {
+        type: Type.OBJECT,
+        properties: {
+          id: { type: Type.STRING },
+          khmer: {
+            type: Type.STRING,
+            description: 'Natural spoken Cambodian Khmer translation',
+          },
+          emotion: {
+            type: Type.STRING,
+            description: 'Detected emotion (e.g. neutral, energetic, calm, dramatic)',
+          },
+          names: {
+            type: Type.ARRAY,
+            description:
+              'Every proper name this line speaks, with the Khmer spelling used for it. Empty array when the line speaks none.',
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                name: {
+                  type: Type.STRING,
+                  description: 'The name exactly as it appears in the source line',
+                },
+                khmer: {
+                  type: Type.STRING,
+                  description:
+                    'The Khmer spelling of that name as used in this line, carrying every part of the name',
+                },
+              },
+              required: ['name', 'khmer'],
+            },
+          },
+        },
+        required: ['id', 'khmer', 'emotion', 'names'],
+      },
+    },
+  },
+  required: ['segments'],
+};
+
 /** Groq's free tier allows 8k tokens/minute; stay just under it to avoid 429s. */
 const TOKEN_BUDGET_PER_MINUTE = Number(process.env.GROQ_TOKENS_PER_MINUTE || '7800');
 
 /**
- * The Groq model that translates Khmer first, and the ones behind it.
+ * The one Groq model the fallback translator uses: `openai/gpt-oss-20b`.
  *
- * The owner's choice is `qwen/qwen3.8-27b`, so it leads. Groq only serves a
- * handful of text models, and all three candidates were measured on the same five
- * English lines (a name, a title, a number, an idiom) through the real dubbing
- * prompt:
+ * The owner asked for Groq to run a single model too, so there is no second
+ * model to move to — when this one is rate-limited the job waits for its window
+ * instead of changing engines, which is what `groqChatJson`'s retry already
+ * does. `DEFAULT_GROQ_TRANSLATION_FALLBACKS` is therefore empty on purpose: an
+ * entry in it would be exactly the second model the owner asked not to use.
  *
- *   qwen/qwen3.8-27b      2.9s  1998 tok  5/5 lines  preferred by the owner
- *   openai/gpt-oss-120b   1.9s  1510 tok  5/5 lines  fastest, keeps "Vladimir Putin" whole
- *   openai/gpt-oss-20b    —     —         rejects the strict JSON schema (HTTP 400)
+ * Measured through the real dubbing prompt (five English lines carrying a name, a
+ * title, a number and an idiom), so this is a deliberate pick and not a leftover:
+ * the model answers in ~0.5s and takes the strict JSON schema the pipeline asks
+ * for (an earlier build saw it refuse that schema with HTTP 400 — it does not any
+ * more; `groqChatJson` still retries in basic JSON mode if a future build does).
  *
- * The 120b model is therefore the first fallback: it answers when the 27b model is
- * rate-limited, and it carries a name the 27b model dropped in that test, so a
- * block that reaches it still gets a complete translation. The 20b model stays
- * last: it spends its turn on a 400 rather than a translation, but a model that
- * cannot take the schema today may be able to tomorrow, and asking it costs one
- * round trip only after the two models that work have both refused.
- *
- * `GROQ_TRANSLATION_MODEL` / `GROQ_TRANSLATION_FALLBACK_MODELS` override both,
- * so the engine can be changed from the host's environment without a redeploy.
+ * `GROQ_TRANSLATION_MODEL` / `GROQ_TRANSLATION_FALLBACK_MODELS` override both, so
+ * the engine can be changed from the host's environment without a redeploy.
  */
-export const DEFAULT_KHMER_TRANSLATION_MODEL = 'qwen/qwen3.8-27b';
-export const DEFAULT_GROQ_TRANSLATION_FALLBACKS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
+export const DEFAULT_KHMER_TRANSLATION_MODEL = 'openai/gpt-oss-20b';
+export const DEFAULT_GROQ_TRANSLATION_FALLBACKS: string[] = [];
 
 /** The Groq model a job's translation blocks are sent to. */
 export function getGroqTranslationModel(): string {
@@ -321,19 +396,27 @@ function buildGlossarySection(glossary: Glossary): string {
 }
 
 /**
- * Which provider a translation stage runs on: Groq, and only Groq.
+ * Which provider a translation stage starts on: Gemini in front, Groq behind it.
  *
- * The site ships one translator. There used to be a Gemini-first order with Groq
- * behind it, but the owner asked for Gemini to be removed from the product
- * entirely, so this is now a single answer with nothing to configure: every
- * block is asked of Groq (`askProvider`), and Groq's own model list
- * (`GROQ_TRANSLATION_MODEL` + `GROQ_TRANSLATION_FALLBACK_MODELS`, see
- * DEFAULT_GROQ_TRANSLATION_FALLBACKS) is what covers a model that is
- * rate-limited. `TRANSLATION_PROVIDER` is not consulted — with one provider
- * there is no order to pin.
+ * That order is the product decision, so it lives in the code rather than in a
+ * deployment setting: the stage asks Gemini for every block, and the moment
+ * Gemini cannot answer one (`requestTranslation`) the rest of the job — and the
+ * next five minutes — go to Groq without asking Gemini again. Inside Gemini the
+ * model rotation then walks the flash models that this account's free tier does
+ * serve, so a spent Pro allowance or a rejected key costs one round trip and not
+ * the stage.
+ *
+ * `TRANSLATION_PROVIDER` is deliberately not consulted any more. It used to name
+ * the provider to start on, which is how this deployment was pinned to Groq; the
+ * owner has since asked for Gemini first with Groq after an error, and the only
+ * thing that should take Gemini out of the front position is Gemini having no key
+ * left to ask — a provider that cannot answer must never be waited on. Falling
+ * back needs no setting: the other configured provider is picked up by itself.
  */
 export function resolveTranslationProvider(): TranslationProviderName {
-  return 'groq';
+  const geminiUsable = isGeminiConfigured() && hasUsableGeminiKey();
+  if (geminiUsable) return 'gemini';
+  return isGroqConfigured() ? 'groq' : 'gemini';
 }
 
 /**
@@ -355,8 +438,20 @@ const SOURCE_LANGUAGE_NAMES: Record<string, string> = {
 export class KhmerDubTranslationService {
   private modelName: string;
   private provider: TranslationProviderName;
-  /** Serialises block calls; see `askProvider`. */
-  private callQueue: Promise<void> = Promise.resolve();
+  /** Wall-clock time until which the configured provider is not asked again. */
+  private primaryDownUntil = 0;
+  /**
+   * The other provider, once the configured one has failed this job.
+   *
+   * Once the configured provider is down, asking it again is pure loss, so every
+   * remaining block goes to this one. `direct` says how: Gemini tolerates several
+   * blocks in flight, so it is asked straight from the block; Groq's free tier
+   * caps tokens per minute, so its blocks keep queueing through the paced fallback
+   * path instead of trading a dead provider for a 429 storm.
+   */
+  private promotedProvider: { name: TranslationProviderName; direct: boolean } | null = null;
+  /** Serialises fallback calls; see `askFallback`. */
+  private fallbackQueue: Promise<void> = Promise.resolve();
   /** One agreed Khmer spelling per name, filled in as blocks answer; see buildConfirmedNameSection. */
   private confirmedNames = new Map<string, { name: string; khmer: string }>();
   /** Providers that actually answered a block; reported by the job's log line. */
@@ -364,7 +459,10 @@ export class KhmerDubTranslationService {
 
   constructor() {
     this.provider = resolveTranslationProvider();
-    this.modelName = getGroqTranslationModel();
+    // Gemini's clients are created per request inside the rotation, because a
+    // block may end up on any model and any key.
+    this.modelName =
+      this.provider === 'groq' ? getGroqTranslationModel() : getGeminiModels()[0];
   }
 
   public getProviderName(): TranslationProviderName {
@@ -376,7 +474,12 @@ export class KhmerDubTranslationService {
   }
 
   public isConfigured(): boolean {
-    return isGroqConfigured();
+    return this.provider === 'groq' ? isGroqConfigured() : isGeminiConfigured();
+  }
+
+  /** Every model the Gemini rotation may use, best first. */
+  public getFallbackModelNames(): string[] {
+    return this.provider === 'gemini' ? getGeminiModels() : [];
   }
 
   /** How many dialogue lines go into a single model request. */
@@ -388,13 +491,19 @@ export class KhmerDubTranslationService {
   }
 
   /**
-   * How many blocks are in flight at once: one.
+   * How many blocks are in flight at once.
    *
-   * Groq's free tier caps tokens per minute, where overlapping requests only earn
-   * a 429, so its blocks stay strictly sequential and paced.
+   * Gemini tolerates several concurrent calls, so its blocks overlap. Groq's free
+   * tier caps tokens per minute, where overlapping requests only earn a 429, so its
+   * blocks stay strictly sequential and paced.
    */
   public getConcurrency(): number {
-    return 1;
+    if (this.provider === 'groq') return 1;
+
+    const configured = Number(process.env.TRANSLATION_CONCURRENCY);
+    return Number.isFinite(configured) && configured >= 1
+      ? Math.floor(configured)
+      : DEFAULT_CONCURRENCY;
   }
 
   /**
@@ -803,11 +912,11 @@ Return JSON containing exactly ${
   }
 
   /**
-   * Send one block to Groq and return its raw JSON text.
+   * Dispatch one block to one provider and return its raw JSON text.
    *
-   * The model is named here rather than read from `this.modelName` so the
-   * helper and the status screen can never drift apart: both read
-   * `getGroqTranslationModel()`.
+   * The Groq model is named here rather than read from `this.modelName`: Groq is
+   * also reached as the *fallback* while Gemini is the configured provider, and
+   * the two model names must never be confused with each other.
    */
   private async askProvider(
     provider: TranslationProviderName,
@@ -874,29 +983,104 @@ Return JSON containing exactly ${
       return answer;
     }
 
+    // The rotation lives in `utils/gemini.ts`: it walks the free-tier models and
+    // then the configured keys, so one model whose quota is spent (or one key
+    // that is rejected) cannot stop a job — the next block simply asks the next
+    // model for the same JSON.
+    const answer = await geminiGenerateJson({
+      systemInstruction,
+      userPrompt,
+      temperature: 0.3,
+      operationName: 'Khmer dubbing translation',
+      responseSchema: TRANSLATION_SCHEMA as unknown as Record<string, unknown>,
+    });
+    this.answeredProviders.add('gemini');
+
+    return {
+      content: answer.content,
+      // Gemini reports real usage; the estimate is only a fallback for the rare
+      // answer that comes back without it (the caller uses this to pace blocks).
+      totalTokens: answer.totalTokens || estimateTokens(systemInstruction + userPrompt) + 400,
+    };
   }
 
   /**
-   * Ask Groq for one block, one call at a time.
+   * Ask the configured provider for one block, and — when it cannot answer —
+   * the other configured provider for exactly the same JSON.
    *
-   * Groq's free tier caps tokens per minute and answers a second simultaneous
-   * block with a 429, and a 429 costs up to a minute of waiting — so calls are
-   * chained (one in flight, ever) and paced against the allowance Groq itself
-   * reports on the answer. Nothing here changes the requested JSON: the same
-   * lines, in the same shape, from the one provider.
+   * A free tier runs dry in ways the model rotation cannot paper over: measured
+   * on this project, one Gemini key was denied access for its whole project
+   * (403) while the other answered "high demand" (503) for every model and then
+   * "exceeded your current quota" (429), with a single stalled call taking 52
+   * seconds. Retrying that inside every block is what makes the translation
+   * stage the slow one, so a provider that has just failed is put aside for a
+   * while (`primaryDownUntil`) and the blocks that follow go straight to the
+   * provider that is actually answering. Nothing about the requested JSON
+   * changes — the same lines, in the same shape, from the other service.
    */
   private async requestTranslation(
     systemInstruction: string,
     userPrompt: string
   ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
+    // The promoted provider is the stage's provider from here on, so no block
+    // ever re-tests the one that just failed.
+    if (this.promotedProvider) {
+      return this.promotedProvider.direct
+        ? this.askProvider(this.promotedProvider.name, systemInstruction, userPrompt)
+        : this.askFallback(this.promotedProvider.name, systemInstruction, userPrompt);
+    }
+
+    const secondary = this.secondaryProviderName();
+    if (!secondary) return this.askProvider(this.provider, systemInstruction, userPrompt);
+
+    if (Date.now() < this.primaryDownUntil) {
+      this.promoteSecondary(secondary);
+      return this.askFallback(secondary, systemInstruction, userPrompt);
+    }
+
+    try {
+      return await this.askProvider(this.provider, systemInstruction, userPrompt);
+    } catch (err: any) {
+      // Not a per-block problem (that is handled by the rescue passes): the
+      // provider itself could not answer, so the rest of the job runs on the
+      // other one — which is also remembered here, so the next job starts there
+      // instead of repeating a sweep that just failed.
+      this.primaryDownUntil = Date.now() + PRIMARY_DOWN_COOLDOWN_MS;
+      this.promoteSecondary(secondary);
+      logger.warn(
+        `${this.provider} could not answer a translation block (${
+          err?.message ?? err
+        }); the rest of this job runs on ${secondary}, and ${secondary} is used for the next ${Math.round(
+          PRIMARY_DOWN_COOLDOWN_MS / 60_000
+        )} minute(s) without asking ${this.provider} first.`
+      );
+      return this.askFallback(secondary, systemInstruction, userPrompt);
+    }
+  }
+
+  /**
+   * Run one fallback call at a time, waiting for the key's window when needed.
+   *
+   * The two providers have different shapes: Gemini tolerates several blocks in
+   * flight, while Groq's free tier caps tokens per minute and answers a second
+   * simultaneous block with 429 — and a 429 costs up to a minute of waiting, so
+   * trading one slow provider for another would be no improvement. Fallback
+   * calls are therefore chained (one in flight, ever) and paced against the
+   * allowance Groq itself reports on the answer.
+   */
+  private async askFallback(
+    provider: TranslationProviderName,
+    systemInstruction: string,
+    userPrompt: string
+  ): Promise<{ content: string; totalTokens: number; rateLimit?: GroqRateLimit }> {
     const run = async () => {
-      const answer = await this.askProvider(this.provider, systemInstruction, userPrompt);
-      if (answer.rateLimit && answer.totalTokens > 0) {
+      const answer = await this.askProvider(provider, systemInstruction, userPrompt);
+      if (provider === 'groq' && answer.rateLimit && answer.totalTokens > 0) {
         if (answer.rateLimit.remainingTokens < answer.totalTokens * 1.5) {
           const waitMs = Math.min(65_000, answer.rateLimit.resetMs);
           if (waitMs >= 250) {
             logger.info(
-              `Waiting ${(waitMs / 1000).toFixed(1)}s for Groq's token window to refill.`
+              `Waiting ${(waitMs / 1000).toFixed(1)}s for the fallback provider's token window to refill.`
             );
             await sleep(waitMs);
           }
@@ -905,13 +1089,38 @@ Return JSON containing exactly ${
       return answer;
     };
 
-    const queued = this.callQueue.then(run, run);
+    const queued = this.fallbackQueue.then(run, run);
     // The queue itself must never reject: the next block still has to run.
-    this.callQueue = queued.then(
+    this.fallbackQueue = queued.then(
       () => undefined,
       () => undefined
     );
     return queued;
+  }
+
+  /**
+   * Hand the rest of the job to `provider`; see `promotedProvider` for what
+   * "direct" buys and when it is withheld.
+   */
+  private promoteSecondary(provider: TranslationProviderName): void {
+    if (this.promotedProvider) return;
+    this.promotedProvider = { name: provider, direct: provider !== 'groq' };
+  }
+
+  /**
+   * The other provider this project has credentials for, if any — the one every
+   * remaining block goes to once the lead provider fails one. Public because the
+   * status screen reports it: "Gemini in front, Groq after an error" is a promise
+   * the owner should be able to read back, not just take on trust.
+   */
+  public getFallbackProviderName(): TranslationProviderName | null {
+    return this.secondaryProviderName();
+  }
+
+  /** The other provider this project has credentials for, if any. */
+  private secondaryProviderName(): TranslationProviderName | null {
+    if (this.provider === 'groq') return isGeminiConfigured() ? 'gemini' : null;
+    return isGroqConfigured() ? 'groq' : null;
   }
 
   /**

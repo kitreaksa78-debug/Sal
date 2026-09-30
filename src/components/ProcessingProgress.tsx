@@ -33,10 +33,10 @@ interface StepItem {
  * what was already guaranteed would cost a full-length audio pass and show nothing
  * new.
  *
- * Groq is the only model provider in this list: it translates the dialogue, and the
- * speech-to-text step runs on Groq Whisper too. Subtitle files and the Khmer voice
- * are produced on the server itself — no language model is asked to do either of
- * them.
+ * Gemini translates the dialogue and Groq takes over the moment Gemini cannot
+ * answer a block, so row 4 names both. The speech-to-text step runs on Groq
+ * Whisper, and the subtitle files and the Khmer voice are produced on the server
+ * itself — no language model is asked to do either of them.
  */
 const PIPELINE_STAGES: StepItem[] = [
   {
@@ -60,7 +60,7 @@ const PIPELINE_STAGES: StepItem[] = [
   {
     id: 'translating',
     khmer: 'បកប្រែអត្ថបទទៅភាសាគោលដៅ',
-    english: 'Groq API',
+    english: 'Gemini → Groq',
     associatedStatuses: ['translating'],
   },
   {
@@ -82,7 +82,7 @@ const PIPELINE_STAGES: StepItem[] = [
  * said under the list so it travels with what it describes.
  */
 const ENGINE_NOTE =
-  'Groq ជាម៉ាស៊ីនតែមួយគត់ដែលប្រើ AI — បកប្រែអត្ថបទទៅភាសាគោលដៅ និងស្តាប់ចាប់អក្សរ (Groq Whisper)។ អក្សររត់ (Subtitle) និងសំឡេងបកប្រែ បង្កើតនៅលើម៉ាស៊ីនបម្រើផ្ទាល់។ (Groq is the only AI service: it translates the text and runs the speech-to-text step. Subtitles and the Khmer voice are produced on the server itself.)';
+  'ការបកប្រែប្រើ Gemini មុន (key ១ រួច key ២ ពេលអស់កូតាប្រចាំថ្ងៃ) ហើយ Groq ចូលជំនួសវិញភ្លាមពេល Gemini មិនអាចឆ្លើយបាន។ ការស្តាប់ចាប់អក្សរប្រើ Groq Whisper ហើយអក្សររត់ (Subtitle) និងសំឡេងបកប្រែ បង្កើតនៅលើម៉ាស៊ីនបម្រើផ្ទាល់។ (Translation runs on Gemini first — key #1, then key #2 when a key\'s daily quota is spent — with Groq taking over the moment Gemini cannot answer a block. Speech-to-text runs on Groq Whisper; subtitles and the Khmer voice are produced on the server itself.)';
 
 export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onRetry }) => {
   const currentStatus = job.status;

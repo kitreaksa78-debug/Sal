@@ -20,40 +20,25 @@ import { getGeminiApiKeys } from './aiKeys.js';
  */
 
 /**
- * Model order when nothing overrides it.
+ * The one Gemini model this site translates with.
  *
- * The Pro tier is the strongest Khmer translator, but on a free key it does not
- * serve a job — measured on this project's second key, three calls per model over
- * ninety seconds, every one refused with the quota named in the error:
+ * The owner asked for "the Gemini 2.5 model, one model only". That exact family
+ * cannot be used any more: every 2.5 model is retired for new accounts and
+ * answers 404, measured on both of this project's keys:
  *
- *   429 RESOURCE_EXHAUSTED
- *     GenerateContentInputTokensPerModelPerDay-FreeTier     <- exhausted, all day
- *     GenerateContentInputTokensPerModelPerMinute-FreeTier  <- exhausted too
+ *   gemini-2.5-flash       404  "no longer available to new users. Please update
+ *                                your code to use models/gemini-3.8-flash"
+ *   gemini-2.5-flash-lite  404  "… please use models/gemini-3.5-flash-lite"
+ *   gemini-2.5-pro         404  "… please use models/gemini-3.1-pro-preview"
  *
- * A per-day token quota does not refill inside a job, so a Pro model leading the
- * list would cost two refused round trips before every flash answer and never
- * translate a line. The newest flash that does answer leads instead — the same
- * key translated two lines in 4.4s with correct Khmer — and the Pro models stay
- * in the list right behind it, so a paid key or a reset allowance is used the
- * moment it can be. The older flashes follow (3.5 measured 24s for the same two
- * lines), and the lite models remain the last resort before giving up.
- *
- * The retired models are gone: 2.5 Pro and 2.5 Flash both answer 404 "no longer
- * available to new users", and Google's own message names the replacement.
+ * So this holds Google's own named replacement for 2.5 Flash — the successor of
+ * the model the owner asked for — and nothing else: one model, as asked. That
+ * single entry is what changes the rotation from a sweep to a key walk: there is
+ * no second model to move to, so the two configured keys are what it rotates,
+ * key #1 first and key #2 the moment key #1's daily quota is spent, its request
+ * is throttled, or the project itself is denied.
  */
-export const DEFAULT_GEMINI_MODELS = [
-  'gemini-3.8-flash',
-  'gemini-pro-latest',
-  'gemini-3.1-pro-preview',
-  'gemini-3.7-flash',
-  'gemini-3.6-flash',
-  'gemini-3.5-flash',
-  'gemini-3-flash-preview',
-  'gemini-flash-latest',
-  'gemini-3.5-flash-lite',
-  'gemini-3.1-flash-lite',
-  'gemini-flash-lite-latest',
-];
+export const DEFAULT_GEMINI_MODELS = ['gemini-3.8-flash'];
 
 function parseModelList(raw: string | undefined): string[] {
   return (raw || '')
@@ -170,10 +155,14 @@ const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS |
  * becomes the slowest part of the job — a measured sweep of the default list
  * spent 52 seconds inside one stalled model alone, and the caller had no way to
  * move on. The budget bounds that: after this long the call reports failure and
- * the caller can use its other configured provider instead of waiting for a
- * twelve-model list to fail one model at a time.
+ * the caller can use its other configured provider (Groq) instead of waiting
+ * through another round of retries.
+ *
+ * With one model and two keys this has to hold two real attempts: the first key
+ * may spend its whole 20s call ceiling on a stalled request, and the second key
+ * still gets a usable call after it.
  */
-const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '20000');
+const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '30000');
 
 /**
  * The shortest request deadline the Gemini API accepts.

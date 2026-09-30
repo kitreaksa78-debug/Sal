@@ -12,6 +12,12 @@ interface TranslationSettingsProps {
    * probe answers, so the line is simply not drawn while it is unknown.
    */
   engine?: string | null;
+  /**
+   * The service that takes over when `engine` fails a block, e.g. `groq`. The
+   * pipeline switches by itself, so this is shown as the promise it is: no
+   * setting to change, no job to restart.
+   */
+  engineFallback?: string | null;
 }
 
 export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
@@ -19,6 +25,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
   onChange,
   disabled = false,
   engine = null,
+  engineFallback = null,
 }) => {
   const update = <K extends keyof JobSettings>(key: K, val: JobSettings[K]) => {
     onChange({ ...settings, [key]: val });
@@ -47,6 +54,12 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
         <span className="font-semibold text-emerald-300 truncate">
           {engine ?? 'កំពុងពិនិត្យ…'}
         </span>
+        {engineFallback && (
+          <span className="text-slate-500">
+            · បម្រុងស្វ័យប្រវត្តិ៖ <span className="font-semibold text-slate-300">{engineFallback}</span>{' '}
+            (បើខាងលើបរាជ័យ វាប្តូរភ្លាម)
+          </span>
+        )}
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 sm:gap-5">

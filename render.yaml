@@ -25,10 +25,9 @@ services:
       - key: STT_PROVIDER
         value: groq
 
-      # Translation runs on Groq and nothing else. There is no provider setting
-      # for it: the model list lives in the code (GROQ_TRANSLATION_MODEL and
-      # GROQ_TRANSLATION_FALLBACK_MODELS), and GEMINI_API_KEY is no longer read
-      # by the pipeline at all.
+      # Translation order is in the code: Gemini leads and Groq takes over the
+      # moment Gemini cannot answer a block. There is no setting for it because
+      # the pipeline already picks the other configured provider by itself.
 
       # Edge TTS pays nothing and needs no key, so the Khmer voice runs without
       # a quota.
