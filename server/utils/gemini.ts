@@ -20,28 +20,31 @@ import { getGeminiApiKeys } from './aiKeys.js';
  */
 
 /**
- * Model order when nothing overrides it: the strongest translator first.
+ * Model order when nothing overrides it.
  *
- * The Pro tier is the one that translates Khmer best, so it leads — `gemini-pro-latest`
- * (Google's own alias for the newest Pro, which is where a request for the best
- * model should start) followed by the pinned Pro preview that Google points
- * users of the retired 2.5 Pro at:
+ * The Pro tier is the strongest Khmer translator, but on a free key it does not
+ * serve a job — measured on this project's second key, three calls per model over
+ * ninety seconds, every one refused with the quota named in the error:
  *
- *   404 "models/gemini-2.5-pro is no longer available to new users. Please update
- *        your code to use models/gemini-3.1-pro-preview"
+ *   429 RESOURCE_EXHAUSTED
+ *     GenerateContentInputTokensPerModelPerDay-FreeTier     <- exhausted, all day
+ *     GenerateContentInputTokensPerModelPerMinute-FreeTier  <- exhausted too
  *
- * The flash models still sit behind them, unchanged: a Pro allowance on the free
- * tier is small and runs dry first, and the rotation walks on to the next model
- * by itself, so the strongest model is tried without ever losing the fallbacks.
- * An account that has already shown the Pro tier is out of quota skips it for
- * the rest of the process (`throttledUntil` / `preferredModel`), which is what
- * keeps the one wasted round trip a one-time cost. The lite models remain the
- * last resort before giving up.
+ * A per-day token quota does not refill inside a job, so a Pro model leading the
+ * list would cost two refused round trips before every flash answer and never
+ * translate a line. The newest flash that does answer leads instead — the same
+ * key translated two lines in 4.4s with correct Khmer — and the Pro models stay
+ * in the list right behind it, so a paid key or a reset allowance is used the
+ * moment it can be. The older flashes follow (3.5 measured 24s for the same two
+ * lines), and the lite models remain the last resort before giving up.
+ *
+ * The retired models are gone: 2.5 Pro and 2.5 Flash both answer 404 "no longer
+ * available to new users", and Google's own message names the replacement.
  */
 export const DEFAULT_GEMINI_MODELS = [
+  'gemini-3.8-flash',
   'gemini-pro-latest',
   'gemini-3.1-pro-preview',
-  'gemini-3.8-flash',
   'gemini-3.7-flash',
   'gemini-3.6-flash',
   'gemini-3.5-flash',
@@ -49,8 +52,6 @@ export const DEFAULT_GEMINI_MODELS = [
   'gemini-flash-latest',
   'gemini-3.5-flash-lite',
   'gemini-3.1-flash-lite',
-  'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
   'gemini-flash-lite-latest',
 ];
 
