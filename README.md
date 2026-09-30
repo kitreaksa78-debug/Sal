@@ -26,7 +26,7 @@ Six steps, in the order the studio shows them:
 | 1. Upload Video | upload + FFmpeg audio extraction |
 | 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
 | 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
-| 4. Gemini → Groq | Gemini `gemini-3.8-flash` first (key #1, then key #2 when a key's daily quota is spent), falling back to Groq `openai/gpt-oss-20b` |
+| 4. Gemini → Groq | Gemini `gemini-3.5-flash` first (key #1, then key #2 when a key's daily quota is spent), falling back to Groq `openai/gpt-oss-20b` |
 | 5. Subtitle · Piper TTS | subtitles + Khmer TTS (the keyless Edge `km-KH` voices) |
 | 6. FFmpeg → Sync Audio + Video | FFmpeg (bundled in the image) — mix on the original timestamps + render MP4 |
 

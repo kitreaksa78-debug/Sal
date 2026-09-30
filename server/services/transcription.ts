@@ -105,7 +105,7 @@ CRITICAL RULES:
 4. Output valid JSON adhering to the schema.`;
 
     const segments = await withRetry(async () => {
-      // Use gemini-3.5-transcribe or fallback to gemini-3.8-flash for multimodal audio processing
+      // Use gemini-3.5-transcribe or fallback to gemini-3.5-flash for multimodal audio processing
       const response = await this.client!.models.generateContent({
         model: this.modelName || 'gemini-3.5-transcribe',
         contents: {

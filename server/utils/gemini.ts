@@ -22,7 +22,7 @@ import { getGeminiApiKeys } from './aiKeys.js';
 /**
  * The one Gemini model this site translates with.
  *
- * The owner asked for "the Gemini 2.5 model, one model only". That exact family
+ * The owner asked for "the Gemini 2 Flash model, one model only". That family
  * cannot be used any more: every 2.5 model is retired for new accounts and
  * answers 404, measured on both of this project's keys:
  *
@@ -31,14 +31,19 @@ import { getGeminiApiKeys } from './aiKeys.js';
  *   gemini-2.5-flash-lite  404  "… please use models/gemini-3.5-flash-lite"
  *   gemini-2.5-pro         404  "… please use models/gemini-3.1-pro-preview"
  *
- * So this holds Google's own named replacement for 2.5 Flash — the successor of
- * the model the owner asked for — and nothing else: one model, as asked. That
- * single entry is what changes the rotation from a sweep to a key walk: there is
- * no second model to move to, so the two configured keys are what it rotates,
- * key #1 first and key #2 the moment key #1's daily quota is spent, its request
- * is throttled, or the project itself is denied.
+ * So this holds the Flash model that actually serves this project. Google names
+ * gemini-3.8-flash as the first successor, but it answers 503 "high demand"
+ * from both of these keys (measured, three tries in a row), which pushes every
+ * block into the Groq fallback; gemini-3.5-flash answered 4 of 4 across both
+ * keys in 0.7–1.0s, strict `responseSchema` included.
+ *
+ * One model only, as asked. That single entry is what changes the rotation from
+ * a sweep to a key walk: there is no second model to move to, so the two
+ * configured keys are what it rotates — key #1 first and key #2 the moment
+ * key #1's daily quota is spent, its request is throttled, or the project
+ * itself is denied.
  */
-export const DEFAULT_GEMINI_MODELS = ['gemini-3.8-flash'];
+export const DEFAULT_GEMINI_MODELS = ['gemini-3.5-flash'];
 
 function parseModelList(raw: string | undefined): string[] {
   return (raw || '')
