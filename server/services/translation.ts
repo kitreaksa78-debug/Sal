@@ -138,34 +138,36 @@ const TRANSLATION_SCHEMA = {
 const TOKEN_BUDGET_PER_MINUTE = Number(process.env.GROQ_TOKENS_PER_MINUTE || '7800');
 
 /**
- * The Groq model that translates Khmer best, and the ones behind it.
+ * The Groq model that translates Khmer first, and the ones behind it.
  *
- * Groq only serves a handful of text models, and the pick was measured rather
- * than assumed: the same five English lines (a name, a title, a number, an idiom)
- * were put through the real dubbing prompt on every candidate.
+ * The owner's choice is `qwen/qwen3.8-27b`, so it leads. Groq only serves a
+ * handful of text models, and all three candidates were measured on the same five
+ * English lines (a name, a title, a number, an idiom) through the real dubbing
+ * prompt:
  *
- *   openai/gpt-oss-120b   1.9s  1510 tok  5/5 lines  keeps "Vladimir Putin" whole
- *   qwen/qwen3.8-27b      2.9s  1998 tok  5/5 lines  drops "Vladimir", spells Dara wrong
+ *   qwen/qwen3.8-27b      2.9s  1998 tok  5/5 lines  preferred by the owner
+ *   openai/gpt-oss-120b   1.9s  1510 tok  5/5 lines  fastest, keeps "Vladimir Putin" whole
  *   openai/gpt-oss-20b    —     —         rejects the strict JSON schema (HTTP 400)
  *
- * So the 120b model leads. The 27b model is the first fallback because it does
- * answer when the primary is rate-limited, and the 20b model stays last: it
- * spends its turn on a 400 rather than a translation, but a model that cannot
- * take the schema today may be able to tomorrow, and asking it costs one round
- * trip only after the two models that work have both refused.
+ * The 120b model is therefore the first fallback: it answers when the 27b model is
+ * rate-limited, and it carries a name the 27b model dropped in that test, so a
+ * block that reaches it still gets a complete translation. The 20b model stays
+ * last: it spends its turn on a 400 rather than a translation, but a model that
+ * cannot take the schema today may be able to tomorrow, and asking it costs one
+ * round trip only after the two models that work have both refused.
  *
  * `GROQ_TRANSLATION_MODEL` / `GROQ_TRANSLATION_FALLBACK_MODELS` override both,
  * so the engine can be changed from the host's environment without a redeploy.
  */
-export const STRONGEST_KHMER_TRANSLATION_MODEL = 'openai/gpt-oss-120b';
-export const DEFAULT_GROQ_TRANSLATION_FALLBACKS = ['qwen/qwen3.8-27b', 'openai/gpt-oss-20b'];
+export const DEFAULT_KHMER_TRANSLATION_MODEL = 'qwen/qwen3.8-27b';
+export const DEFAULT_GROQ_TRANSLATION_FALLBACKS = ['openai/gpt-oss-120b', 'openai/gpt-oss-20b'];
 
 /** The Groq model a job's translation blocks are sent to. */
 export function getGroqTranslationModel(): string {
-  return (process.env.GROQ_TRANSLATION_MODEL || '').trim() || STRONGEST_KHMER_TRANSLATION_MODEL;
+  return (process.env.GROQ_TRANSLATION_MODEL || '').trim() || DEFAULT_KHMER_TRANSLATION_MODEL;
 }
 
-/** The Groq models tried when the strongest one is rate-limited, best first. */
+/** The Groq models tried when the first one is rate-limited, best first. */
 export function getGroqTranslationFallbacks(): string[] {
   const configured = (process.env.GROQ_TRANSLATION_FALLBACK_MODELS || '')
     .split(',')

@@ -8,7 +8,7 @@ interface TranslationSettingsProps {
   disabled?: boolean;
   /**
    * `<provider> · <model>` the server will translate with, e.g.
-   * "groq · openai/gpt-oss-120b". Read from the config status; absent until the
+   * "groq · qwen/qwen3.8-27b". Read from the config status; absent until the
    * probe answers, so the line is simply not drawn while it is unknown.
    */
   engine?: string | null;
