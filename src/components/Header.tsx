@@ -1,8 +1,7 @@
-import React, { useEffect, useRef } from 'react';
+import React from 'react';
 import { Sparkles, History, Crown, LogOut, type LucideIcon } from 'lucide-react';
 import type { SignedInUser } from '../lib/api';
 import { Logo } from './Logo';
-import { SignInPanel } from './SignInPanel';
 
 type Tab = 'studio' | 'history' | 'pricing';
 
@@ -18,13 +17,11 @@ interface HeaderProps {
   /** The Google account saved for this device. */
   user?: SignedInUser | null;
   onSignOut?: () => void;
-  /** Google sign-in succeeded — the app stores the session and the account. */
-  onSignedIn?: (user: SignedInUser, token: string) => void;
-  /** Whether the "Log in" dropdown under the header button is open. */
+  /** Whether the login sheet that rises from the bottom is open. */
   signInOpen?: boolean;
   /**
-   * Owned by the app (not this component) so the studio can open the same card:
-   * an upload without an account lands here instead of a 401 from the server.
+   * Owned by the app (not this component) so the studio can open the same
+   * sheet: an upload without an account lands there instead of a 401.
    */
   setSignInOpen?: (open: boolean) => void;
 }
@@ -41,22 +38,9 @@ export const Header: React.FC<HeaderProps> = ({
   showNav = true,
   user,
   onSignOut,
-  onSignedIn,
   signInOpen = false,
   setSignInOpen,
 }) => {
-  /** Anchors the Log in button + its dropdown, so a tap outside can close it. */
-  const signInRef = useRef<HTMLDivElement | null>(null);
-
-  useEffect(() => {
-    if (!signInOpen) return;
-    const handlePointer = (event: PointerEvent) => {
-      if (!signInRef.current?.contains(event.target as Node)) setSignInOpen?.(false);
-    };
-    document.addEventListener('pointerdown', handlePointer);
-    return () => document.removeEventListener('pointerdown', handlePointer);
-  }, [signInOpen, setSignInOpen]);
-
   const tabClass = (isActive: boolean) =>
     `flex items-center justify-center gap-1.5 rounded-lg text-sm font-medium transition-colors min-h-[44px] ${
       isActive
@@ -130,30 +114,16 @@ export const Header: React.FC<HeaderProps> = ({
               </div>
             ) : (
               /* Signed out: a small Log in button in the corner (kimi.ai style);
-                 the Google card drops down under it instead of a card that
-                 takes over the whole studio screen. */
-              <div ref={signInRef} className="relative">
-                <button
-                  type="button"
-                  onClick={() => setSignInOpen?.(!signInOpen)}
-                  aria-expanded={signInOpen}
-                  aria-haspopup="dialog"
-                  className="flex items-center gap-1.5 rounded-full bg-white px-4 text-sm font-bold text-slate-900 shadow-lg shadow-black/30 transition hover:bg-slate-200 active:scale-95 min-h-[36px]"
-                >
-                  Log in
-                </button>
-
-                {signInOpen && (
-                  <div className="absolute right-0 top-full mt-2 w-[min(20rem,calc(100vw-1.5rem))] animate-in fade-in duration-150">
-                    <SignInPanel
-                      onSignedIn={(account, token) => {
-                        setSignInOpen?.(false);
-                        onSignedIn?.(account, token);
-                      }}
-                    />
-                  </div>
-                )}
-              </div>
+                 tapping it raises the ChatGPT-style login sheet from the bottom. */
+              <button
+                type="button"
+                onClick={() => setSignInOpen?.(!signInOpen)}
+                aria-expanded={signInOpen}
+                aria-haspopup="dialog"
+                className="flex items-center gap-1.5 rounded-full bg-white px-4 text-sm font-bold text-slate-900 shadow-lg shadow-black/30 transition hover:bg-slate-200 active:scale-95 min-h-[36px]"
+              >
+                Log in
+              </button>
             )}
 
           {/* Desktop navigation */}

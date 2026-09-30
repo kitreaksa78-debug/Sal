@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { AnimatePresence } from 'motion/react';
 import { AlertCircle } from 'lucide-react';
 import { Header } from './components/Header';
 import { UploadPanel } from './components/UploadPanel';
@@ -9,6 +10,7 @@ import { JobHistory } from './components/JobHistory';
 import { PricingPage } from './components/PricingPage';
 import { DemucsPanel } from './components/DemucsPanel';
 import { ProRequestsPanel } from './components/ProRequestsPanel';
+import { SignInPanel } from './components/SignInPanel';
 import { JobRecord, JobSettings } from './types';
 import {
   uploadVideoJob,
@@ -392,6 +394,8 @@ export function App() {
   const handleSignedIn = (account: SignedInUser, token: string) => {
     saveSession(account, token);
     setUser(account);
+    // The sheet closes itself through this too, not only through its own guard.
+    setSignInOpen(false);
     // Scoped to the account, so switching accounts shows the other one's plan.
     setPlan(getPlan(), account.email);
     setUsageStats(getUsageStats());
@@ -442,7 +446,6 @@ export function App() {
         showNav={Boolean(user)}
         user={user}
         onSignOut={handleSignOut}
-        onSignedIn={handleSignedIn}
         signInOpen={signInOpen}
         setSignInOpen={setSignInOpen}
       />
@@ -561,6 +564,17 @@ export function App() {
           AI Video Translation &amp; Khmer Dubbing
         </p>
       </footer>
+
+      {/* Login sheet (ChatGPT style): rises from the bottom when Log in is
+          tapped or an upload asks for an account. */}
+      <AnimatePresence>
+        {signInOpen && !user && (
+          <SignInPanel
+            onClose={() => setSignInOpen(false)}
+            onSignedIn={handleSignedIn}
+          />
+        )}
+      </AnimatePresence>
     </div>
   );
 }
