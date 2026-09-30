@@ -24,8 +24,10 @@ services:
         value: production
       - key: STT_PROVIDER
         value: groq
-      - key: TRANSLATION_PROVIDER
-        value: groq
+
+      # Translation order is in the code: Gemini leads and Groq takes over the
+      # moment Gemini cannot answer a block. There is no setting for it because
+      # the pipeline already picks the other configured provider by itself.
 
       # Edge TTS pays nothing and needs no key, so the Khmer voice runs without
       # a quota.

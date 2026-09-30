@@ -400,24 +400,26 @@ function buildGlossarySection(glossary: Glossary): string {
 }
 
 /**
- * Pick the translation backend: an explicit TRANSLATION_PROVIDER wins, otherwise
- * whichever provider actually has a key configured.
+ * Which provider a translation stage starts on: Gemini in front, Groq behind it.
  *
- * The one case where the configured provider is overridden is a Gemini account
- * whose keys have all been rejected: it cannot answer a single line, and starting
- * on it would cost the first block of every job a full model/key sweep and its
- * backoff before the same lines were translated by Groq anyway. Groq is answered
- * in a couple of seconds -- measured 2.3s for a five-line block against 8.0s for
- * a healthy Gemini and up to 94s for a rejected one -- so a provider with nothing
- * to ask is skipped instead of waited on.
+ * That order is the product decision, so it lives in the code rather than in a
+ * deployment setting: the stage asks Gemini for every block, and the moment
+ * Gemini cannot answer one (`requestTranslation`) the rest of the job — and the
+ * next five minutes — go to Groq without asking Gemini again. Inside Gemini the
+ * model rotation then walks the flash models that this account's free tier does
+ * serve, so a spent Pro allowance or a rejected key costs one round trip and not
+ * the stage.
+ *
+ * `TRANSLATION_PROVIDER` is deliberately not consulted any more. It used to name
+ * the provider to start on, which is how this deployment was pinned to Groq; the
+ * owner has since asked for Gemini first with Groq after an error, and the only
+ * thing that should take Gemini out of the front position is Gemini having no key
+ * left to ask — a provider that cannot answer must never be waited on. Falling
+ * back needs no setting: the other configured provider is picked up by itself.
  */
 export function resolveTranslationProvider(): TranslationProviderName {
-  const configured = (process.env.TRANSLATION_PROVIDER || '').toLowerCase();
-  if (configured === 'groq') return 'groq';
-  if (configured === 'gemini') {
-    if (!hasUsableGeminiKey() && isGroqConfigured()) return 'groq';
-    return 'gemini';
-  }
+  const geminiUsable = isGeminiConfigured() && hasUsableGeminiKey();
+  if (geminiUsable) return 'gemini';
   return isGroqConfigured() ? 'groq' : 'gemini';
 }
 

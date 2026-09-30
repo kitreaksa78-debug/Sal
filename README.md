@@ -130,7 +130,6 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 | `GROQ_API_KEY` | yes | [console.groq.com/keys](https://console.groq.com/keys) |
 | `GROQ_API_KEY2`, `GROQ_API_KEY3` | optional | Extra keys; the app rotates to them automatically on 401/429 |
 | `STT_PROVIDER` | optional | `groq` (default) |
-| `TRANSLATION_PROVIDER` | optional | `groq` (default) |
 | `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service |
 | `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
 | `FFMPEG_RENDER_ARGS` | optional | x264 settings for the release MP4 (default `-preset veryfast -crf 21`) |
