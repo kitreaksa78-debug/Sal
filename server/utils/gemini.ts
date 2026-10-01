@@ -166,6 +166,14 @@ const GEMINI_REQUEST_TIMEOUT_MS = Number(process.env.GEMINI_REQUEST_TIMEOUT_MS |
  * With one model and two keys this has to hold two real attempts: the first key
  * may spend its whole 20s call ceiling on a stalled request, and the second key
  * still gets a usable call after it.
+ *
+ * The floor is therefore raised to one full call per key (see
+ * `geminiGenerateJson`): a fixed 30s budget cannot hold two 20s calls, so a key
+ * that answered 504 "deadline expired" — which is what gemini-3.5-flash does
+ * under load — spent the whole budget and the walk stopped before the second key
+ * was ever tried, sending the job to Groq for no reason. Measured on this
+ * project's keys: one 504 + one 503 on key #1 consumed the 30s budget and key #2
+ * was never asked.
  */
 const GEMINI_SWEEP_BUDGET_MS = Number(process.env.GEMINI_SWEEP_BUDGET_MS || '30000');
 
@@ -327,8 +335,21 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
   let lastError: GeminiError | null = null;
   let schemaRejections = 0;
   let backoffMs = 5_000;
-  /** Hard stop for the whole walk; see GEMINI_SWEEP_BUDGET_MS. */
-  const sweepDeadline = Date.now() + GEMINI_SWEEP_BUDGET_MS;
+  /**
+   * Hard stop for the whole walk, in wall-clock time.
+   *
+   * `GEMINI_SWEEP_BUDGET_MS` is the floor, not the whole story: a budget that
+   * cannot hold one full-length call per key is smaller than the rotation it is
+   * meant to fund. A key that stalls for its entire 20s ceiling then leaves too
+   * little for the next key to be tried at all, and the job drops to Groq even
+   * though a working key was configured. So the budget is raised to one call per
+   * key — the shortest walk that still honours the rotation the owner asked for.
+   */
+  const sweepBudgetMs = Math.max(
+    GEMINI_SWEEP_BUDGET_MS,
+    keys.length * GEMINI_REQUEST_TIMEOUT_MS
+  );
+  const sweepDeadline = Date.now() + sweepBudgetMs;
   /** Pairs this call walked past, reported so the rotation stays visible in logs. */
   let skippedPairs = 0;
 
@@ -378,14 +399,14 @@ export async function geminiGenerateJson(request: GeminiJsonRequest): Promise<Ge
         if (remainingMs < GEMINI_MIN_CALL_TIMEOUT_MS) {
           logger.warn(
             `Gemini ${request.operationName}: giving up after ${Math.round(
-              GEMINI_SWEEP_BUDGET_MS / 1000
+              sweepBudgetMs / 1000
             )}s — only ${Math.max(0, Math.round(remainingMs / 1000))}s of the budget left, too little for one call; ${skippedPairs} option(s) unavailable or throttled so far.`
           );
           throw (
             lastError ??
             new GeminiError(
               `Gemini ${request.operationName} could not be answered within ${Math.round(
-                GEMINI_SWEEP_BUDGET_MS / 1000
+                sweepBudgetMs / 1000
               )}s (${models.length} models × ${keys.length} keys).`,
               0
             )

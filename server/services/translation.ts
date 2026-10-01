@@ -291,6 +291,78 @@ export function speechWindowsFor(segments: DialogueSegment[]): Map<string, numbe
   return windows;
 }
 
+/** Written at the end of a sentence, in Latin or Khmer script. */
+const ENDS_A_SENTENCE = /[.!?…។៕]["'’”)]?$|["'’”)]$/;
+
+/**
+ * Whisper's decode windows cut speech wherever its silence detector fires, which
+ * regularly lands in the middle of a sentence: "I told him we should leave" /
+ * "before the storm arrives". Translated one window at a time, each fragment is
+ * judged on its own — the first half loses its subject, the second half loses its
+ * verb — and the dub stops sounding like the line the actor actually says.
+ *
+ * So adjacent fragments of the same speaker are welded back together first, under
+ * three conditions that keep the weld from ever crossing a real pause:
+ *
+ *  - they are the same speaker (so two people talking over each other stay apart);
+ *  - the silence between them is short (so a new utterance after a beat stays on
+ *    its own line and the mouth on screen still matches the voice);
+ *  - the earlier fragment does not already end in a full stop, so a finished
+ *    sentence is never glued to the next one and the subtitle cue is kept.
+ *
+ * Merging only ever lengthens a line inside gaps the dub already had: the welded
+ * line starts where the first fragment started and ends where the last one ended,
+ * so nothing moves on the timeline and no time is invented.
+ */
+export function mergeDialogueFragments(
+  segments: DialogueSegment[],
+  maxGapSeconds = Number(process.env.TRANSLATION_MERGE_GAP || '0.7'),
+  maxSeconds = Number(process.env.TRANSLATION_MERGE_MAX_SECONDS || '14'),
+  maxChars = Number(process.env.TRANSLATION_MERGE_MAX_CHARS || '320')
+): DialogueSegment[] {
+  if (segments.length < 2) return segments;
+
+  const ordered = [...segments].sort((a, b) => a.start - b.start);
+  const merged: DialogueSegment[] = [];
+
+  for (const segment of ordered) {
+    const previous = merged[merged.length - 1];
+    if (!previous) {
+      merged.push({ ...segment });
+      continue;
+    }
+
+    const gap = segment.start - previous.end;
+    const sameSpeaker = !previous.speaker || !segment.speaker || previous.speaker === segment.speaker;
+    const previousUnfinished = !ENDS_A_SENTENCE.test(previous.text.trim());
+    const shortEnough =
+      segment.end - previous.start <= maxSeconds &&
+      previous.text.length + segment.text.length + 1 <= maxChars;
+
+    if (sameSpeaker && previousUnfinished && gap >= -0.05 && gap <= maxGapSeconds && shortEnough) {
+      // One space joins the words; Khmer already breaks on its own.
+      merged[merged.length - 1] = {
+        ...previous,
+        end: Math.max(previous.end, segment.end),
+        text: `${previous.text.trim()} ${segment.text.trim()}`.trim(),
+        khmer: previous.khmer ? `${previous.khmer} ${segment.khmer || ''}`.trim() : segment.khmer,
+      };
+      continue;
+    }
+
+    merged.push({ ...segment });
+  }
+
+  return merged;
+}
+
+/** `m:ss`, the way a viewer would say a position in the video. */
+function formatTimeline(seconds: number): string {
+  const total = Math.max(0, Math.round(seconds));
+  const minutes = Math.floor(total / 60);
+  return `${minutes}:${String(total % 60).padStart(2, '0')}`;
+}
+
 /** Strip Markdown fences (```json ... ```) that some models wrap around JSON. */
 function stripJsonFences(raw: string): string {
   const trimmed = raw.trim();
@@ -533,15 +605,27 @@ export class KhmerDubTranslationService {
       return { segments: [], warnings: [] };
     }
 
+    // Whisper's windows are cut where its silence detector fired, which regularly
+    // lands mid-sentence. Welding those fragments back together before anything
+    // is translated is what lets the model read a whole thought — and keeps the
+    // dub saying what the actor said instead of two halves of it.
+    const ordered = mergeDialogueFragments(segments);
+    const mergedCount = segments.length - ordered.length;
+    if (mergedCount > 0) {
+      logger.info(
+        `Joined ${mergedCount} transcript fragment(s) that had been split mid-sentence: ${segments.length} line(s) -> ${ordered.length}.`
+      );
+    }
+
     const chunkSize = this.getChunkSize();
     const chunks: DialogueSegment[][] = [];
-    for (let i = 0; i < segments.length; i += chunkSize) {
-      chunks.push(segments.slice(i, i + chunkSize));
+    for (let i = 0; i < ordered.length; i += chunkSize) {
+      chunks.push(ordered.slice(i, i + chunkSize));
     }
 
     // The video's own names, read from the transcript before a single line is
     // translated, so every block is told which words must survive as names.
-    const properNames = detectProperNames(segments);
+    const properNames = detectProperNames(ordered);
     const systemInstruction = this.buildSystemInstruction(settings, properNames);
     const glossary = parseGlossary(settings.glossary);
     this.confirmedNames.clear();
@@ -555,7 +639,12 @@ export class KhmerDubTranslationService {
     }
     // The room each line will have on the timeline. The prompt quotes it per
     // line, and the same numbers are re-measured once every block has answered.
-    const speechWindows = speechWindowsFor(segments);
+    const speechWindows = speechWindowsFor(ordered);
+    /** How far into the video this transcript reaches; quoted per block. */
+    const videoSeconds = ordered.reduce(
+      (max, segment) => Math.max(max, segment.end),
+      0
+    );
     const translations = new Map<string, { khmer: string; emotion?: string }>();
     const warnings: string[] = [];
     // Blocks run at the same time, so the same problem (or the same failure) can be
@@ -576,12 +665,22 @@ export class KhmerDubTranslationService {
     let recentContext: ContextLine[] = [];
 
     await mapWithConcurrency(chunks, concurrency, async (chunk, i) => {
-      const context: ContextLine[] =
+      // Both sides of the block. What came before carries the names and the
+      // register already established; what comes after carries the answer to the
+      // question this block ends on — without it a line like "Because of him." is
+      // translated as if it were a statement about the speaker, and the dub stops
+      // matching what the video is actually saying.
+      const sourceLines = (lines: DialogueSegment[]): ContextLine[] =>
+        lines.map((s) => ({ speaker: s.speaker, original: s.text }));
+
+      const before: ContextLine[] =
         concurrency > 1
           ? i === 0
             ? []
-            : chunks[i - 1].slice(-8).map((s) => ({ speaker: s.speaker, original: s.text }))
+            : sourceLines(chunks[i - 1].slice(-6))
           : recentContext;
+      const after: ContextLine[] =
+        i === chunks.length - 1 ? [] : sourceLines(chunks[i + 1].slice(0, 3));
 
       let billedTokens = 0;
       // The key's real allowance, straight from the provider's answer. Used to
@@ -592,11 +691,13 @@ export class KhmerDubTranslationService {
       try {
         const userPrompt = this.buildChunkPrompt(
           chunk,
-          context,
+          before,
+          after,
           i,
           chunks.length,
           speechWindows,
-          properNames
+          properNames,
+          videoSeconds
         );
         // Fallback estimate in case the provider does not report usage.
         const estimatedTokens = estimateTokens(systemInstruction + userPrompt) + chunk.length * 45;
@@ -724,7 +825,7 @@ export class KhmerDubTranslationService {
       }
 
       completedLines += chunk.length;
-      if (onProgress) await onProgress(completedLines, segments.length);
+      if (onProgress) await onProgress(completedLines, ordered.length);
 
       // Pace the next request against the per-minute token ceiling. There is
       // nothing left to protect after the final block, so don't wait for it.
@@ -745,9 +846,9 @@ export class KhmerDubTranslationService {
 
     // Every line is in hand — now check them against the video's own timing and
     // tighten the ones that will not fit.
-    await this.fitLinesToOriginalTiming(segments, translations, speechWindows, systemInstruction, glossary, addWarning);
+    await this.fitLinesToOriginalTiming(ordered, translations, speechWindows, systemInstruction, glossary, addWarning);
 
-    const translatedSegments = segments.map((segment) => {
+    const translatedSegments = ordered.map((segment) => {
       const item = translations.get(segment.id);
       let khmer = (item?.khmer || '').trim();
       // Definitive output sanitization: never ship Thai/Lao.
@@ -789,7 +890,7 @@ export class KhmerDubTranslationService {
         : `${this.provider} (no block answered)`;
 
     logger.info(
-      `Translated ${translations.size}/${segments.length} dialogue lines to Cambodian Khmer via ${answeredBy} in ${
+      `Translated ${translations.size}/${ordered.length} dialogue lines to Cambodian Khmer via ${answeredBy} in ${
         chunks.length
       } block(s), ${concurrency} at a time, ${((Date.now() - startedAt) / 1000).toFixed(1)}s.`
     );
@@ -844,25 +945,51 @@ CRITICAL DUBBING TRANSLATION RULES:
    - A name is NEVER the part that gets dropped to save time: keep every name whole and shorten the wording around it.
    - Numbers, dates, money and units stay exactly as spoken. Do not round, convert or invent them.
 
-13. SCRIPT PURITY — ABSOLUTE REQUIREMENT:
+13. MATCH THE VIDEO — EVERY LINE MUST BE WHAT THAT MOMENT SAYS:
+   - Each line you receive is one moment of the video: the moment its "start"/"end" covers. Translate THAT moment and nothing else.
+   - Same scene, same meaning: if the original speaker is arguing, joking, panicking or lying on this line, the Khmer line carries that same tone. A viewer watching the picture must hear the same thing the original actor said.
+   - NOTHING IS ADDED, NOTHING IS LEFT OUT. No invented lines, no greetings or pleasantries that were never said, no summarising two lines into one, no explaining the scene, no stage directions.
+   - A line can be a fragment of a longer speech. Translate it as the piece of speech it is — do not pad it into a complete sentence and do not invent the part you were not given.
+   - Same order, same count: exactly one Khmer line per line you receive, echoing each "id" back unchanged.
+14. SCRIPT PURITY — ABSOLUTE REQUIREMENT:
    - Every "khmer" value you return MUST be written in pure Khmer Unicode only (U+1780-U+17FF plus Khmer punctuation U+17D4-U+17DD, digits, and basic Latin for brand names from the glossary).
    - FORBIDDEN: Thai script (U+0E00-U+0E7F) and Lao script (U+0E80-U+0EFF) are NEVER allowed, not even one character. ការសរសេរត្រូវតែជាអក្សរខ្មែរសុទ្ធ 100% ហាមប្រើអក្សរថៃឬឡាវដាច់ខាត។
    - Bad example (DO NOT DO): "ไปไหนมา" (Thai) instead of "ទៅណាមក" (Khmer) — they look similar but are different Unicode.
    - If you are unsure of a Khmer spelling, use the closest valid Khmer characters, never substitute Thai/Lao shapes.
-   - Before returning, mentally verify each line contains no Thai/Lao codepoints.`;
+   - Before returning, mentally verify each line contains no Thai/Lao codepoints.
+15. SPEAKER VOICE: keep each speaker's register exactly as it is in the video — a child does not talk like a boss, and one speaker answering another is not the same voice as one speaking alone. Pronouns and honorifics follow who is talking to whom on screen.`;
   }
 
   private buildChunkPrompt(
     chunk: DialogueSegment[],
-    context: ContextLine[],
+    before: ContextLine[],
+    after: ContextLine[],
     chunkIndex: number,
     chunkCount: number,
     speechWindows: Map<string, number>,
-    properNames: string[] = []
+    properNames: string[] = [],
+    videoSeconds = 0
   ): string {
+    const first = chunk[0];
+    const last = chunk[chunk.length - 1];
+    // The moment this block covers on screen, stated plainly: a line translated as
+    // a caption has to be what that speaker says at that moment, and the model
+    // reads far more faithfully when it is told where in the video it is working.
+    const where =
+      first && last
+        ? `\nThese ${chunk.length} line(s) are spoken between ${formatTimeline(
+            first.start
+          )} and ${formatTimeline(last.end)} of a video that runs about ${formatTimeline(
+            videoSeconds || last.end
+          )}. Each line below is one moment of that video: its "khmer" text is what is heard while that moment is on screen, in the same order, one Khmer line per line — never two lines joined, never one line split, and never a line the video does not contain.`
+        : '';
+
     const formattedInput = chunk.map((s) => ({
       id: s.id,
       speaker: s.speaker,
+      // Timeline position as well as seconds: the model reads "1:12" faster than
+      // "72.4" when it is placing a line against the picture.
+      at: formatTimeline(s.start),
       start: s.start,
       end: s.end,
       duration: Number((s.end - s.start).toFixed(2)),
@@ -890,17 +1017,26 @@ CRITICAL DUBBING TRANSLATION RULES:
 
     const confirmedSection = buildConfirmedNameSection(this.confirmedNames);
 
-    const contextSection =
-      context.length > 0
-        ? `\nEarlier lines from the same conversation (keep names, pronouns and terminology consistent with these):\n${JSON.stringify(
-            context,
+    const beforeSection =
+      before.length > 0
+        ? `\nSpoken just BEFORE this block (context only — do NOT translate these, but keep their names, pronouns and terminology consistent with them):\n${JSON.stringify(
+            before,
+            null,
+            2
+          )}\n`
+        : '';
+
+    const afterSection =
+      after.length > 0
+        ? `\nSpoken just AFTER this block (context only — do NOT translate these. Read them so the last lines of this block are translated as what they really mean in the scene: an answer, a reaction and a question are not the same thing, and a line like "Because of him." is an answer, not a claim about the speaker):\n${JSON.stringify(
+            after,
             null,
             2
           )}\n`
         : '';
 
     return `Block ${chunkIndex + 1} of ${chunkCount} from the video's dialogue sequence. Translate ONLY the lines listed below. Output pure Khmer script only (U+1780-U+17FF) — zero Thai/Lao characters allowed.
-${namesSection}${confirmedSection}${contextSection}
+${where}${namesSection}${confirmedSection}${beforeSection}${afterSection}
 Lines to translate:
 ${JSON.stringify(formattedInput, null, 2)}
 
