@@ -132,8 +132,6 @@ export interface JobRecord {
 }
 
 export interface SystemConfigStatus {
-  /** `keys`/`models` describe the free-tier rotation the translator walks. */
-  gemini: { configured: boolean; model: string; keys?: number; models?: string[] };
   /** `fallbackProvider` is the service that takes over when `provider` fails, and
    * `fallbackModels` is the model rotation inside it. */
   translation: {

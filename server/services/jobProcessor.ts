@@ -44,7 +44,7 @@ export const KHMER_STEP_MESSAGES: Record<JobStatus, string> = {
   separating_audio: 'កំពុងបំបែកសំឡេងមនុស្សចេញដោយ Demucs...',
   transcribing: 'កំពុងបម្លែងសំឡេងទៅជាអក្សរដោយ Whisper...',
   detecting_speakers: 'កំពុងកំណត់អត្តសញ្ញាណអ្នកនិយាយ...',
-  translating: 'កំពុងបកប្រែអត្ថបទទៅភាសាគោលដៅ (Gemini → Groq)...',
+  translating: 'កំពុងបកប្រែអត្ថបទទៅភាសាគោលដៅ (NLLB-200)...',
   generating_voice: 'កំពុងបង្កើតសំឡេងពីអក្សរ (Khmer TTS)...',
   mixing: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ ជាមួយភ្លេងផ្ទៃខាងក្រោយ...',
   rendering: 'កំពុងដាក់សំឡេងខ្មែរចូលវីដេអូ — Render MP4 ចុងក្រោយ (H.264/AAC)...',
@@ -60,7 +60,7 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
   separating_audio: 'Demucs: separating human voices from the music...',
   transcribing: 'Whisper: converting speech to text...',
   detecting_speakers: 'Identifying speakers and vocal characteristics...',
-  translating: 'Gemini → Groq: translating the dialogue to Khmer...',
+  translating: 'NLLB-200: translating the dialogue to Khmer...',
   generating_voice: 'Khmer TTS: generating Khmer voice from the Khmer text...',
   mixing: 'Writing the Khmer voice back into the video, under the music...',
   rendering: 'Writing the Khmer voice back into the video: final H.264/AAC MP4...',
@@ -72,7 +72,7 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
 /**
  * Progress percentage mapping, spread across the six steps the studio shows:
  *
- *   Upload → Demucs → Speech-to-Text → Gemini/Groq → Subtitle · TTS → Sync
+ *   Upload → Demucs → Speech-to-Text → NLLB-200 → Subtitle · TTS → Sync
  *
  * `detecting_speakers` is no longer reported — speaker naming happens inside the
  * Whisper pass — but it stays in the map because jobs recorded before that change
@@ -681,10 +681,14 @@ export class JobProcessor {
         friendlyKhmer = errMsg;
       } else if (/\(429\)|rate limit|too many requests/i.test(errMsg)) {
         friendlyKhmer =
-          'អត្រាប្រើប្រាស់ AI ពេញ (rate limit)។ សូមរង់ចាំបន្តិច រួចសាកល្បងម្តងទៀត ឬបន្ថែម Groq key ផ្សេងទៀត។ (AI rate limit reached: wait a moment or add another Groq key.)';
-      } else if (errMsg.includes('is not configured') || errMsg.includes('No translation provider')) {
+          'អត្រាប្រើប្រាស់ AI ពេញ (rate limit)។ សូមរង់ចាំបន្តិច រួចសាកល្បងម្តងទៀត។ (AI rate limit reached: wait a moment and try again.)';
+      } else if (
+        errMsg.includes('is not configured') ||
+        errMsg.includes('No translation provider') ||
+        errMsg.includes('ភ្ជាប់ NLLB')
+      ) {
         friendlyKhmer =
-          'មិនទាន់បានកំណត់ API key សម្រាប់ AI ទេ។ សូមបញ្ចូល GROQ_API_KEY ក្នុង Settings → Environment។ (No AI API key configured.)';
+          'មិនទាន់ភ្ជាប់ NLLB API ទេ។ សូមបើក NLLB លើ Google Colab រួច paste URL ក្នុងកាត «បកប្រែ · NLLB API»។ (No NLLB translation service is connected — open the NLLB panel and paste the Colab URL.)';
       } else if (/\(401\)|invalid api key/i.test(errMsg)) {
         friendlyKhmer =
           'API key មិនត្រឹមត្រូវ ឬត្រូវបានលុបចោល។ សូមពិនិត្យ GROQ_API_KEY ម្តងទៀត។ (Invalid or revoked API key.)';

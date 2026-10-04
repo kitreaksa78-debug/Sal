@@ -2,12 +2,13 @@ import { Type } from '@google/genai';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { groqChatJson, isGroqConfigured, sleep, GroqRateLimit } from '../utils/groq.js';
+import { geminiGenerateJson, getGeminiModels, isGeminiConfigured } from '../utils/gemini.js';
 import {
-  geminiGenerateJson,
-  getGeminiModels,
-  hasUsableGeminiKey,
-  isGeminiConfigured,
-} from '../utils/gemini.js';
+  NLLB_TRANSLATION_MODEL,
+  floresCodeFor,
+  isNllbConfigured,
+  translateWithConfiguredNllb,
+} from './nllbProvider.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
 import { DIALOGUE_GAP_SECONDS } from './audioMixing.js';
 import {
@@ -35,7 +36,7 @@ export type TranslationProgressCallback = (
   totalLines: number
 ) => void | Promise<void>;
 
-export type TranslationProviderName = 'groq' | 'gemini';
+export type TranslationProviderName = 'groq' | 'gemini' | 'nllb';
 
 /**
  * How many dialogue lines go into one translation request.
@@ -468,27 +469,21 @@ function buildGlossarySection(glossary: Glossary): string {
 }
 
 /**
- * Which provider a translation stage starts on: Gemini in front, Groq behind it.
+ * The translation stage runs on **NLLB-200 and nothing else**.
  *
- * That order is the product decision, so it lives in the code rather than in a
- * deployment setting: the stage asks Gemini for every block, and the moment
- * Gemini cannot answer one (`requestTranslation`) the rest of the job — and the
- * next five minutes — go to Groq without asking Gemini again. Inside Gemini the
- * model rotation then walks the flash models that this account's free tier does
- * serve, so a spent Pro allowance or a rejected key costs one round trip and not
- * the stage.
+ * The owner asked for Groq and Gemini to be taken out of translation and for
+ * `nllb-200-distilled-600M` to do the translating, served from Google Colab (the
+ * model needs ~1.5 GB, which the free Render instance does not have). So the
+ * provider is no longer a choice: every block goes to the NLLB service, and
+ * `TRANSLATION_PROVIDER` / `GEMINI_*` / `GROQ_TRANSLATION_*` no longer pick a
+ * translator. Groq is still used for speech-to-text, which the owner kept.
  *
- * `TRANSLATION_PROVIDER` is deliberately not consulted any more. It used to name
- * the provider to start on, which is how this deployment was pinned to Groq; the
- * owner has since asked for Gemini first with Groq after an error, and the only
- * thing that should take Gemini out of the front position is Gemini having no key
- * left to ask — a provider that cannot answer must never be waited on. Falling
- * back needs no setting: the other configured provider is picked up by itself.
+ * The Gemini/Groq request paths below are unreachable from here (kept only so the
+ * deterministic, provider-agnostic parts of the file — fragment merging, timing,
+ * script sanitising — share one pipeline).
  */
 export function resolveTranslationProvider(): TranslationProviderName {
-  const geminiUsable = isGeminiConfigured() && hasUsableGeminiKey();
-  if (geminiUsable) return 'gemini';
-  return isGroqConfigured() ? 'groq' : 'gemini';
+  return 'nllb';
 }
 
 /**
@@ -531,10 +526,15 @@ export class KhmerDubTranslationService {
 
   constructor() {
     this.provider = resolveTranslationProvider();
-    // Gemini's clients are created per request inside the rotation, because a
-    // block may end up on any model and any key.
+    // NLLB is served over HTTP, so the model name is the Colab service's model
+    // rather than anything this process loads. Gemini's clients are still created
+    // per request inside its rotation (unreachable while the provider is nllb).
     this.modelName =
-      this.provider === 'groq' ? getGroqTranslationModel() : getGeminiModels()[0];
+      this.provider === 'nllb'
+        ? NLLB_TRANSLATION_MODEL
+        : this.provider === 'groq'
+        ? getGroqTranslationModel()
+        : getGeminiModels()[0];
   }
 
   public getProviderName(): TranslationProviderName {
@@ -546,10 +546,11 @@ export class KhmerDubTranslationService {
   }
 
   public isConfigured(): boolean {
+    if (this.provider === 'nllb') return isNllbConfigured();
     return this.provider === 'groq' ? isGroqConfigured() : isGeminiConfigured();
   }
 
-  /** Every model the Gemini rotation may use, best first. */
+  /** Every model the Gemini rotation may use, best first (empty for NLLB). */
   public getFallbackModelNames(): string[] {
     return this.provider === 'gemini' ? getGeminiModels() : [];
   }
@@ -572,6 +573,9 @@ export class KhmerDubTranslationService {
   public getConcurrency(): number {
     if (this.provider === 'groq') return 1;
 
+    // NLLB on Colab translates one `/translate` batch at a time on the model
+    // side, so a couple of blocks in flight keeps the GPU fed without queueing a
+    // long tail; `TRANSLATION_CONCURRENCY` overrides it.
     const configured = Number(process.env.TRANSLATION_CONCURRENCY);
     return Number.isFinite(configured) && configured >= 1
       ? Math.floor(configured)
@@ -597,7 +601,7 @@ export class KhmerDubTranslationService {
   ): Promise<TranslationOutcome> {
     if (!this.isConfigured()) {
       throw new Error(
-        'No translation provider is configured. Set GROQ_API_KEY or GEMINI_API_KEY.'
+        'មិនទាន់ភ្ជាប់ NLLB API ទេ។ (No NLLB translation service is connected — open the NLLB panel and paste the Colab URL.)'
       );
     }
 
@@ -665,6 +669,17 @@ export class KhmerDubTranslationService {
     let recentContext: ContextLine[] = [];
 
     await mapWithConcurrency(chunks, concurrency, async (chunk, i) => {
+      // NLLB takes one plain list of lines and answers one Khmer line per line; it
+      // follows no instructions, so the block goes straight to the Colab service
+      // and the deterministic passes (script sanitising, the final mapping) do the
+      // rest. No prompt building, no rescue/glossary/proper-name retries.
+      if (this.provider === 'nllb') {
+        await this.translateChunkWithNllb(chunk, settings, translations, addWarning, i, chunks.length);
+        completedLines += chunk.length;
+        if (onProgress) await onProgress(completedLines, ordered.length);
+        return;
+      }
+
       // Both sides of the block. What came before carries the names and the
       // register already established; what comes after carries the answer to the
       // question this block ends on — without it a line like "Because of him." is
@@ -845,8 +860,12 @@ export class KhmerDubTranslationService {
     });
 
     // Every line is in hand — now check them against the video's own timing and
-    // tighten the ones that will not fit.
-    await this.fitLinesToOriginalTiming(ordered, translations, speechWindows, systemInstruction, glossary, addWarning);
+    // tighten the ones that will not fit. NLLB cannot rewrite a line to a budget
+    // (it follows no instructions), so this pass is skipped for it: the voice is
+    // fitted to the timeline exactly as it was before.
+    if (this.provider !== 'nllb') {
+      await this.fitLinesToOriginalTiming(ordered, translations, speechWindows, systemInstruction, glossary, addWarning);
+    }
 
     const translatedSegments = ordered.map((segment) => {
       const item = translations.get(segment.id);
@@ -896,6 +915,65 @@ export class KhmerDubTranslationService {
     );
 
     return { segments: translatedSegments, warnings };
+  }
+
+  /**
+   * Translate one block with the NLLB service.
+   *
+   * The only thing the service needs is the list of lines and the source FLORES
+   * code; the answer is one Khmer line per id. A line the service skipped is left
+   * out of the map, which the caller reports and the final mapping falls back to
+   * the source for — the same shape as a line an LLM block failed to translate.
+   */
+  private async translateChunkWithNllb(
+    chunk: DialogueSegment[],
+    settings: JobSettings,
+    translations: Map<string, { khmer: string; emotion?: string }>,
+    addWarning: (message: string) => void,
+    blockIndex: number,
+    blockCount: number
+  ): Promise<void> {
+    const srcLang = floresCodeFor(settings.sourceLanguage);
+
+    try {
+      const answers = await translateWithConfiguredNllb(
+        chunk.map((segment) => ({ id: segment.id, text: segment.text })),
+        srcLang
+      );
+      this.answeredProviders.add('nllb');
+
+      let missing = 0;
+      for (const segment of chunk) {
+        const khmer = (answers.get(segment.id) || '').trim();
+        if (!khmer) {
+          missing++;
+          continue;
+        }
+        // NLLB reports no emotion; the final mapping defaults it to 'neutral'.
+        translations.set(segment.id, { khmer });
+      }
+
+      logger.info(
+        `NLLB block ${blockIndex + 1}/${blockCount}: translated ${
+          chunk.length - missing
+        }/${chunk.length} line(s) (${srcLang} -> khm_Khmr).`
+      );
+
+      if (missing > 0) {
+        addWarning(
+          `បន្ទាត់ចំនួន ${missing} ក្នុងក្រុមទី ${blockIndex + 1} មិនបានបកប្រែទេ ដូច្នេះវារក្សាអក្សរដើម។ (${missing} line(s) in block ${
+            blockIndex + 1
+          } of ${blockCount} came back untranslated; the original text was kept for them.)`
+        );
+      }
+    } catch (err: any) {
+      logger.warn(`NLLB block ${blockIndex + 1}/${blockCount} failed:`, err);
+      addWarning(
+        `ក្រុមបកប្រែទី ${blockIndex + 1}/${blockCount} បរាជ័យ ដូច្នេះបន្ទាត់ក្នុងក្រុមនោះរក្សាអក្សរដើម។ (NLLB translation block ${
+          blockIndex + 1
+        }/${blockCount} failed: ${err?.message ?? 'unknown error'})`
+      );
+    }
   }
 
   private buildSystemInstruction(settings: JobSettings, properNames: string[] = []): string {
@@ -1255,6 +1333,10 @@ Return JSON containing exactly ${
 
   /** The other provider this project has credentials for, if any. */
   private secondaryProviderName(): TranslationProviderName | null {
+    // NLLB has no fallback: the owner asked for this one translator only, so a
+    // block that the service cannot answer is reported to the job rather than
+    // silently rerouted to Gemini or Groq.
+    if (this.provider === 'nllb') return null;
     if (this.provider === 'groq') return isGeminiConfigured() ? 'gemini' : null;
     return isGroqConfigured() ? 'groq' : null;
   }

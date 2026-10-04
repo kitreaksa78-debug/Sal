@@ -9,6 +9,7 @@ import { ResultPanel } from './components/ResultPanel';
 import { JobHistory } from './components/JobHistory';
 import { PricingPage } from './components/PricingPage';
 import { DemucsPanel } from './components/DemucsPanel';
+import { NllbPanel } from './components/NllbPanel';
 import { ProRequestsPanel } from './components/ProRequestsPanel';
 import { SignInPanel } from './components/SignInPanel';
 import { JobRecord, JobSettings } from './types';
@@ -478,6 +479,9 @@ export function App() {
                   visible={usageStats.admin}
                   onConnectionChange={() => setDemucsCheckToken((token) => token + 1)}
                 />
+
+                {/* Admin only: where the NLLB-200 translator runs (Colab). */}
+                <NllbPanel visible={usageStats.admin} />
 
                 {/* Admin only: check the QR payment receipts and open Pro. */}
                 <ProRequestsPanel visible={usageStats.admin} />

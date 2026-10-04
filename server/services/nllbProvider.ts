@@ -1,0 +1,314 @@
+import fs from 'fs';
+import path from 'path';
+import { logger } from '../utils/logger.js';
+import { getStorage } from './storage.js';
+
+/**
+ * The translation stage, and the only engine it has: **NLLB-200**.
+ *
+ * The owner asked for Groq and Gemini to be removed from translation and for
+ * `facebook/nllb-200-distilled-600M` to be the translator, run on Google Colab.
+ * The model needs roughly 1.5 GB of RAM, which the free Render instance
+ * (512 MB) does not have, so it is served over HTTP from a Colab session instead
+ * of being loaded in-process — the same shape as the Demucs stem service.
+ *
+ * Where the connection comes from, first one wins:
+ *
+ *  1. `PINNED_NLLB_URL` — a single service baked into the code (empty here);
+ *  2. what the app owner pasted into the website (`/api/config/nllb`), saved to
+ *     `data/nllb.json` and mirrored to object storage so it survives a restart;
+ *  3. the deployment's environment (`NLLB_TRANSLATION_URL` /
+ *     `NLLB_TRANSLATION_API_KEY`).
+ *
+ * A Colab quick tunnel is handed a new hostname every time it is reopened, so
+ * the website value has to win over the environment: re-pointing it must not
+ * need a redeploy.
+ */
+
+/** The one translation model this project uses. */
+export const NLLB_TRANSLATION_MODEL = 'nllb-200-distilled-600M';
+
+/** The Hugging Face model the Colab service loads. Shown to the owner. */
+export const NLLB_HF_MODEL = 'facebook/nllb-200-distilled-600M';
+
+/** Baked-in address; empty so the website panel or the env decides. */
+export const PINNED_NLLB_URL = '';
+
+const SETTINGS_FILE = path.join(process.cwd(), 'data', 'nllb.json');
+const STATE_KEY = 'nllb.json';
+
+/** How long one `/translate` call may take before the block is treated as failed. */
+const NLLB_REQUEST_TIMEOUT_MS = Number(process.env.NLLB_REQUEST_TIMEOUT_MS || '120000');
+
+export interface NllbConnection {
+  url: string;
+  apiKey: string;
+  updatedAt?: string;
+}
+
+export interface ResolvedNllbConnection {
+  url: string;
+  apiKey: string;
+  source: 'pinned' | 'app' | 'env' | 'none';
+  updatedAt?: string;
+}
+
+function normaliseUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
+}
+
+function normalise(input: Partial<NllbConnection>): NllbConnection {
+  return {
+    url: normaliseUrl(String(input.url ?? '')),
+    apiKey: String(input.apiKey ?? '').trim(),
+    ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
+  };
+}
+
+let stored: NllbConnection | null = null;
+let loaded = false;
+
+function readLocalFile(): NllbConnection | null {
+  try {
+    if (!fs.existsSync(SETTINGS_FILE)) return null;
+    const parsed = JSON.parse(fs.readFileSync(SETTINGS_FILE, 'utf8')) as Partial<NllbConnection>;
+    const connection = normalise(parsed);
+    return connection.url ? connection : null;
+  } catch (err) {
+    logger.warn('Could not read the saved NLLB translation service settings:', err);
+    return null;
+  }
+}
+
+export function getStoredNllbConnection(): NllbConnection | null {
+  if (!loaded) {
+    stored = readLocalFile();
+    loaded = true;
+  }
+  return stored ? { ...stored } : null;
+}
+
+/** The connection the pipeline should actually use. */
+export function getNllbConnection(): ResolvedNllbConnection {
+  const saved = getStoredNllbConnection();
+  const env = (name: string) => (process.env[name] || '').trim();
+
+  const pinned = normaliseUrl(PINNED_NLLB_URL);
+  if (pinned) {
+    return {
+      url: pinned,
+      apiKey: env('NLLB_TRANSLATION_API_KEY'),
+      source: 'pinned',
+      updatedAt: saved?.updatedAt,
+    };
+  }
+
+  if (saved?.url) {
+    return { url: saved.url, apiKey: saved.apiKey, source: 'app', updatedAt: saved.updatedAt };
+  }
+
+  const envUrl = normaliseUrl(env('NLLB_TRANSLATION_URL'));
+  if (envUrl) {
+    return { url: envUrl, apiKey: env('NLLB_TRANSLATION_API_KEY'), source: 'env' };
+  }
+
+  return { url: '', apiKey: '', source: 'none' };
+}
+
+/** Whether a translation service is connected at all. */
+export function isNllbConfigured(): boolean {
+  return Boolean(getNllbConnection().url);
+}
+
+export async function flushNllbSettings(): Promise<void> {
+  if (!stored) return;
+  try {
+    await getStorage().setState(STATE_KEY, JSON.stringify(stored));
+  } catch (err) {
+    logger.warn('Failed to mirror the NLLB service settings to remote storage:', err);
+  }
+}
+
+export async function saveNllbConnection(input: Partial<NllbConnection>): Promise<NllbConnection> {
+  const current = getStoredNllbConnection() ?? { url: '', apiKey: '' };
+  // An empty key field means "keep the one already saved", so the owner does not
+  // have to retype the token every time the tunnel URL changes.
+  const apiKey =
+    input.apiKey === undefined || input.apiKey === '' ? current.apiKey : String(input.apiKey).trim();
+
+  stored = {
+    ...normalise({ ...current, ...input, apiKey }),
+    updatedAt: new Date().toISOString(),
+  };
+  loaded = true;
+
+  try {
+    fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+    fs.writeFileSync(SETTINGS_FILE, JSON.stringify(stored, null, 2), 'utf8');
+  } catch (err) {
+    logger.warn('Failed to write the NLLB service settings to disk:', err);
+  }
+
+  await flushNllbSettings();
+  logger.info(`NLLB translation service saved (${stored.url || 'not set'})`);
+  return { ...stored };
+}
+
+export async function clearNllbConnection(): Promise<void> {
+  stored = null;
+  loaded = true;
+  try {
+    if (fs.existsSync(SETTINGS_FILE)) fs.unlinkSync(SETTINGS_FILE);
+  } catch (err) {
+    logger.warn('Failed to remove the saved NLLB service settings:', err);
+  }
+  try {
+    await getStorage().setState(STATE_KEY, '');
+  } catch (err) {
+    logger.warn('Failed to clear the mirrored NLLB service settings:', err);
+  }
+}
+
+/** Load the mirrored settings on boot, before the first job can run. */
+export async function hydrateNllbSettings(): Promise<void> {
+  let raw: string | null = null;
+  try {
+    raw = await getStorage().getState(STATE_KEY);
+  } catch (err) {
+    logger.warn('Could not read the mirrored NLLB service settings:', err);
+  }
+
+  if (!raw) {
+    getStoredNllbConnection();
+    return;
+  }
+
+  try {
+    const parsed = normalise(JSON.parse(raw) as Partial<NllbConnection>);
+    if (parsed.url) {
+      stored = parsed;
+      loaded = true;
+      fs.mkdirSync(path.dirname(SETTINGS_FILE), { recursive: true });
+      fs.writeFileSync(SETTINGS_FILE, JSON.stringify(parsed, null, 2), 'utf8');
+      logger.info(`Recovered the NLLB translation service connection: ${parsed.url}`);
+      return;
+    }
+  } catch (err) {
+    logger.warn('Failed to parse the mirrored NLLB service settings:', err);
+  }
+
+  getStoredNllbConnection();
+}
+
+/**
+ * FLORES-200 codes, which is what NLLB speaks. The website's own source-language
+ * codes are mapped to these before a line is sent.
+ */
+const FLORES_CODES: Record<string, string> = {
+  en: 'eng_Latn',
+  zh: 'zho_Hans',
+  th: 'tha_Thai',
+  vi: 'vie_Latn',
+  ko: 'kor_Hang',
+  ja: 'jpn_Jpan',
+  km: 'khm_Khmr',
+  fr: 'fra_Latn',
+  es: 'spa_Latn',
+};
+
+/** The target is always Khmer. */
+export const NLLB_TARGET_LANGUAGE = 'khm_Khmr';
+
+export function floresCodeFor(sourceLanguage: string | undefined): string {
+  const key = (sourceLanguage || '').trim().toLowerCase();
+  return FLORES_CODES[key] || FLORES_CODES.en;
+}
+
+function authHeaders(apiKey: string): Record<string, string> {
+  return apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
+}
+
+export interface NllbServiceInfo {
+  service: string;
+  version?: string;
+  model: string;
+  device: string;
+  loaded?: boolean;
+}
+
+/** Probe the service's `GET /`, which is what the panel's test button calls. */
+export async function describeNllbService(
+  url: string,
+  apiKey: string,
+  timeoutMs = 6_000
+): Promise<NllbServiceInfo | null> {
+  try {
+    const response = await fetch(`${normaliseUrl(url)}/`, {
+      headers: authHeaders(apiKey),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (!response.ok) return null;
+    const data = (await response.json()) as Record<string, unknown>;
+    if (!data || data.status !== 'ok') return null;
+    return {
+      service: String(data.service || 'NLLB Translation API'),
+      version: data.version ? String(data.version) : undefined,
+      model: String(data.model || NLLB_HF_MODEL),
+      device: String(data.device || 'unknown'),
+      loaded: data.loaded === undefined ? undefined : Boolean(data.loaded),
+    };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Translate a batch of lines with the Colab service. Returns `id -> Khmer`.
+ *
+ * Throws when the service cannot be reached or answers with an error, which is
+ * what the caller reports to the job.
+ */
+export async function nllbTranslateLines(
+  url: string,
+  apiKey: string,
+  lines: { id: string; text: string }[],
+  srcLang: string
+): Promise<Map<string, string>> {
+  if (lines.length === 0) return new Map();
+
+  const response = await fetch(`${normaliseUrl(url)}/translate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
+    body: JSON.stringify({ lines, src_lang: srcLang, tgt_lang: NLLB_TARGET_LANGUAGE }),
+    signal: AbortSignal.timeout(NLLB_REQUEST_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const body = await response.text().catch(() => '');
+    throw new Error(
+      `NLLB service answered ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`
+    );
+  }
+
+  const data = (await response.json()) as { segments?: { id?: string; khmer?: string }[] };
+  const out = new Map<string, string>();
+  for (const segment of data.segments || []) {
+    if (!segment?.id) continue;
+    out.set(String(segment.id), String(segment.khmer || '').trim());
+  }
+  return out;
+}
+
+/** Translate with whichever service is configured. */
+export async function translateWithConfiguredNllb(
+  lines: { id: string; text: string }[],
+  srcLang: string
+): Promise<Map<string, string>> {
+  const connection = getNllbConnection();
+  if (!connection.url) {
+    throw new Error(
+      'មិនទាន់ភ្ជាប់ NLLB API ទេ។ (No NLLB translation service is connected — open the NLLB panel and paste the Colab URL.)'
+    );
+  }
+  return nllbTranslateLines(connection.url, connection.apiKey, lines, srcLang);
+}

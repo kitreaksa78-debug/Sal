@@ -26,7 +26,7 @@ Six steps, in the order the studio shows them:
 | 1. Upload Video | upload + FFmpeg audio extraction |
 | 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
 | 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
-| 4. Gemini → Groq | Gemini `gemini-3.5-flash` first (key #1, then key #2 when a key is spent, throttled or answers 503/504), falling back to Groq `openai/gpt-oss-20b`. Each block is anchored to its moment on screen (timestamp, speech budget, the lines spoken just before and just after it), and transcript fragments Whisper split mid-sentence are rejoined before translation |
+| 4. NLLB-200 | `facebook/nllb-200-distilled-600M` served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) and fitted to the timeline |
 | 5. Subtitle · Piper TTS | subtitles + Khmer TTS (the keyless Edge `km-KH` voices) |
 | 6. FFmpeg → Sync Audio + Video | FFmpeg (bundled in the image) — mix on the original timestamps + render MP4 |
 
@@ -68,6 +68,9 @@ Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 | **Google Colab (GPU)** | `tools/demucs-colab/` — one cell installs, serves and tunnels the API |
 | Home server / VPS | `tools/demucs-termux/run-local.sh` |
 | Bundled sidecar | `tools/audio-separator-server/` |
+
+Translation has the same shape: `tools/nllb-colab/` runs NLLB-200 on Colab and
+its URL/key are set in the «បកប្រែ · NLLB API» panel.
 
 Colab is the fast option: the same `demucs_api.py` runs on a free GPU, so the API
 answers with `"device":"cuda"` and the pipeline then sends it far bigger pieces
@@ -123,8 +126,10 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 
 | Name | Required | Notes |
 | --- | --- | --- |
-| `GROQ_API_KEY` | yes | [console.groq.com/keys](https://console.groq.com/keys) |
+| `GROQ_API_KEY` | yes | [console.groq.com/keys](https://console.groq.com/keys) — speech-to-text only |
 | `GROQ_API_KEY2`, `GROQ_API_KEY3` | optional | Extra keys; the app rotates to them automatically on 401/429 |
+| `NLLB_TRANSLATION_URL` | yes | Base URL of the NLLB service (`tools/nllb-colab/`); the «បកប្រែ · NLLB API» panel overrides it |
+| `NLLB_TRANSLATION_API_KEY` | optional | Bearer token of that service |
 | `STT_PROVIDER` | optional | `groq` (default) |
 | `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service |
 | `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
@@ -154,8 +159,12 @@ Cloudflare R2 / S3 bucket to persist them:
   Spaces need a PRO subscription. Deploy this folder elsewhere for free — see
   `render.yaml` for a Render free web service — or self-host it.
 - Free instances sleep after a period of inactivity and wake on the next visit.
-- The translate step is limited by the Groq free tier (tokens per minute / per
-  day), not by the Space. Long videos are sent in blocks to stay under it.
+- Translation runs on **NLLB-200** (`facebook/nllb-200-distilled-600M`) served
+  from a Google Colab session (`tools/nllb-colab/`), because the model needs
+  ~1.5 GB of RAM and the free Render instance has 512 MB. The Colab URL/key are
+  pasted into the «បកប្រែ · NLLB API» panel in the studio (or set with
+  `NLLB_TRANSLATION_URL` / `NLLB_TRANSLATION_API_KEY`). Termux/Demucs and Groq
+  Whisper speech-to-text are unchanged.
 - Video processing is CPU-bound: a ~1 minute video takes roughly 1–3 minutes.
 
 ## Local / self-hosted run

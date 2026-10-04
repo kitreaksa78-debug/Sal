@@ -8,14 +8,13 @@ interface TranslationSettingsProps {
   disabled?: boolean;
   /**
    * `<provider> · <model>` the server will translate with, e.g.
-   * "groq · qwen/qwen3.8-27b". Read from the config status; absent until the
-   * probe answers, so the line is simply not drawn while it is unknown.
+   * "nllb · nllb-200-distilled-600M". Read from the config status; absent until
+   * the probe answers, so the line is simply not drawn while it is unknown.
    */
   engine?: string | null;
   /**
-   * The service that takes over when `engine` fails a block, e.g. `groq`. The
-   * pipeline switches by itself, so this is shown as the promise it is: no
-   * setting to change, no job to restart.
+   * The service that takes over when `engine` fails a block, when there is one.
+   * NLLB is the only translator, so this is normally absent.
    */
   engineFallback?: string | null;
 }

@@ -2,7 +2,7 @@ import express, { Request, Response } from 'express';
 import { FFmpegHelper, RENDER_ENCODER_ARGS } from '../utils/ffmpeg.js';
 import { getStorage } from '../services/storage.js';
 import { getTranscriptionProvider } from '../services/transcription.js';
-import { getTranslationService, getGroqTranslationFallbacks } from '../services/translation.js';
+import { getTranslationService } from '../services/translation.js';
 import { getTTSProvider } from '../services/tts.js';
 import {
   getAudioSeparationProvider,
@@ -10,8 +10,6 @@ import {
 } from '../services/audioSeparation.js';
 import { getSeparatorConnection } from '../services/separatorSettings.js';
 import { SystemConfigStatus } from '../types.js';
-import { getGeminiApiKeys } from '../utils/aiKeys.js';
-import { getGeminiModels } from '../utils/gemini.js';
 
 const router = express.Router();
 
@@ -19,13 +17,6 @@ router.get('/status', async (req: Request, res: Response) => {
   const ffmpegInfo = await FFmpegHelper.checkAvailability();
   const storage = getStorage();
   const storageInfo = storage.getInfo();
-
-  // Translation survives the free tier by rotating models and then keys, so both
-  // counts are reported: "why is it slower today" has an answer on this screen.
-  const geminiKeys = getGeminiApiKeys();
-  const geminiModels = getGeminiModels();
-  const geminiConfigured = geminiKeys.length > 0;
-  const geminiModel = geminiModels[0];
 
   const sttInstance = getTranscriptionProvider();
   const sttConfigured = sttInstance.isConfigured();
@@ -38,12 +29,10 @@ router.get('/status', async (req: Request, res: Response) => {
       : process.env.STT_MODEL || 'gemini-3.5-transcribe';
 
   const translationService = getTranslationService();
-  // Reported from the same helpers the pipeline sends its requests with, so this
-  // screen can never name a model the job would not actually use.
-  const translationFallbackModels =
-    translationService.getProviderName() === 'gemini'
-      ? translationService.getFallbackModelNames().slice(1)
-      : getGroqTranslationFallbacks().filter((m) => m !== translationService.getModelName());
+  // Reported from the same service the pipeline sends its requests with, so this
+  // screen can never name a model the job would not actually use. Translation is
+  // NLLB only now, which has no model rotation behind it.
+  const translationFallbackModels = translationService.getFallbackModelNames().slice(1);
 
   const ttsInstance = getTTSProvider();
   const ttsConfigured = ttsInstance.isConfigured();
@@ -62,12 +51,6 @@ router.get('/status', async (req: Request, res: Response) => {
   const videoSegmentSeconds = parseInt(process.env.VIDEO_SEGMENT_SECONDS || '300', 10);
 
   const status: SystemConfigStatus = {
-    gemini: {
-      configured: geminiConfigured,
-      model: geminiModel,
-      keys: geminiKeys.length,
-      models: geminiModels,
-    },
     translation: {
       configured: translationService.isConfigured(),
       provider: translationService.getProviderName(),

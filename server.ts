@@ -7,6 +7,7 @@ import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
 import separatorRouter from './server/routes/separator.js';
+import nllbRouter from './server/routes/nllb.js';
 import authRouter from './server/routes/auth.js';
 import usageRouter from './server/routes/usage.js';
 import billingRouter, { handleLemonSqueezyWebhook } from './server/routes/billing.js';
@@ -16,6 +17,7 @@ import { FFmpegHelper } from './server/utils/ffmpeg.js';
 import { getDatabase } from './server/services/db.js';
 import { getBilling } from './server/services/billing.js';
 import { hydrateSeparatorSettings } from './server/services/separatorSettings.js';
+import { hydrateNllbSettings } from './server/services/nllbProvider.js';
 
 const app = express();
 // Honour the port injected by the host, falling back to 3000 for local runs.
@@ -44,6 +46,8 @@ app.use('/api/config', configRouter);
 // Where the stem separation runs (the phone's Demucs API, a home server, the
 // audio-separator sidecar) — admin only.
 app.use('/api/config/separator', separatorRouter);
+// Where the NLLB-200 translation service runs (the Colab API) — admin only.
+app.use('/api/config/nllb', nllbRouter);
 app.use('/api/auth', authRouter);
 app.use('/api/usage', usageRouter);
 app.use('/api/billing', billingRouter);
@@ -71,6 +75,10 @@ async function startServer() {
   // for a job — with no stem service connected the upload endpoint refuses the
   // video — so this hydration is what makes the pipeline ready at boot.
   await hydrateSeparatorSettings();
+  // The translation service the owner pointed the app at from the website. A
+  // Colab tunnel URL changes every time it is reopened, so the address pasted
+  // into the panel is what a job started after a restart must keep using.
+  await hydrateNllbSettings();
 
   // Check system dependencies on start
   const ffmpegInfo = await FFmpegHelper.checkAvailability();
