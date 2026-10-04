@@ -181,7 +181,10 @@ fi
 
 if [ -z "$REUSE" ]; then
   : > "$LOG"
-  pkill -f "cloudflared tunnel" 2>/dev/null || true
+  # បិទតែ tunnel របស់សេវានេះ (តាម port) — មិនប៉ះ tunnel របស់សេវាផ្សេង (ឧ. NLLB
+  # និង Demucs រត់ក្នុង Colab តែមួយ)។ `pkill -f "cloudflared tunnel"` ធ្លាប់បិទ
+  # ទាំងអស់ ដូច្នេះការបើកសេវាមួយ ធ្វើឲ្យសេវាមួយទៀតដាច់ (Cloudflare error 1033)។
+  pkill -f "cloudflared.*:$PORT" 2>/dev/null || true
   sleep 1
   # `127.0.0.1` ដោយចំ (មិនមែន `localhost`) ព្រោះ API ស្តាប់តែ IPv4។
   setsid "$CF_BIN" tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate \
@@ -262,12 +265,12 @@ if [ "$ok" = "1" ]; then
 
   មើល log ផ្ទាល់៖   tail -f $DIR/api.log
   បិទ API៖           pkill -f demucs_api.py
-  បិទ tunnel៖        pkill -f 'cloudflared tunnel'
+  បិទ tunnel៖        pkill -f "cloudflared.*:$PORT"
 EOF
 else
   echo "❌ TUNNEL នៅមិនដើរទេ (URL នោះទទេពីខាងក្រៅ)។ log ចុងក្រោយ៖"
   tail -12 "$LOG"
   echo
-  echo "សាកម្ដងទៀត៖ pkill -f 'cloudflared tunnel' រួចរត់ cell នេះម្តងទៀត"
+  echo "សាកម្ដងទៀត៖ pkill -f \"cloudflared.*:$PORT\" រួចរត់ cell នេះម្តងទៀត"
   exit 1
 fi
