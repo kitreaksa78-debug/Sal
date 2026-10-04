@@ -40,6 +40,18 @@ const STATE_KEY = 'nllb.json';
 /** How long one `/translate` call may take before the block is treated as failed. */
 const NLLB_REQUEST_TIMEOUT_MS = Number(process.env.NLLB_REQUEST_TIMEOUT_MS || '120000');
 
+/**
+ * How many times a retryable failure is attempted before it is reported.
+ *
+ * A Colab quick tunnel blips: the tunnel reconnects, the origin restarts, or
+ * Cloudflare briefly answers 530/502 while the edge catches up. A block that hit
+ * one of those is worth asking again rather than keeping the source text.
+ */
+const NLLB_MAX_ATTEMPTS = Math.max(1, Number(process.env.NLLB_MAX_ATTEMPTS || '3'));
+
+/** Base backoff between retries; multiplied by the attempt number. */
+const NLLB_RETRY_BACKOFF_MS = Math.max(0, Number(process.env.NLLB_RETRY_BACKOFF_MS || '1500'));
+
 export interface NllbConnection {
   url: string;
   apiKey: string;
@@ -277,31 +289,72 @@ export function looksLikeStemService(info: { service?: string; model?: string })
   return /\bdemucs\b|separator|stem|vocal/.test(text);
 }
 
+/** A failure we classify so the caller can decide whether asking again is worth it. */
+class NllbRequestError extends Error {
+  constructor(message: string, readonly retryable: boolean) {
+    super(message);
+    this.name = 'NllbRequestError';
+  }
+}
+
 /**
- * Translate a batch of lines with the Colab service. Returns `id -> Khmer`.
- *
- * Throws when the service cannot be reached or answers with an error, which is
- * what the caller reports to the job.
+ * Cloudflare's tunnel answers 530 (error 1033) when the tunnel or its origin is
+ * gone, with 502/503 while an edge catches up. Those are "try again in a
+ * moment" failures; a 4xx would be a real request error.
  */
-export async function nllbTranslateLines(
+function isRetryableNllbStatus(status: number): boolean {
+  return status === 408 || status === 429 || status >= 500;
+}
+
+/**
+ * A short, actionable reason instead of Cloudflare's page of HTML, which is what
+ * a 530/502 actually returns and which used to be pasted into the job warning.
+ */
+function nllbFailureMessage(status: number): string {
+  if (status === 530 || status === 502 || status === 503) {
+    return `NLLB service មិនអាចទាក់ទងបានទេ (${status}: tunnel របស់ Colab ប្រហែលបានដាច់)។ សូមបើក NLLB ឡើងវិញ រួច paste URL ថ្មីក្នុងកាត «បកប្រែ · NLLB API»។ (NLLB service unreachable — the Colab tunnel appears to be down.)`;
+  }
+  return `NLLB service answered ${status}.`;
+}
+
+/**
+ * Whether a fetch-level failure is worth retrying. A DNS miss (the whole tunnel
+ * is gone) or a timeout (the request was too big for Cloudflare's edge) will not
+ * fix itself in a couple of seconds, so those are reported straight away.
+ */
+function isRetryableFetchError(err: any): boolean {
+  if (err?.name === 'TimeoutError' || err?.name === 'AbortError') return false;
+  const code = String(err?.cause?.code || err?.code || '');
+  if (code === 'ENOTFOUND' || code === 'EAI_AGAIN') return false;
+  return true;
+}
+
+/** One `/translate` call, no retry. */
+async function requestNllbTranslate(
   url: string,
   apiKey: string,
   lines: { id: string; text: string }[],
   srcLang: string
 ): Promise<Map<string, string>> {
-  if (lines.length === 0) return new Map();
-
-  const response = await fetch(`${normaliseUrl(url)}/translate`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
-    body: JSON.stringify({ lines, src_lang: srcLang, tgt_lang: NLLB_TARGET_LANGUAGE }),
-    signal: AbortSignal.timeout(NLLB_REQUEST_TIMEOUT_MS),
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${normaliseUrl(url)}/translate`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
+      body: JSON.stringify({ lines, src_lang: srcLang, tgt_lang: NLLB_TARGET_LANGUAGE }),
+      signal: AbortSignal.timeout(NLLB_REQUEST_TIMEOUT_MS),
+    });
+  } catch (err: any) {
+    const reason = err?.name === 'TimeoutError' ? 'timed out' : err?.message || 'network error';
+    throw new NllbRequestError(`NLLB service request failed (${reason}).`, isRetryableFetchError(err));
+  }
 
   if (!response.ok) {
-    const body = await response.text().catch(() => '');
-    throw new Error(
-      `NLLB service answered ${response.status}${body ? `: ${body.slice(0, 200)}` : ''}`
+    // Read and drop the body: a Cloudflare tunnel error is pages of HTML, not JSON.
+    await response.text().catch(() => '');
+    throw new NllbRequestError(
+      nllbFailureMessage(response.status),
+      isRetryableNllbStatus(response.status)
     );
   }
 
@@ -312,6 +365,42 @@ export async function nllbTranslateLines(
     out.set(String(segment.id), String(segment.khmer || '').trim());
   }
   return out;
+}
+
+/**
+ * Translate a batch of lines with the Colab service. Returns `id -> Khmer`.
+ *
+ * A retryable failure (tunnel blip, 5xx) is asked again a couple of times with a
+ * short backoff before it is reported, so one hiccup does not cost the block its
+ * translation. Anything else throws straight away, which the caller reports to
+ * the job.
+ */
+export async function nllbTranslateLines(
+  url: string,
+  apiKey: string,
+  lines: { id: string; text: string }[],
+  srcLang: string
+): Promise<Map<string, string>> {
+  if (lines.length === 0) return new Map();
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= NLLB_MAX_ATTEMPTS; attempt++) {
+    try {
+      return await requestNllbTranslate(url, apiKey, lines, srcLang);
+    } catch (err) {
+      lastError = err;
+      const retryable = err instanceof NllbRequestError && err.retryable;
+      if (!retryable || attempt >= NLLB_MAX_ATTEMPTS) throw err;
+      const wait = NLLB_RETRY_BACKOFF_MS * attempt;
+      logger.warn(
+        `NLLB request failed (attempt ${attempt}/${NLLB_MAX_ATTEMPTS}); retrying in ${wait}ms: ${
+          err instanceof Error ? err.message : err
+        }`
+      );
+      await new Promise((resolve) => setTimeout(resolve, wait));
+    }
+  }
+  throw lastError;
 }
 
 /** Translate with whichever service is configured. */
