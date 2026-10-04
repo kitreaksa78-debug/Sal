@@ -508,13 +508,12 @@ export class KhmerDubTranslationService {
   /** Wall-clock time until which the configured provider is not asked again. */
   private primaryDownUntil = 0;
   /**
-   * The other provider, once the configured one has failed this job.
+   * Legacy provider-promotion state.
    *
-   * Once the configured provider is down, asking it again is pure loss, so every
-   * remaining block goes to this one. `direct` says how: Gemini tolerates several
-   * blocks in flight, so it is asked straight from the block; Groq's free tier
-   * caps tokens per minute, so its blocks keep queueing through the paced fallback
-   * path instead of trading a dead provider for a 429 storm.
+   * Unreachable while translation runs on NLLB (see `resolveTranslationProvider`):
+   * it belonged to the Gemini-first / Groq-fallback stage that the owner asked to
+   * remove. Kept only so the deterministic, provider-agnostic parts of this file
+   * share one pipeline; nothing sets it any more.
    */
   private promotedProvider: { name: TranslationProviderName; direct: boolean } | null = null;
   /** Serialises fallback calls; see `askFallback`. */
@@ -566,9 +565,9 @@ export class KhmerDubTranslationService {
   /**
    * How many blocks are in flight at once.
    *
-   * Gemini tolerates several concurrent calls, so its blocks overlap. Groq's free
-   * tier caps tokens per minute, where overlapping requests only earn a 429, so its
-   * blocks stay strictly sequential and paced.
+   * The NLLB service translates one batch at a time, so a couple of blocks in
+   * flight keeps it fed without queueing a long tail. (The legacy Groq path was
+   * strictly sequential and paced against its free tier.)
    */
   public getConcurrency(): number {
     if (this.provider === 'groq') return 1;
@@ -585,14 +584,13 @@ export class KhmerDubTranslationService {
   /**
    * Translates dialogue segments into natural spoken Cambodian Khmer.
    *
-   * The transcript is sent in blocks rather than one giant request: a single
-   * request grows past Groq's 8k tokens/minute ceiling at roughly four minutes
-   * of video and then fails with HTTP 429. Blocking also lets the job report
-   * real progress and keeps a bad block from discarding the whole transcript.
+   * The transcript is sent to the NLLB service in blocks rather than one giant
+   * request: a block is one `/translate` call, so the job can report real
+   * progress and a bad block cannot discard the whole transcript.
    *
    * The blocks do not depend on each other, so they are asked at the same time
-   * (see getConcurrency) and the stage costs roughly one provider round trip per
-   * wave instead of one per block.
+   * (see getConcurrency) and the stage costs roughly one round trip per wave
+   * instead of one per block.
    */
   public async translateDialogue(
     segments: DialogueSegment[],
@@ -976,6 +974,15 @@ export class KhmerDubTranslationService {
     }
   }
 
+  // -------------------------------------------------------------------------
+  // LEGACY, UNREACHABLE: everything from here to `paceRequest` is the old
+  // Gemini/Groq instruction-following translator (prompts, JSON schema parsing,
+  // rescue/glossary/proper-name passes, fit-to-timing rewrites, token pacing).
+  // Translation now runs on NLLB only, which follows no instructions, so none of
+  // this is called — `translateChunkWithNllb` replaces all of it. It is left in
+  // place rather than deleted in one sweep so the deterministic helpers above
+  // keep sharing one file; do not wire it back up.
+  // -------------------------------------------------------------------------
   private buildSystemInstruction(settings: JobSettings, properNames: string[] = []): string {
     const isFormal = settings.translationStyle === 'formal';
     const voiceStyle = settings.voiceStyle || 'natural';
