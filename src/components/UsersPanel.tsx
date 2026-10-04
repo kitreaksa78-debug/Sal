@@ -86,7 +86,21 @@ export const UsersPanel: React.FC<UsersPanelProps> = ({ visible }) => {
           (user.name || '').toLowerCase().includes(query)
       )
     : users;
+  const total = users.length;
   const proCount = users.filter(isPro).length;
+  const freeCount = total - proCount;
+  // Signed in during the last 7 days — the number that says whether the site
+  // is being used right now, not just how many accounts ever existed.
+  const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const activeWeek = users.filter(
+    (user) => new Date(user.lastLoginAt || user.createdAt).getTime() >= weekAgo
+  ).length;
+  const stats: { label: string; value: number; tone: string }[] = [
+    { label: 'គណនីសរុប', value: total, tone: 'text-emerald-300' },
+    { label: 'Pro', value: proCount, tone: 'text-amber-300' },
+    { label: 'Free', value: freeCount, tone: 'text-slate-300' },
+    { label: 'ចូល ៧ ថ្ងៃចុងក្រោយ', value: activeWeek, tone: 'text-sky-300' },
+  ];
 
   return (
     <div className="overflow-hidden rounded-2xl border border-slate-800/90 bg-[#111827]/80 shadow-xl backdrop-blur-sm">
@@ -106,9 +120,6 @@ export const UsersPanel: React.FC<UsersPanelProps> = ({ visible }) => {
             <span className="rounded bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300 border border-emerald-500/30">
               ADMIN
             </span>
-            <span className="rounded-full border border-slate-700 bg-slate-900/70 px-2 py-0.5 text-[10px] font-bold text-slate-300">
-              {users.length} គណនី
-            </span>
             {proCount > 0 && (
               <span className="rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-bold text-amber-300">
                 {proCount} Pro
@@ -116,7 +127,17 @@ export const UsersPanel: React.FC<UsersPanelProps> = ({ visible }) => {
             )}
           </span>
           <span className="mt-1 block text-xs text-slate-400">
-            បញ្ជីគណនី Google ដែលបាន login ក្នុងគេហទំព័រនេះ — ថ្មីបំផុតនៅលើគេសិន
+            ចំនួនសរុបគណនីដែលបានចុះឈ្មោះ និងប្រើក្នុងគេហទំព័រនេះ
+          </span>
+        </span>
+        {/* The total is the answer this card exists for, so it is readable
+            without opening anything. */}
+        <span className="shrink-0 text-right">
+          <span className="block text-2xl font-extrabold leading-none text-emerald-300 tabular-nums">
+            {loading && users.length === 0 ? '…' : total}
+          </span>
+          <span className="mt-0.5 block text-[10px] font-semibold text-slate-400">
+            គណនីសរុប
           </span>
         </span>
         <ChevronDown
@@ -126,6 +147,23 @@ export const UsersPanel: React.FC<UsersPanelProps> = ({ visible }) => {
 
       {open && (
         <div className="space-y-3 border-t border-slate-800/80 p-4 sm:p-5">
+          {/* Summary first: the totals are what the owner opens this for. */}
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {stats.map((stat) => (
+              <div
+                key={stat.label}
+                className="rounded-xl border border-slate-800 bg-[#0b0f17]/80 p-3 text-center"
+              >
+                <div className={`text-xl font-extrabold tabular-nums ${stat.tone}`}>
+                  {stat.value}
+                </div>
+                <div className="mt-0.5 text-[10px] font-semibold text-slate-400">
+                  {stat.label}
+                </div>
+              </div>
+            ))}
+          </div>
+
           <div className="flex items-center gap-2">
             <div className="relative flex-1 min-w-0">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-500" />
