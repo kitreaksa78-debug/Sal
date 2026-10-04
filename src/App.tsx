@@ -11,6 +11,7 @@ import { PricingPage } from './components/PricingPage';
 import { DemucsPanel } from './components/DemucsPanel';
 import { NllbPanel } from './components/NllbPanel';
 import { ProRequestsPanel } from './components/ProRequestsPanel';
+import { UsersPanel } from './components/UsersPanel';
 import { SignInPanel } from './components/SignInPanel';
 import { JobRecord, JobSettings } from './types';
 import {
@@ -485,6 +486,9 @@ export function App() {
 
                 {/* Admin only: check the QR payment receipts and open Pro. */}
                 <ProRequestsPanel visible={usageStats.admin} />
+
+                {/* Admin only: every account that has signed into the site. */}
+                <UsersPanel visible={usageStats.admin} />
 
                 {/* Upload Panel */}
                 <UploadPanel

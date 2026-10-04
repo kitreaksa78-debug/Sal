@@ -17,6 +17,8 @@ import {
   describeRemoteService,
   getAudioSeparationProvider,
   looksLikeTranslationService,
+  probeStemServiceKey,
+  stemKeyRejectedMessage,
   testRemoteSeparation,
 } from '../services/audioSeparation.js';
 
@@ -203,6 +205,23 @@ router.post('/test', async (req: Request, res: Response) => {
       });
     }
 
+    // The root answer is public, so "reachable" says nothing about the key.
+    // Ask the gated /health too: a wrong key must fail here, in one sentence,
+    // instead of looking fine until a real job hits 401 on /separate.
+    const auth = await probeStemServiceKey(connection.url, connection.apiKey);
+    if (auth === 'rejected') {
+      logger.info(
+        `Stem service quick test by ${session.email}: key rejected (${latencyMs}ms) ${connection.url}`
+      );
+      return res.json({
+        ok: false,
+        service,
+        latencyMs,
+        detail: stemKeyRejectedMessage(Boolean(connection.apiKey)),
+        url: connection.url,
+      });
+    }
+
     logger.info(
       `Stem service quick test by ${session.email}: ok (${latencyMs}ms) ${service} — ${connection.url}`
     );
@@ -231,6 +250,19 @@ router.post('/test', async (req: Request, res: Response) => {
         url: connection.url,
       });
     }
+    // Fail before spending a whole upload on audio the service will refuse.
+    const auth = await probeStemServiceKey(connection.url, connection.apiKey);
+    if (auth === 'rejected') {
+      logger.info(`Stem service full test by ${session.email}: key rejected ${connection.url}`);
+      return res.json({
+        ok: false,
+        service,
+        latencyMs: 0,
+        detail: stemKeyRejectedMessage(Boolean(connection.apiKey)),
+        url: connection.url,
+      });
+    }
+
     const tone = await createTestTone(tempDir);
     const report: SeparatorTestReport = await testRemoteSeparation(tone, tempDir);
 

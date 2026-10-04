@@ -950,8 +950,14 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
           if (isTunnelDownStatus(upload.status) || isTunnelDownBody(raw)) {
             throw new TransientSeparationError(failure);
           }
+          // A refused key is refused on every endpoint of the service, so trying
+          // the rest would only bury the real reason under five identical 401s —
+          // which is exactly what the connection test used to print.
+          if (upload.status === 401 || upload.status === 403) {
+            throw new Error(stemKeyRejectedMessage(Boolean(apiKey), detail));
+          }
           // 400/415/422 usually mean the field name was wrong; try the next one.
-          if ([400, 401, 403, 415, 422].includes(upload.status)) continue;
+          if ([400, 415, 422].includes(upload.status)) continue;
           throw new Error(failure);
         }
 
@@ -1158,6 +1164,57 @@ export async function describeRemoteService(
 export function looksLikeTranslationService(service: string | null): boolean {
   const text = (service || '').toLowerCase();
   return /\bnllb\b|translation|translate/.test(text);
+}
+
+/**
+ * What the owner is told when the stem service refuses the key.
+ *
+ * One sentence that names the actual problem and the exact card to fix it in,
+ * instead of the raw `401 {"detail":"Invalid or missing API key"}` wall that
+ * every endpoint on the service answers with. `hasKey` picks between the two
+ * causes: no key saved at all, or a stale one from an earlier Colab/phone run.
+ */
+export function stemKeyRejectedMessage(hasKey: boolean, detail?: string): string {
+  const cause = hasKey
+    ? 'key ដែលរក្សាទុកមិនផ្ទឹមគ្នានឹងម៉ាស៊ីនញែកភ្លេង — Colab/ទូរស័ព្ទបង្កើត key ថ្មីរាល់ពេលបើកសេវាថ្មី បើមិនបានកំណត់ DEMUCS_API_KEY អត្ថិភាព'
+    : 'មិនទាន់មាន key រក្សាទុកក្នុងកាតទេ';
+  return (
+    `API key មិនត្រឹមត្រូវ — ${cause}។ ` +
+    'សូមយក API key ដែល Colab (ឬទូរស័ព្ទ) បានបង្ហាញនៅពេលបើក service មក paste ក្នុងកាត «ញែកភ្លេង · Demucs API» រួចចុចរក្សាទុក ហើយសាកល្បងម្តងទៀត។ ' +
+    `(The Demucs service rejected the API key: ${detail || '401 Invalid or missing API key'} — paste the key shown by the Colab/phone script into the stem card and save it.)`
+  );
+}
+
+/**
+ * Does the service accept the key the app has saved?
+ *
+ * The root answer (`/`) is public on the real Demucs service, so a plain
+ * reachability probe reports "ok" even when the key is wrong — and the owner
+ * only finds out later, deep inside a full separation. `/health` carries the
+ * same identity but is gated by the key, so asking it first is what separates
+ * "the tunnel is up but the key is not" from "everything is fine".
+ *
+ * `'unknown'` means no answer that could settle it (no `/health` route, the
+ * tunnel dropped mid-probe) and must not be reported as a key problem.
+ */
+export async function probeStemServiceKey(
+  base: string,
+  apiKey: string,
+  timeoutMs = 4_000
+): Promise<'ok' | 'rejected' | 'unknown'> {
+  for (const probePath of ['/health', '/']) {
+    try {
+      const res = await fetch(`${base}${probePath}`, {
+        headers: apiKey ? { Authorization: `Bearer ${apiKey}` } : {},
+        signal: AbortSignal.timeout(timeoutMs),
+      });
+      if (res.status === 401 || res.status === 403) return 'rejected';
+      if (res.ok) return 'ok';
+    } catch {
+      // Try the next path; an unreachable probe is not an auth answer.
+    }
+  }
+  return 'unknown';
 }
 
 export interface SeparatorTestReport {

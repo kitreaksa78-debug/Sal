@@ -522,6 +522,14 @@ export interface SignedInUser {
   logins: number;
   createdAt: string;
   lastLoginAt: string;
+  /**
+   * The plan the owner granted after a manual (bank QR) payment. The server
+   * only includes it on the account records it hands to an admin, so this is
+   * absent for a plain "who am I" answer.
+   */
+  plan?: 'free' | 'pro';
+  /** When the manual Pro runs out; absent or past means the free tier is back. */
+  proExpiresAt?: string | null;
 }
 
 /** Whether Google sign-in is ready, and the public client id it needs. */
