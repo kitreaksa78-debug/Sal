@@ -18,20 +18,19 @@ interface StepItem {
 /**
  * The pipeline the studio actually runs, in order:
  *
- *   Upload Video → Demucs API → Speech-to-Text → NLLB-200 →
- *   Subtitle · Piper TTS → FFmpeg → Sync Audio + Video
+ *   Upload Video → Demucs API → Speech-to-Text → NLLB-200
+ *   (then: subtitles + Khmer voice, and the final FFmpeg mix/render)
  *
- * Six rows, one per real step: the Khmer line names what the stage does, the line
- * under it names the engine that does it. Each row owns every status the server
- * reports inside that step, which is what keeps the checklist lighting up from top
- * to bottom as the job moves. The last row covers the mix and the render, and it is
- * where the translated voice is placed on the original lines' own timestamps and
- * padded to the video's length, so the dub lands in sync instead of starting at 0.
+ * Four rows, one per stage the owner wants on screen: the Khmer line names what
+ * the stage does, the line under it names the engine that does it. Each row owns
+ * every status the server reports inside that step, which is what keeps the
+ * checklist lighting up from top to bottom as the job moves.
  *
- * There is no separate timing row: the sync is done inside the final FFmpeg pass,
- * where the voice is written back onto the picture, so a step that only measured
- * what was already guaranteed would cost a full-length audio pass and show nothing
- * new.
+ * The last two steps of the run — writing the subtitles and the Khmer voice, and
+ * mixing/rendering the final MP4 — still happen exactly as before; they are no
+ * longer listed as rows of their own, so `LATE_STATUSES` covers their statuses:
+ * when the job is inside one of them every row above is already finished, and
+ * the overall progress bar is where that remaining work is visible.
  *
  * The dialogue is translated by NLLB-200 (`nllb-200-distilled-600M`), served from
  * the owner's Google Colab session, so row 4 names it. The speech-to-text step
@@ -63,18 +62,22 @@ const PIPELINE_STAGES: StepItem[] = [
     english: 'NLLB-200',
     associatedStatuses: ['translating'],
   },
-  {
-    id: 'generating_voice',
-    khmer: 'បង្កើតអក្សររត់ និងសំឡេងបកប្រែ 🗣️',
-    english: 'Subtitle · Piper TTS',
-    associatedStatuses: ['generating_voice'],
-  },
-  {
-    id: 'rendering',
-    khmer: 'ដាក់សំឡេងបកប្រែឲ្យស៊ីគ្នានឹងវីដេអូ',
-    english: 'FFmpeg → Sync Audio + Video',
-    associatedStatuses: ['mixing', 'rendering', 'quality_check'],
-  },
+];
+
+/**
+ * Statuses of the two closing steps that no longer have a row of their own.
+ *
+ * They still run — the subtitles, the Khmer voice and the final MP4 come from
+ * them — but the checklist shows only the stages above, so a job sitting in one
+ * of these is past every visible row: all of them read as finished while the
+ * progress bar carries the rest. `failed` is deliberately absent: a run that
+ * died must not light the whole list up green.
+ */
+const LATE_STATUSES: JobStatus[] = [
+  'generating_voice',
+  'mixing',
+  'rendering',
+  'quality_check',
 ];
 
 /**
@@ -118,8 +121,14 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
     if (stage.associatedStatuses.includes(currentStatus)) return 'active';
 
     const currentStageIndex = PIPELINE_STAGES.findIndex(s => s.associatedStatuses.includes(currentStatus));
-    const thisStageIndex = PIPELINE_STAGES.indexOf(stage);
 
+    // The status belongs to one of the unlisted closing steps: every row this
+    // checklist shows is already behind the job.
+    if (currentStageIndex === -1) {
+      return LATE_STATUSES.includes(currentStatus) ? 'completed' : 'pending';
+    }
+
+    const thisStageIndex = PIPELINE_STAGES.indexOf(stage);
     if (currentStageIndex > thisStageIndex) return 'completed';
     return 'pending';
   };
