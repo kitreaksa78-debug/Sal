@@ -36,8 +36,13 @@ if [ -z "$DIR" ]; then
 fi
 
 say() { printf '\n===== %s =====\n' "$1"; }
-api_up() { curl -s --max-time 4 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; }
+# ពិនិត្យថាអ្វីដែលនៅលើ port នេះជា NLLB ពិត — មិនមែនគ្រាន់តែ «មានអ្វីមួយឆ្លើយតប»។
+# Demucs API ក៏ឆ្លើយ {"status":"ok"} ដូចគ្នា ដូច្នេះបើសាកត្រឹម status យើងអាចចាប់ tunnel ទៅ
+# សេវាខុស (ឧ. Demucs ដែលកំពុងរត់) ហើយគេហទំព័រនឹងទទួល URL ខុស។
+api_up() { curl -s --max-time 4 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -qi 'nllb'; }
 api_ready() { curl -s --max-time 4 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"loaded":true'; }
+# តើមានអ្វីកំពុងស្តាប់នៅ port $1 ឬអត់ (គ្មានអ្វី = ទំនេរ)។
+port_listening() { curl -s --max-time 2 "http://127.0.0.1:$1/" >/dev/null 2>&1; }
 
 mkdir -p "$DIR" || { echo "❌ បង្កើតថត $DIR មិនបានទេ"; exit 1; }
 cd "$DIR" || { echo "❌ ចូលថត $DIR មិនបានទេ"; exit 1; }
@@ -87,9 +92,19 @@ if [ -z "$KEY" ]; then
 fi
 MODEL="${NLLB_MODEL:-facebook/nllb-200-distilled-600M}"
 
-say "៤/៦  បើក API នៅ port $PORT (model: $MODEL)"
 pkill -f nllb_api.py 2>/dev/null || true
 sleep 1
+
+# បើ port នេះមានសេវាផ្សេង (ឧ. Demucs) កាន់រួច សាក port បន្ទាប់ ដើម្បីកុំបើកលើសេវានោះ។
+_tries=0
+while [ "$_tries" -lt 12 ]; do
+  if ! port_listening "$PORT" || api_up; then break; fi
+  echo "  ⚠️ port $PORT មានសេវាផ្សេងកាន់រួច — សាក port $((PORT + 1))..."
+  PORT=$((PORT + 1))
+  _tries=$((_tries + 1))
+done
+
+say "៤/៦  បើក API នៅ port $PORT (model: $MODEL)"
 : > api.log
 
 NLLB_API_KEY="$KEY" NLLB_MODEL="$MODEL" NLLB_HOST=127.0.0.1 PORT="$PORT" \
@@ -147,7 +162,7 @@ PREV=""
 if [ -f "$DIR/tunnel-url.txt" ]; then
   PREV=$(head -n 1 "$DIR/tunnel-url.txt" 2>/dev/null | tr -d ' \r\n')
 fi
-if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -q '"status"'; then
+if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -qi 'nllb'; then
   REUSE="$PREV"
 fi
 
@@ -199,9 +214,12 @@ ok=0
 k=0
 while [ "$k" -lt 8 ]; do
   body=$(curl -s --max-time 15 "$URL/" 2>/dev/null || true)
-  case "$body" in
-    *'"status"'*) ok=1; break ;;
-  esac
+  if printf '%s' "$body" | grep -qi 'nllb'; then ok=1; break; fi
+  if printf '%s' "$body" | grep -qi 'demucs'; then
+    echo "❌ tunnel នេះបញ្ជូនទៅ Demucs API មិនមែន NLLB — port $PORT កំពុងត្រូវសេវាផ្សេងកាន់។"
+    echo "   បិទសេវានោះមុន (pkill -f demucs_api.py) រួចរត់ cell នេះម្តងទៀត។"
+    exit 1
+  fi
   k=$((k + 1))
   echo "  នៅមិនទាន់ឆ្លើយ — សាកម្តងទៀត ($k/8)"
   sleep 6

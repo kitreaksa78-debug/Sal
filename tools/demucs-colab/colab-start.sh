@@ -9,7 +9,9 @@
 #   ១. ពិនិត្យ GPU (គ្មាន GPU ក៏ដើរបាន តែយឺតដូច CPU)
 #   ២. ដំឡើង demucs + fastapi/uvicorn (ធ្វើតែម្ដងក្នុងមួយ session)
 #   ៣. ទាញ `demucs_api.py` ពី repo — ឯកសារដូចគ្នាបេះបិទនឹងកំណែ Termux
-#   ៤. បើក API នៅ port 8000 ដោយប្រើ GPU (DEMUCS_DEVICE=auto)
+#   ៤. បើក API នៅ port 8001 ដោយប្រើ GPU (DEMUCS_DEVICE=auto) — port ដោយឡែកពី NLLB (8000)
+#      ដើម្បីឲ្យទាំងពីរសេវារត់ជាមួយគ្នាបានក្នុង Colab តែមួយ (បើមិនដូច្នេះ សេវាទី ២ បើកលើ port
+#      ដដែលមិនបាន ហើយ tunnel នឹងបញ្ជូនទៅសេវាចាស់ខុស)។
 #   ៥. បើក cloudflared quick tunnel រួចពិនិត្យពីខាងក្រៅថាដើរពិតៗ
 #   ៦. បង្ហាញ **URL + API key** ដែលត្រូវ paste ក្នុងកាត «ញែកភ្លេង · Demucs API» លើគេហទំព័រ
 #
@@ -17,13 +19,13 @@
 #   DEMUCS_API_KEY=<key ផ្ទាល់ខ្លួន>  បើទទេ = បង្កើត key ថ្មីឲ្យស្វ័យប្រវត្តិ
 #   DEMUCS_MODEL=htdemucs            ម៉ូឌែល (htdemucs លឿន · htdemucs_ft ល្អជាង តែយឺត)
 #   DEMUCS_HOME=/content/demucs-api  កន្លែងទុកឯកសារ
-#   PORT=8000                        port (tunnel បញ្ជូនមក port នេះ)
+#   PORT=8001                        port (tunnel បញ្ជូនមក port នេះ; NLLB ប្រើ 8000)
 #
 # ⚠️ Colab គឺជាម៉ាស៊ីនបណ្តោះអាសន្ន៖ បិទ tab ឬទុកចោល (idle) ប្រហែល ៩០ នាទី = session ដាច់
 #    ហើយ URL នោះស្លាប់។ បើយ៉ាងនោះ បើក cell នេះម្ដងទៀត រួច paste URL ថ្មីក្នុងកាត។
 set -u
 
-PORT="${PORT:-8000}"
+PORT="${PORT:-8001}"
 RAW="${DEMUCS_RAW:-https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux}"
 
 # កន្លែងទុកឯកសារ៖ Colab មាន `/content` ដែលសរសេរបាន — បើគ្មាន ប្រើផ្ទះរបស់អ្នក។
@@ -37,7 +39,12 @@ if [ -z "$DIR" ]; then
 fi
 
 say() { printf '\n===== %s =====\n' "$1"; }
-api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -q '"status"'; }
+# ពិនិត្យថាអ្វីដែលនៅលើ port នេះជា Demucs ពិត — មិនមែនគ្រាន់តែ «មានអ្វីមួយឆ្លើយតប»។
+# NLLB API ក៏ឆ្លើយ {"status":"ok"} ដូចគ្នា ដូច្នេះបើសាកត្រឹម status យើងអាចចាប់ tunnel ទៅ
+# សេវាខុស (ឧ. NLLB ដែលកំពុងរត់) ហើយគេហទំព័រនឹងទទួល URL ខុស។
+api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -qi 'demucs'; }
+# តើមានអ្វីកំពុងស្តាប់អ្វីមួយនៅ port $1 ឬអត់ (គ្មានអ្វី = ទំនេរ)។
+port_listening() { curl -s --max-time 2 "http://127.0.0.1:$1/" >/dev/null 2>&1; }
 
 mkdir -p "$DIR" || { echo "❌ បង្កើតថត $DIR មិនបានទេ"; exit 1; }
 cd "$DIR" || { echo "❌ ចូលថត $DIR មិនបានទេ"; exit 1; }
@@ -103,10 +110,22 @@ if [ -z "$KEY" ]; then
 fi
 MODEL="${DEMUCS_MODEL:-htdemucs}"
 
-say "៤/៦  បើក API នៅ port $PORT (model: $MODEL)"
 # បិទជំនាន់ចាស់ (ឧ. ពេលរត់ cell នេះម្ដងទៀត) ដើម្បីកុំឲ្យមានពីរនៅលើ port តែមួយ។
 pkill -f demucs_api.py 2>/dev/null || true
 sleep 1
+
+# បើ port នេះមានសេវាផ្សេង (ឧ. NLLB) កាន់រួច សាក port បន្ទាប់ ដើម្បីកុំបើកលើសេវានោះ។
+_tries=0
+while [ "$_tries" -lt 12 ]; do
+  if ! port_listening "$PORT" || api_up; then break; fi
+  echo "  ⚠️ port $PORT មានសេវាផ្សេងកាន់រួច — សាក port $((PORT + 1))..."
+  PORT=$((PORT + 1))
+  _tries=$((_tries + 1))
+done
+
+say "៤/៦  បើក API នៅ port $PORT (model: $MODEL)"
+# កត់ត្រា port ពិតដែលកំពុងប្រើ — notebook cell ទី ៣ និងមនុស្សអាចមើលវាបាន។
+printf '%s\n' "$PORT" > "$DIR/port.txt" 2>/dev/null || true
 : > api.log
 
 # setsid ដើម្បីឲ្យ API មិនត្រូវបិទ ពេល cell ចប់។ `< /dev/null` សំខាន់ពេលស្គ្រីបមកពី `curl | sh`៖
@@ -156,7 +175,7 @@ PREV=""
 if [ -f "$DIR/tunnel-url.txt" ]; then
   PREV=$(head -n 1 "$DIR/tunnel-url.txt" 2>/dev/null | tr -d ' \r\n')
 fi
-if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -q '"status"'; then
+if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -qi 'demucs'; then
   REUSE="$PREV"
 fi
 
@@ -209,9 +228,12 @@ ok=0
 k=0
 while [ "$k" -lt 8 ]; do
   body=$(curl -s --max-time 15 "$URL/" 2>/dev/null || true)
-  case "$body" in
-    *'"status"'*) ok=1; break ;;
-  esac
+  if printf '%s' "$body" | grep -qi 'demucs'; then ok=1; break; fi
+  if printf '%s' "$body" | grep -qi 'nllb'; then
+    echo "❌ tunnel នេះបញ្ជូនទៅ NLLB API មិនមែន Demucs — port $PORT កំពុងត្រូវសេវាផ្សេងកាន់។"
+    echo "   បិទសេវានោះមុន (pkill -f nllb_api.py) រួចរត់ cell នេះម្តងទៀត។"
+    exit 1
+  fi
   k=$((k + 1))
   echo "  នៅមិនទាន់ឆ្លើយ — សាកម្តងទៀត ($k/8)"
   sleep 6
