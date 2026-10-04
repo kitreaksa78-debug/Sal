@@ -1146,6 +1146,20 @@ export async function describeRemoteService(
   return null;
 }
 
+/**
+ * True when the service that answered is clearly the NLLB translation API, not
+ * Demucs.
+ *
+ * Both answer `{ status: 'ok' }`, so a plain reachability probe would happily
+ * accept the translation tunnel pasted into this card — and then a real job
+ * would 404 on every stem request. The service's own name is what tells them
+ * apart.
+ */
+export function looksLikeTranslationService(service: string | null): boolean {
+  const text = (service || '').toLowerCase();
+  return /\bnllb\b|translation|translate/.test(text);
+}
+
 export interface SeparatorTestReport {
   ok: boolean;
   service: string | null;

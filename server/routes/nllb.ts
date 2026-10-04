@@ -10,6 +10,7 @@ import {
   describeNllbService,
   getNllbConnection,
   isNllbConfigured,
+  looksLikeStemService,
   nllbTranslateLines,
   saveNllbConnection,
 } from '../services/nllbProvider.js';
@@ -133,6 +134,18 @@ router.post('/test', async (req: Request, res: Response) => {
       latencyMs,
       detail:
         'មិនអាចទាក់ទង NLLB API បានទេ។ សូមបើក NLLB លើ Colab រួច paste URL ថ្មី រួចសាកល្បងម្តងទៀត។ (No answer within 6 seconds.)',
+      url: connection.url,
+    });
+  }
+
+  if (looksLikeStemService(service)) {
+    logger.info(`NLLB quick test by ${session.email}: wrong service (${connection.url})`);
+    return res.json({
+      ok: false,
+      service: `${service.service} · ${service.model}${service.device ? ` · ${service.device}` : ''}`,
+      latencyMs,
+      detail:
+        'URL នេះជាម៉ាស៊ីនញែកភ្លេង (Demucs) មិនមែន NLLB API ទេ។ សូមដាក់ URL របស់ NLLB API វិញ។ (This URL is the stem/Demucs service, not the NLLB translation API — paste the NLLB URL instead.)',
       url: connection.url,
     });
   }

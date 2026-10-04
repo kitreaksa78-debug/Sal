@@ -263,6 +263,21 @@ export async function describeNllbService(
 }
 
 /**
+ * True when a service that answered `GET /` is clearly the stem/Demucs service
+ * rather than NLLB.
+ *
+ * Both services answer `{ status: 'ok' }`, so the reachability probe alone
+ * cannot tell them apart — and the owner very plausibly pastes the Demucs tunnel
+ * into this card (or the reverse), because both are quick tunnels with similar
+ * names. Matching on the service's own name/model catches that before a job is
+ * run against the wrong URL.
+ */
+export function looksLikeStemService(info: { service?: string; model?: string }): boolean {
+  const text = `${info.service || ''} ${info.model || ''}`.toLowerCase();
+  return /\bdemucs\b|separator|stem|vocal/.test(text);
+}
+
+/**
  * Translate a batch of lines with the Colab service. Returns `id -> Khmer`.
  *
  * Throws when the service cannot be reached or answers with an error, which is

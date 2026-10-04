@@ -16,6 +16,7 @@ import {
   SeparatorTestReport,
   describeRemoteService,
   getAudioSeparationProvider,
+  looksLikeTranslationService,
   testRemoteSeparation,
 } from '../services/audioSeparation.js';
 
@@ -188,6 +189,20 @@ router.post('/test', async (req: Request, res: Response) => {
       });
     }
 
+    if (looksLikeTranslationService(service)) {
+      logger.info(
+        `Stem service quick test by ${session.email}: wrong service (${connection.url})`
+      );
+      return res.json({
+        ok: false,
+        service,
+        latencyMs,
+        detail:
+          'URL នេះជា NLLB API មិនមែន Demucs ទេ។ សូមដាក់ URL របស់ Demucs API វិញ។ (This URL is the NLLB translation API, not the stem/Demucs service — paste the Demucs URL instead.)',
+        url: connection.url,
+      });
+    }
+
     logger.info(
       `Stem service quick test by ${session.email}: ok (${latencyMs}ms) ${service} — ${connection.url}`
     );
@@ -203,6 +218,19 @@ router.post('/test', async (req: Request, res: Response) => {
   const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'stem-test-'));
   try {
     const service = await describeRemoteService(connection.url, connection.apiKey).catch(() => null);
+    if (looksLikeTranslationService(service)) {
+      logger.info(
+        `Stem service full test by ${session.email}: wrong service (${connection.url})`
+      );
+      return res.json({
+        ok: false,
+        service,
+        latencyMs: 0,
+        detail:
+          'URL នេះជា NLLB API មិនមែន Demucs ទេ។ សូមដាក់ URL របស់ Demucs API វិញ។ (This URL is the NLLB translation API, not the stem/Demucs service — paste the Demucs URL instead.)',
+        url: connection.url,
+      });
+    }
     const tone = await createTestTone(tempDir);
     const report: SeparatorTestReport = await testRemoteSeparation(tone, tempDir);
 
