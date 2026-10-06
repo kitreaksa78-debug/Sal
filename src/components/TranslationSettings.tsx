@@ -1,6 +1,6 @@
 import React from 'react';
 import { Sliders, Mic, Music, Languages, Globe, Cpu } from 'lucide-react';
-import { JobSettings, SOURCE_LANGUAGES } from '../types';
+import { JobSettings, SOURCE_LANGUAGES, TARGET_LANGUAGES } from '../types';
 
 interface TranslationSettingsProps {
   settings: JobSettings;
@@ -40,12 +40,12 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
        * below are the ones that really change the result.
        */}
 
-      {/*
-       * The engine is part of what the settings mean: "translate this into
-       * Khmer" is a different promise depending on which model does it, and the
-       * strongest translation model is the one the server is configured with.
-       * The value comes from the server, so the text can never drift from what a
-       * job will really use.
+      {      /*
+       * The engine is part of what the settings mean: "translate this into the
+       * target language" is a different promise depending on which model does
+       * it, and the strongest translation model is the one the server is
+       * configured with. The value comes from the server, so the text can never
+       * drift from what a job will really use.
        */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-400 border-b border-slate-800/80 pb-3.5">
         <Cpu className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -94,7 +94,7 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
               }`}
             >
               <span className="font-bold text-[13px]">បែបផ្លូវការ</span>
-              <span className="text-[10px] text-slate-400 opacity-80">Formal Khmer</span>
+              <span className="text-[10px] text-slate-400 opacity-80">Formal</span>
             </button>
           </div>
         </div>
@@ -119,6 +119,34 @@ export const TranslationSettings: React.FC<TranslationSettingsProps> = ({
           </select>
           <p className="text-[10px] text-slate-500 leading-relaxed">
             ជ្រើសភាសាដែលគេនិយាយក្នុងវីដេអូ ដើម្បីឲ្យការស្តាប់ចាប់អក្សរត្រូវជាងមុន។
+          </p>
+        </div>
+
+        {/*
+         * Target language — the language the dub itself is spoken in. This used
+         * to be Khmer and only Khmer; the picker turns the same pipeline into a
+         * translator into any of the offered languages, and both the voice and
+         * the subtitle track follow whatever is chosen here.
+         */}
+        <div className="space-y-2">
+          <label className="text-xs font-semibold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+            <Languages className="w-3.5 h-3.5 text-emerald-400" />
+            <span>ភាសាគោលដៅ (Target Language)</span>
+          </label>
+          <select
+            value={settings.targetLanguage}
+            disabled={disabled}
+            onChange={(e) => update('targetLanguage', e.target.value as JobSettings['targetLanguage'])}
+            className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs font-medium bg-slate-900/60 border border-slate-800 text-slate-200 focus:outline-none focus:border-emerald-500/50 focus:ring-2 focus:ring-emerald-500/20 transition-colors disabled:opacity-60"
+          >
+            {TARGET_LANGUAGES.map((language) => (
+              <option key={language.code} value={language.code} className="bg-slate-900 text-slate-200">
+                {language.label}
+              </option>
+            ))}
+          </select>
+          <p className="text-[10px] text-slate-500 leading-relaxed">
+            ភាសាដែលអ្នកចង់បកប្រែទៅ — សំឡេង និងអក្សររត់ (Subtitle) នឹងតាមភាសានេះ។ លំនាំដើមគឺខ្មែរ។
           </p>
         </div>
 

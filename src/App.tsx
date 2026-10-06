@@ -72,6 +72,8 @@ export function App() {
     outputQuality: 'original',
     translationStyle: 'natural',
     sourceLanguage: 'auto',
+    // Khmer is the default dub; the picker in the settings card can change it.
+    targetLanguage: 'km',
     glossary: '',
   });
 

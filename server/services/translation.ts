@@ -1,8 +1,10 @@
 import { DialogueSegment, JobSettings } from '../types.js';
 import { logger } from '../utils/logger.js';
 import {
+  NLLB_TARGET_LANGUAGE,
   NLLB_TRANSLATION_MODEL,
   floresCodeFor,
+  floresCodeForTarget,
   isNllbConfigured,
   translateWithConfiguredNllb,
 } from './nllbProvider.js';
@@ -47,6 +49,10 @@ const DEFAULT_CONCURRENCY = 4;
 /**
  * Khmer is U+1780-U+17FF. Thai (U+0E00-U+0E7F) and Lao (U+0E80-U+0EFF) look close
  * enough that a translator sometimes substitutes them for Khmer characters.
+ *
+ * All of this only applies when the target **is** Khmer: for any other target
+ * Thai/Lao (or Latin, Han, Hangul…) is the correct output and must survive
+ * untouched, so the wrong-script passes are skipped entirely.
  */
 const THAI_OR_LAO_SCRIPT = /[\u0E00-\u0E7F\u0E80-\u0EFF]/;
 const KHMER_SCRIPT = /[\u1780-\u17FF]/;
@@ -212,7 +218,8 @@ export class KhmerDubTranslationService {
   }
 
   /**
-   * Translates dialogue segments into natural spoken Cambodian Khmer.
+   * Translates dialogue segments into the studio's chosen target language —
+   * Khmer by default, or whichever language the picker names.
    *
    * The transcript is sent to the NLLB service in blocks rather than one giant
    * request: a block is one `/translate` call, so the job can report real
@@ -268,23 +275,48 @@ export class KhmerDubTranslationService {
       warnings.push(message);
     };
 
+    const tgtLang = floresCodeForTarget(settings.targetLanguage);
+    const targetIsKhmer = tgtLang === NLLB_TARGET_LANGUAGE;
+
     const concurrency = Math.max(1, Math.min(this.getConcurrency(), chunks.length));
     const startedAt = Date.now();
     let completedLines = 0;
 
     await mapWithConcurrency(chunks, concurrency, async (chunk, i) => {
-      // NLLB takes one plain list of lines and answers one Khmer line per line; it
+      // NLLB takes one plain list of lines and answers one line per line; it
       // follows no instructions, so the block goes straight to the Colab service
       // and the deterministic passes (script sanitising, the final mapping) do the
       // rest. No prompt building, no rescue/glossary/proper-name retries.
-      await this.translateChunkWithNllb(chunk, settings, translations, addWarning, i, chunks.length);
+      await this.translateChunkWithNllb(
+        chunk,
+        settings,
+        tgtLang,
+        translations,
+        addWarning,
+        i,
+        chunks.length
+      );
       completedLines += chunk.length;
       if (onProgress) await onProgress(completedLines, ordered.length);
     });
 
     const translatedSegments = ordered.map((segment) => {
       const item = translations.get(segment.id);
-      let khmer = (item?.khmer || '').trim();
+      const line = (item?.khmer || '').trim();
+
+      // Any target but Khmer: the service's answer is the dub line as-is. Thai,
+      // Lao, Latin or Han output is the point here, so nothing is stripped and
+      // no Khmer-script rule applies — a line the service skipped keeps the
+      // original text so the timeline still says something.
+      if (!targetIsKhmer) {
+        return {
+          ...segment,
+          khmer: line || segment.text,
+          emotion: item?.emotion || 'neutral',
+        };
+      }
+
+      let khmer = line;
       // Definitive output sanitization: never ship Thai/Lao.
       if (khmer && hasWrongScript(khmer)) {
         const cleaned = sanitizeKhmer(khmer);
@@ -309,8 +341,12 @@ export class KhmerDubTranslationService {
       };
     });
 
-    // Post-flight audit: log if any line still has wrong script (should be zero)
-    const auditBad = translatedSegments.filter((s) => s.khmer && hasWrongScript(s.khmer)).length;
+    // Post-flight audit: log if any line still has wrong script (should be zero).
+    // Only meaningful for a Khmer target — other targets are *supposed* to use
+    // scripts this check would flag.
+    const auditBad = targetIsKhmer
+      ? translatedSegments.filter((s) => s.khmer && hasWrongScript(s.khmer)).length
+      : 0;
     if (auditBad > 0) {
       logger.error(`Post-translation audit: ${auditBad} line(s) still have Thai/Lao script after sanitization!`);
     }
@@ -321,7 +357,7 @@ export class KhmerDubTranslationService {
         : `${this.provider} (no block answered)`;
 
     logger.info(
-      `Translated ${translations.size}/${ordered.length} dialogue lines to Cambodian Khmer via ${answeredBy} in ${
+      `Translated ${translations.size}/${ordered.length} dialogue lines into ${tgtLang} via ${answeredBy} in ${
         chunks.length
       } block(s), ${concurrency} at a time, ${((Date.now() - startedAt) / 1000).toFixed(1)}s.`
     );
@@ -340,6 +376,7 @@ export class KhmerDubTranslationService {
   private async translateChunkWithNllb(
     chunk: DialogueSegment[],
     settings: JobSettings,
+    tgtLang: string,
     translations: Map<string, { khmer: string; emotion?: string }>,
     addWarning: (message: string) => void,
     blockIndex: number,
@@ -350,7 +387,8 @@ export class KhmerDubTranslationService {
     try {
       const answers = await translateWithConfiguredNllb(
         chunk.map((segment) => ({ id: segment.id, text: segment.text })),
-        srcLang
+        srcLang,
+        tgtLang
       );
       this.answeredProviders.add('nllb');
 
@@ -368,7 +406,7 @@ export class KhmerDubTranslationService {
       logger.info(
         `NLLB block ${blockIndex + 1}/${blockCount}: translated ${
           chunk.length - missing
-        }/${chunk.length} line(s) (${srcLang} -> khm_Khmr).`
+        }/${chunk.length} line(s) (${srcLang} -> ${tgtLang}).`
       );
 
       if (missing > 0) {

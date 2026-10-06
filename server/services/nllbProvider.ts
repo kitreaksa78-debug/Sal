@@ -246,12 +246,36 @@ const FLORES_CODES: Record<string, string> = {
   es: 'spa_Latn',
 };
 
-/** The target is always Khmer. */
+/** Khmer's FLORES code — the target every job used before the picker existed. */
 export const NLLB_TARGET_LANGUAGE = 'khm_Khmr';
 
 export function floresCodeFor(sourceLanguage: string | undefined): string {
   const key = (sourceLanguage || '').trim().toLowerCase();
   return FLORES_CODES[key] || FLORES_CODES.en;
+}
+
+/**
+ * The FLORES code for the studio's chosen **target** language.
+ *
+ * The Colab service translates whatever `tgt_lang` names, so an unknown or
+ * missing choice falls back to Khmer — the language the pipeline used to always
+ * produce, which keeps stored jobs and anything else that predates the picker
+ * behaving exactly as before.
+ */
+export function floresCodeForTarget(targetLanguage: string | undefined): string {
+  const key = (targetLanguage || '').trim().toLowerCase();
+  return FLORES_CODES[key] || NLLB_TARGET_LANGUAGE;
+}
+
+/**
+ * The ISO 639-3 tag for the MP4's caption track (`khm`, `eng`, …).
+ *
+ * FLORES codes are `<iso639-3>_<script>`, so the prefix is exactly the tag the
+ * muxer wants — that is what makes the player's CC badge name the right language
+ * instead of "und".
+ */
+export function subtitleLanguageTag(targetLanguage: string | undefined): string {
+  return floresCodeForTarget(targetLanguage).split('_')[0];
 }
 
 function authHeaders(apiKey: string): Record<string, string> {
@@ -358,14 +382,15 @@ async function requestNllbTranslate(
   url: string,
   apiKey: string,
   lines: { id: string; text: string }[],
-  srcLang: string
+  srcLang: string,
+  tgtLang: string
 ): Promise<Map<string, string>> {
   let response: Response;
   try {
     response = await fetch(`${normaliseServiceUrl(url)}/translate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
-      body: JSON.stringify({ lines, src_lang: srcLang, tgt_lang: NLLB_TARGET_LANGUAGE }),
+      body: JSON.stringify({ lines, src_lang: srcLang, tgt_lang: tgtLang }),
       signal: AbortSignal.timeout(NLLB_REQUEST_TIMEOUT_MS),
     });
   } catch (err: any) {
@@ -392,7 +417,7 @@ async function requestNllbTranslate(
 }
 
 /**
- * Translate a batch of lines with the Colab service. Returns `id -> Khmer`.
+ * Translate a batch of lines with the Colab service. Returns `id -> target line`.
  *
  * A retryable failure (tunnel blip, 5xx) is asked again a couple of times with a
  * short backoff before it is reported, so one hiccup does not cost the block its
@@ -403,14 +428,15 @@ export async function nllbTranslateLines(
   url: string,
   apiKey: string,
   lines: { id: string; text: string }[],
-  srcLang: string
+  srcLang: string,
+  tgtLang: string
 ): Promise<Map<string, string>> {
   if (lines.length === 0) return new Map();
 
   let lastError: unknown;
   for (let attempt = 1; attempt <= NLLB_MAX_ATTEMPTS; attempt++) {
     try {
-      return await requestNllbTranslate(url, apiKey, lines, srcLang);
+      return await requestNllbTranslate(url, apiKey, lines, srcLang, tgtLang);
     } catch (err) {
       lastError = err;
       const retryable = err instanceof NllbRequestError && err.retryable;
@@ -427,10 +453,16 @@ export async function nllbTranslateLines(
   throw lastError;
 }
 
-/** Translate with whichever service is configured. */
+/**
+ * Translate with whichever service is configured.
+ *
+ * `tgtLang` is the FLORES code of the studio's target language; the Colab
+ * service translates into whatever it names (see `floresCodeForTarget`).
+ */
 export async function translateWithConfiguredNllb(
   lines: { id: string; text: string }[],
-  srcLang: string
+  srcLang: string,
+  tgtLang: string
 ): Promise<Map<string, string>> {
   const connection = getNllbConnection();
   if (!connection.url) {
@@ -438,5 +470,5 @@ export async function translateWithConfiguredNllb(
       'មិនទាន់ភ្ជាប់ NLLB API ទេ។ (No NLLB translation service is connected — open the NLLB panel and paste the Colab URL.)'
     );
   }
-  return nllbTranslateLines(connection.url, connection.apiKey, lines, srcLang);
+  return nllbTranslateLines(connection.url, connection.apiKey, lines, srcLang, tgtLang);
 }

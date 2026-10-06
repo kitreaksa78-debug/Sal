@@ -11,6 +11,7 @@ import {
 import {
   NLLB_HF_MODEL,
   NLLB_QUALITY_MODE,
+  NLLB_TARGET_LANGUAGE,
   NLLB_TRANSLATION_MODEL,
   type NllbServiceInfo,
   clearNllbConnection,
@@ -180,7 +181,10 @@ router.post('/test', async (req: Request, res: Response) => {
       connection.url,
       connection.apiKey,
       [{ id: 'probe', text: 'Hello, how are you today?' }],
-      'eng_Latn'
+      'eng_Latn',
+      // The probe always asks for Khmer: it proves the service translates, and
+      // Khmer is the product's default target.
+      NLLB_TARGET_LANGUAGE
     );
     const sample = (probe.get('probe') || '').trim();
     if (!sample) {

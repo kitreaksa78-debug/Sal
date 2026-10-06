@@ -13,6 +13,7 @@ import {
 import { getTranscriptionProvider } from './transcription.js';
 import { SpeakerDetector } from './speakerDetection.js';
 import { getTranslationService } from './translation.js';
+import { subtitleLanguageTag } from './nllbProvider.js';
 import { getTTSProvider } from './tts.js';
 import { AudioMixingService } from './audioMixing.js';
 import { VideoRenderingService } from './videoRendering.js';
@@ -400,6 +401,8 @@ export class JobProcessor {
               gender,
               emotion: seg.emotion,
               voiceStyle: job.settings.voiceStyle,
+              // The voice follows the target the studio chose; Khmer by default.
+              language: job.settings.targetLanguage,
             });
 
             seg.audioFile = ttsResult.audioPath;
@@ -417,7 +420,7 @@ export class JobProcessor {
             await this.updateJobState(
               jobId,
               'generating_voice',
-              `កំពុងបង្កើតសំឡេងខ្មែរ ${voicedSoFar}/${dialogueSegments.length} បន្ទាត់...`,
+              `កំពុងបង្កើតសំឡេងបកប្រែ ${voicedSoFar}/${dialogueSegments.length} បន្ទាត់...`,
               { progress: Math.min(pct, 75) }
             );
           }
@@ -583,7 +586,9 @@ export class JobProcessor {
         reportRenderProgress,
         undefined,
         undefined,
-        captionsEnabled && fs.existsSync(srtOnDisk) ? srtOnDisk : undefined
+        captionsEnabled && fs.existsSync(srtOnDisk) ? srtOnDisk : undefined,
+        // The CC badge names the language the captions are written in.
+        subtitleLanguageTag(job.settings.targetLanguage)
       );
 
       markStage('render');

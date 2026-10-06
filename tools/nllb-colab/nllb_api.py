@@ -31,8 +31,13 @@ Contract (what `server/services/nllbProvider.ts` calls):
         {
           "lines": [{"id": "...", "text": "..."}, ...],
           "src_lang": "eng_Latn",     # FLORES-200 code of the source
-          "tgt_lang": "khm_Khmr"      # always Khmer from this pipeline
+          "tgt_lang": "khm_Khmr"      # FLORES-200 code of the target the studio chose
         }
+
+The answer keeps the field name `khmer` for compatibility with
+`server/services/nllbProvider.ts`: it carries the **target-language** line, which
+is Khmer by default but whatever `tgt_lang` names when the studio picked another
+language.
 
 NLLB is a sentence-level translator: it answers one line at a time and does not
 follow instructions (emotion, glossary, timing). That is deliberate — the owner

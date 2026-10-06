@@ -11,9 +11,11 @@ short_description: AI video translation with natural Khmer dubbing
 
 # KhmerDub AI
 
-AI video translation and natural Khmer dubbing. Upload a video, and the pipeline
-transcribes the speech, translates it into Khmer, generates Khmer speech, keeps
-the original music/background, and renders a new MP4 with subtitles.
+AI video translation and natural dubbing. Upload a video, and the pipeline
+transcribes the speech, translates it into the language you choose (**Khmer** by
+default, or English/Chinese/Thai/Vietnamese/Korean/Japanese/French/Spanish),
+generates speech in that language, keeps the original music/background, and
+renders a new MP4 with subtitles.
 
 This Space runs the **whole app** (frontend + API) from one container.
 
@@ -26,12 +28,12 @@ Four steps, in the order the studio shows them:
 | 1. Upload Video | upload + FFmpeg audio extraction |
 | 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
 | 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
-| 4. NLLB-200 | Strongest mode by default — `facebook/nllb-200-3.3B` (`NLLB_MODE=best`) served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) |
+| 4. NLLB-200 | Strongest mode by default — `facebook/nllb-200-3.3B` (`NLLB_MODE=best`) served from Google Colab (`tools/nllb-colab/`) — the only translator, and it translates into the **target language** the studio picked (Khmer by default). Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and a **Khmer** target is sanitised (no Thai/Lao); any other target keeps its own script untouched |
 
-The run does not stop at the fourth row. The Khmer voice and the subtitle files are
-produced next, and FFmpeg mixes and renders the final MP4 — but those closing steps
-have no rows of their own, so the checklist on screen shows the four stages above
-and the overall progress bar carries the rest of the job.
+The run does not stop at the fourth row. The dubbed voice and the subtitle files
+are produced next, and FFmpeg mixes and renders the final MP4 — but those closing
+steps have no rows of their own, so the checklist on screen shows the four stages
+above and the overall progress bar carries the rest of the job.
 
 Nothing is lost by not naming them. The voice is already in time when the mixer
 starts, and that costs nothing extra:
@@ -40,7 +42,7 @@ starts, and that costs nothing extra:
   track to the video's length (`apad=whole_dur`).
 - The render caps the result at the video's own length (`-t meta.duration`), so the
   file can never end a frame early or leave the last frames in silence.
-- The mixer balances the Khmer voice against the background music. When the
+- The mixer balances the dubbed voice against the background music. When the
   background still carries the original voices (a mono source that could not be
   separated) it is ducked inside the dialogue windows instead.
 
@@ -82,17 +84,34 @@ The app owner can also paste the URL into the `ញែកភ្លេង · Demuc
 studio, and that value wins over the environment variable — a phone tunnel gets a
 new URL every time it is reopened, so re-pointing it must not need a redeploy.
 
-## Khmer subtitles
+## Target language
 
-The finished MP4 carries the Khmer text as a caption track inside the file
-(`mov_text`, language `khm`), never painted onto the picture: the frame stays
-clean, and every cue comes from the same timeline as the audio, so the words
-always stay in sync with what is being said. The result panel starts with the
+The studio translates into one of nine languages. **Khmer is the default** and a
+job without the setting behaves exactly as it did before the picker existed; pick
+another language and both the dub and the caption track follow it. The whole
+pipeline is target-aware:
+
+- translation asks NLLB for the chosen target (`tgt_lang`);
+- the Edge voice engine speaks it (km-KH Sreymom/Piseth, en-US Aria/Guy, th-TH
+  Premwadee/Niwat, vi-VN HoaiMy/NamMinh, zh-CN Xiaoxiao/Yunxi, ko-KR SunHi/InJoon,
+  ja-JP Nanami/Keita, fr-FR Denise/Henri, es-ES Elvira/Alvaro). A per-language
+  override is `EDGE_TTS_VOICE_FEMALE_<CODE>` / `EDGE_TTS_VOICE_MALE_<CODE>`; the
+  older `EDGE_TTS_VOICE_FEMALE` / `EDGE_TTS_VOICE_MALE` still override Khmer.
+- the MP4's caption track is tagged with the target's ISO 639-3 code, so the
+  player's CC badge names the right language.
+
+## Subtitles
+
+The finished MP4 carries the translated text as a caption track inside the file
+(`mov_text`, language `khm` for Khmer — the target's own code otherwise), never
+painted onto the picture: the frame stays clean, and every cue comes from the
+same timeline as the audio, so the words always stay in sync with what is being
+said. The result panel starts with the
 text hidden — **បង្ហាញអក្សររត់** shows it, **លាក់អក្សររត់** hides it again, and any
 player's own CC button does the same. `subtitles-<id>.srt` and `.vtt` are still
 produced next to the file, for editing or for loading as a separate track.
 
-Painting Khmer onto frames — how jobs were made before this change — needs a
+Painting text onto frames — how jobs were made before this change — needs a
 Khmer font, which the hosts this runs on do not have, so
 `assets/fonts/NotoSansKhmer-*.ttf` travels with the repository, and a missing one
 is downloaded into `data/fonts` once (`SUBTITLE_FONTS_DIR` overrides where it
@@ -104,7 +123,7 @@ fail a render and no text can cover the picture.
 Nothing has to be switched off at render time: every job produces a single clean
 MP4 with the captions inside it as a hidden track, and the panel's
 **បង្ហាញអក្សររត់ / លាក់អក្សររត់** button only shows or hides them while watching.
-The one download button hands over that same file — clean picture, Khmer
+The one download button hands over that same file — clean picture, translated
 captions included. Jobs made before this change still have their burned-in text
 plus the subtitle-free twin (`khmer-dubbed-clean-<id>.mp4`), and their old links
 keep working.
@@ -113,15 +132,15 @@ Set `subtitle: false` in a job's settings to leave the caption track out.
 
 ## Voice timing
 
-Every Khmer line is used exactly as the voice engine produced it. Nothing is sped
+Every dubbed line is used exactly as the voice engine produced it. Nothing is sped
 up (`atempo`) or cut down to the length of the English line any more: that
 "make the audio match the video" pass ran one or two extra FFmpeg encodes on every
 single line, which was the slowest part of the whole job, and it chopped long
-Khmer sentences mid-syllable. Instead each line is simply placed at the timestamp
+sentences mid-syllable. Instead each line is simply placed at the timestamp
 where it was spoken (`adelay`), and a line that runs past its slot plays out —
 `amix` handles any overlap and the MP4 is still capped at the video's own length.
 
-The Khmer speech is therefore a little longer than the source at times, but the
+The dubbed speech is therefore a little longer than the source at times, but the
 stages are much faster and nothing is sliced mid-word.
 
 ## Required secrets
@@ -174,8 +193,9 @@ Cloudflare R2 / S3 bucket to persist them:
   timing out. `GET /` reports the model and mode in use (and `fallback: true`
   when it had to step down), which the studio's test button shows. The Colab
   URL/key are pasted into the «បកប្រែ · NLLB API» panel in the studio (or set with
-  `NLLB_TRANSLATION_URL` / `NLLB_TRANSLATION_API_KEY`). Termux/Demucs and Groq
-  Whisper speech-to-text are unchanged.
+  `NLLB_TRANSLATION_URL` / `NLLB_TRANSLATION_API_KEY`). The target language is sent
+  per request (`tgt_lang`), so one Colab service serves every target. Termux/Demucs
+  and Groq Whisper speech-to-text are unchanged.
 - Video processing is CPU-bound: a ~1 minute video takes roughly 1–3 minutes.
 
 ## Local / self-hosted run

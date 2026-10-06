@@ -28,7 +28,12 @@ export interface DialogueSegment {
   start: number; // in seconds
   end: number;   // in seconds
   text: string;  // original text
-  khmer?: string; // translated natural Khmer text
+  /**
+   * The translated line in the job's target language. Named `khmer` for history:
+   * it was Khmer-only before the target picker, and the field keeps that name so
+   * stored jobs and the rest of the pipeline stay compatible.
+   */
+  khmer?: string;
   emotion?: string; // e.g. neutral, energetic, calm, dramatic
   audioDuration?: number; // generated audio duration in seconds
   audioFile?: string; // path to synthesized segment audio
@@ -68,6 +73,29 @@ export const SOURCE_LANGUAGES: SourceLanguage[] = [
 ];
 
 /**
+ * The language the dialogue is translated into. The studio used to dub into
+ * Khmer only; the viewer now chooses. There is no `auto` — a target must name
+ * one language — and Khmer is the default so old jobs keep behaving the same.
+ */
+export type TargetLanguage = 'en' | 'zh' | 'th' | 'vi' | 'ko' | 'ja' | 'km' | 'fr' | 'es';
+
+/** Any code the studio may send as a target; anything else is rejected. */
+export const TARGET_LANGUAGES: TargetLanguage[] = [
+  'km',
+  'en',
+  'zh',
+  'th',
+  'vi',
+  'ko',
+  'ja',
+  'fr',
+  'es',
+];
+
+/** The default target, and the value old jobs without the field fall back to. */
+export const DEFAULT_TARGET_LANGUAGE: TargetLanguage = 'km';
+
+/**
  * `sourceLanguage` is optional because jobs stored before the studio offered the
  * picker do not have it — those fall back to `auto`.
  */
@@ -79,6 +107,11 @@ export interface JobSettings {
   outputQuality: '720p' | '1080p' | 'original';
   translationStyle: 'natural' | 'formal';
   sourceLanguage?: SourceLanguage;
+  /**
+   * Optional because jobs stored before the picker existed do not have it —
+   * those fall back to Khmer, which is what the pipeline always did.
+   */
+  targetLanguage?: TargetLanguage;
   /**
    * Brand glossary: names, brands and technical terms the translator must leave
    * alone. One entry per line — a bare term is kept verbatim in the Khmer line,

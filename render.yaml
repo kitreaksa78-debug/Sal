@@ -82,7 +82,7 @@ services:
         value: https://aivideotranslate.dev
 
       # Admin / owner accounts (comma separated). These get the full user list
-      # and run without the free plan's 3-videos-a-day cap. Without this the
+      # and run without the free plan's 2-videos-a-day cap. Without this the
       # account that signed up first is treated as the owner.
       - key: OWNER_EMAILS
         value: kitreaksa78@gmail.com,kitreaksa78@gmail.com

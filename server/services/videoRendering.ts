@@ -238,14 +238,16 @@ export class VideoRenderingService {
     subtitleAssPath?: string,
     /** Same video with no painted subtitles, so the player can switch them off. */
     cleanOutputMp4Path?: string,
-    /** Khmer SRT carried inside the MP4 as a caption (CC) track. */
-    subtitleSrtPath?: string
+    /** SRT carried inside the MP4 as a caption (CC) track, in the target language. */
+    subtitleSrtPath?: string,
+    /** ISO 639-3 tag for that caption track, e.g. `khm` / `eng`. Defaults to Khmer. */
+    subtitleLanguage?: string
   ): Promise<string> {
     logger.info(
       subtitleAssPath
-        ? `Rendering final MP4 with burned-in Khmer subtitles: ${outputMp4Path}`
+        ? `Rendering final MP4 with burned-in subtitles: ${outputMp4Path}`
         : subtitleSrtPath
-        ? `Rendering final MP4 with a Khmer caption track: ${outputMp4Path}`
+        ? `Rendering final MP4 with a ${subtitleLanguage || 'khm'} caption track: ${outputMp4Path}`
         : `Rendering final MP4: ${outputMp4Path}`
     );
     return await FFmpegHelper.renderFinalMp4(
@@ -256,7 +258,8 @@ export class VideoRenderingService {
       onProgress,
       subtitleAssPath,
       cleanOutputMp4Path,
-      subtitleSrtPath
+      subtitleSrtPath,
+      subtitleLanguage
     );
   }
 }

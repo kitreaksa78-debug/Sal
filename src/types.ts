@@ -28,6 +28,7 @@ export interface DialogueSegment {
   start: number;
   end: number;
   text: string;
+  /** The translated line in the job's target language (Khmer unless changed). */
   khmer?: string;
   emotion?: string;
   audioDuration?: number;
@@ -74,6 +75,32 @@ export const SOURCE_LANGUAGES: SourceLanguageOption[] = [
   { code: 'es', label: 'អេស្ប៉ាញ (Spanish)' },
 ];
 
+/**
+ * The language the dialogue is translated **into** — the studio used to always
+ * dub into Khmer, and now the viewer picks. There is no `auto`: a target has to
+ * name one language, and Khmer stays the default so nothing changes for anyone
+ * who does not open the picker.
+ */
+export type TargetLanguage = 'en' | 'zh' | 'th' | 'vi' | 'ko' | 'ja' | 'km' | 'fr' | 'es';
+
+export interface TargetLanguageOption {
+  code: TargetLanguage;
+  label: string;
+}
+
+/** Khmer is first so it stays the default target. */
+export const TARGET_LANGUAGES: TargetLanguageOption[] = [
+  { code: 'km', label: 'ខ្មែរ (Khmer)' },
+  { code: 'en', label: 'អង់គ្លេស (English)' },
+  { code: 'zh', label: 'ចិន (Mandarin)' },
+  { code: 'th', label: 'ថៃ (Thai)' },
+  { code: 'vi', label: 'វៀតណាម (Vietnamese)' },
+  { code: 'ko', label: 'កូរ៉េ (Korean)' },
+  { code: 'ja', label: 'ជប៉ុន (Japanese)' },
+  { code: 'fr', label: 'បារាំង (French)' },
+  { code: 'es', label: 'អេស្ប៉ាញ (Spanish)' },
+];
+
 export interface JobSettings {
   voice: 'auto' | 'male' | 'female';
   voiceStyle: 'natural' | 'calm' | 'energetic' | 'dramatic';
@@ -82,6 +109,8 @@ export interface JobSettings {
   outputQuality: '720p' | '1080p' | 'original';
   translationStyle: 'natural' | 'formal';
   sourceLanguage: SourceLanguage;
+  /** The language the dialogue is translated into. Khmer unless changed. */
+  targetLanguage: TargetLanguage;
   /**
    * Brand glossary: names, brands and technical terms the translator must leave
    * alone. One entry per line — a bare term is kept verbatim in the Khmer line,

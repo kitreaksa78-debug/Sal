@@ -11,7 +11,13 @@ import {
   getAudioSeparationProvider,
   DEMUCS_REQUIRED_MESSAGE,
 } from '../services/audioSeparation.js';
-import { JobRecord, JobSettings, SOURCE_LANGUAGES } from '../types.js';
+import {
+  DEFAULT_TARGET_LANGUAGE,
+  JobRecord,
+  JobSettings,
+  SOURCE_LANGUAGES,
+  TARGET_LANGUAGES,
+} from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 
@@ -99,6 +105,7 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       outputQuality: 'original',
       translationStyle: 'natural',
       sourceLanguage: 'auto',
+      targetLanguage: DEFAULT_TARGET_LANGUAGE,
     };
 
     if (req.body.settings) {
@@ -114,6 +121,13 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
     if (settings.sourceLanguage && !SOURCE_LANGUAGES.includes(settings.sourceLanguage)) {
       logger.warn(`Unknown source language "${settings.sourceLanguage}" — using auto-detect.`);
       settings.sourceLanguage = 'auto';
+    }
+
+    // Same for the target: the studio's list is the only source of truth, and an
+    // unknown value dubs into Khmer (what the pipeline always did).
+    if (settings.targetLanguage && !TARGET_LANGUAGES.includes(settings.targetLanguage)) {
+      logger.warn(`Unknown target language "${settings.targetLanguage}" — using Khmer.`);
+      settings.targetLanguage = DEFAULT_TARGET_LANGUAGE;
     }
 
     // Save uploaded file into storage uploads directory

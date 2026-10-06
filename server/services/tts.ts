@@ -3,7 +3,7 @@ import os from 'os';
 import path from 'path';
 import { GoogleGenAI, Modality } from '@google/genai';
 import { MsEdgeTTS, OUTPUT_FORMAT } from 'msedge-tts';
-import { DialogueSegment, JobSettings } from '../types.js';
+import { DialogueSegment, JobSettings, TargetLanguage } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { withRetry } from '../utils/retry.js';
@@ -14,6 +14,12 @@ export interface TTSOptions {
   emotion?: string;
   speed?: number; // 0.8 to 1.5
   voiceStyle?: string;
+  /**
+   * The job's target language, so the voice engine speaks the language the dub
+   * was translated into. Absent means Khmer — the dub the pipeline used to
+   * always produce.
+   */
+  language?: TargetLanguage;
 }
 
 export interface TTSResult {
@@ -30,6 +36,65 @@ export interface TTSProvider {
     outputPath: string,
     options: TTSOptions
   ): Promise<TTSResult>;
+}
+
+/** The target that old jobs and missing values fall back to. */
+const DEFAULT_TTS_LANGUAGE = 'km';
+
+/**
+ * What each target language is called in a Gemini TTS prompt.
+ *
+ * Gemini's prebuilt voices are not tied to a language, so the instruction is
+ * what steers the pronunciation. The Khmer entry keeps the wording this project
+ * shipped with, so dubbing into Khmer sounds exactly as it did before the target
+ * picker existed.
+ */
+const GEMINI_SPOKEN_LANGUAGES: Record<string, { native: string; spoken: string }> = {
+  km: { native: 'Cambodian', spoken: 'Khmer' },
+  en: { native: 'American', spoken: 'English' },
+  zh: { native: 'Mandarin Chinese', spoken: 'Mandarin Chinese' },
+  th: { native: 'Thai', spoken: 'Thai' },
+  vi: { native: 'Vietnamese', spoken: 'Vietnamese' },
+  ko: { native: 'Korean', spoken: 'Korean' },
+  ja: { native: 'Japanese', spoken: 'Japanese' },
+  fr: { native: 'French', spoken: 'French' },
+  es: { native: 'Spanish', spoken: 'Spanish' },
+};
+
+/**
+ * Edge neural voices per target language (female / male).
+ *
+ * Edge is the keyless engine and has a neural voice for every language the
+ * studio offers, so the dub speaks the chosen target instead of always Khmer.
+ * `EDGE_TTS_VOICE_FEMALE_<CODE>` / `EDGE_TTS_VOICE_MALE_<CODE>` override one
+ * language; the older `EDGE_TTS_VOICE_FEMALE` / `EDGE_TTS_VOICE_MALE` still
+ * override the default (Khmer) pair exactly as before.
+ */
+const EDGE_VOICES: Record<string, { female: string; male: string }> = {
+  km: { female: 'km-KH-SreymomNeural', male: 'km-KH-PisethNeural' },
+  en: { female: 'en-US-AriaNeural', male: 'en-US-GuyNeural' },
+  zh: { female: 'zh-CN-XiaoxiaoNeural', male: 'zh-CN-YunxiNeural' },
+  th: { female: 'th-TH-PremwadeeNeural', male: 'th-TH-NiwatNeural' },
+  vi: { female: 'vi-VN-HoaiMyNeural', male: 'vi-VN-NamMinhNeural' },
+  ko: { female: 'ko-KR-SunHiNeural', male: 'ko-KR-InJoonNeural' },
+  ja: { female: 'ja-JP-NanamiNeural', male: 'ja-JP-KeitaNeural' },
+  fr: { female: 'fr-FR-DeniseNeural', male: 'fr-FR-HenriNeural' },
+  es: { female: 'es-ES-ElviraNeural', male: 'es-ES-AlvaroNeural' },
+};
+
+/** The Edge voice for a target language and gender, honouring the env overrides. */
+function edgeVoice(language: string | undefined, gender: 'male' | 'female'): string {
+  const code = (language || '').trim().toLowerCase() || DEFAULT_TTS_LANGUAGE;
+  const pair = EDGE_VOICES[code] || EDGE_VOICES[DEFAULT_TTS_LANGUAGE];
+  const perLanguage = (
+    process.env[`EDGE_TTS_VOICE_${gender.toUpperCase()}_${code.toUpperCase()}`] || ''
+  ).trim();
+  if (perLanguage) return perLanguage;
+  if (code === DEFAULT_TTS_LANGUAGE) {
+    const generic = (process.env[`EDGE_TTS_VOICE_${gender.toUpperCase()}`] || '').trim();
+    if (generic) return generic;
+  }
+  return gender === 'male' ? pair.male : pair.female;
 }
 
 /** Escape text before it is embedded into the SSML request body. */
@@ -101,8 +166,11 @@ export class GeminiTTSProvider implements TTSProvider {
       ? `with a ${options.emotion} emotional tone`
       : 'with a natural, friendly tone';
 
-    // Direct sentence-level prompt for natural Cambodian Khmer dubbing pronunciation
-    const prompt = `Say naturally as a native Cambodian speaker in natural spoken Khmer (${emotionInstruction}): "${cleanText}"`;
+    const spoken = GEMINI_SPOKEN_LANGUAGES[(options.language || '').trim().toLowerCase()] || GEMINI_SPOKEN_LANGUAGES.km;
+
+    // Direct sentence-level prompt for natural dubbing pronunciation in the
+    // job's target language (Khmer unless the studio chose another one).
+    const prompt = `Say naturally as a native ${spoken.native} speaker in natural spoken ${spoken.spoken} (${emotionInstruction}): "${cleanText}"`;
 
     const rawWavPath = outputPath.replace(/\.wav$/, '_raw.wav');
 
@@ -172,36 +240,32 @@ export class GeminiTTSProvider implements TTSProvider {
 }
 
 /**
- * Microsoft Edge "Read Aloud" neural voices — the free, keyless route to Khmer speech.
+ * Microsoft Edge "Read Aloud" neural voices — the free, keyless route to speech.
  *
- * Edge exposes the same km-KH neural voices as Azure Speech (Piseth for male,
- * Sreymom for female) with no subscription and no quota. It is Microsoft's public
- * read-aloud endpoint rather than a contracted API, so each line is retried and the
- * pipeline falls back to the original audio if the service is unreachable.
+ * Edge exposes the same neural voices as Azure Speech (e.g. km-KH Piseth/Sreymom,
+ * en-US Guy/Aria, …) with no subscription and no quota, and there is a voice for
+ * every target language the studio offers. It is Microsoft's public read-aloud
+ * endpoint rather than a contracted API, so each line is retried and the pipeline
+ * falls back to the original audio if the service is unreachable.
  */
 export class EdgeTTSProvider implements TTSProvider {
   name = 'edge';
 
   isConfigured(): boolean {
-    // No key required — this is the always-available Khmer voice engine.
+    // No key required — this is the always-available voice engine.
     return process.env.EDGE_TTS_ENABLED !== 'false';
   }
 
-  private getFemaleVoice(): string {
-    return process.env.EDGE_TTS_VOICE_FEMALE || 'km-KH-SreymomNeural';
-  }
-
-  private getMaleVoice(): string {
-    return process.env.EDGE_TTS_VOICE_MALE || 'km-KH-PisethNeural';
-  }
-
   getModelName(): string {
-    return `${this.getFemaleVoice()} / ${this.getMaleVoice()}`;
+    // The default (Khmer) pair, which is what the settings card reports.
+    return `${edgeVoice(DEFAULT_TTS_LANGUAGE, 'female')} / ${edgeVoice(DEFAULT_TTS_LANGUAGE, 'male')}`;
   }
 
-  private resolveVoice(gender?: 'male' | 'female' | 'neutral'): string {
-    if (gender === 'male') return this.getMaleVoice();
-    return this.getFemaleVoice();
+  private resolveVoice(
+    gender: 'male' | 'female' | 'neutral' | undefined,
+    language?: string
+  ): string {
+    return edgeVoice(language, gender === 'male' ? 'male' : 'female');
   }
 
   async synthesizeSpeech(
@@ -214,7 +278,7 @@ export class EdgeTTSProvider implements TTSProvider {
       throw new Error('Cannot synthesize empty speech text.');
     }
 
-    const voiceName = this.resolveVoice(options.gender);
+    const voiceName = this.resolveVoice(options.gender, options.language);
     const rawMp3Path = outputPath.replace(/\.wav$/, '_edge.mp3');
     const rawWavPath = outputPath.replace(/\.wav$/, '_edge_raw.wav');
     const synthDir = fs.mkdtempSync(path.join(os.tmpdir(), 'edge-tts-'));

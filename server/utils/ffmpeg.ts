@@ -606,7 +606,8 @@ export class FFmpegHelper {
     /** Where to keep the same video with no painted subtitles, for the toggle. */
     cleanOutputPath?: string,
     /**
-     * Khmer SRT to carry **inside** the MP4 as a caption track.
+     * SRT to carry **inside** the MP4 as a caption track, written in the job's
+     * target language.
      *
      * Painting the text onto every frame was a one-way door: the words cover
      * the picture, follow the viewer's screen around, and can never be switched
@@ -614,7 +615,13 @@ export class FFmpegHelper {
      * viewer asks for them (the player's CC button, or the toggle on the result
      * page), and timed by the player against the audio, so they cannot drift.
      */
-    subtitleSrtPath?: string
+    subtitleSrtPath?: string,
+    /**
+     * ISO 639-3 tag for that caption track (`khm`, `eng`, …). It names the
+     * language in the player's CC badge instead of leaving it "und"; defaults to
+     * Khmer so callers that predate the target picker are unchanged.
+     */
+    subtitleLanguage?: string
   ): Promise<string> {
     // Check if original video stream is already H.264
     const meta = await this.probeVideo(originalVideoPath);
@@ -648,7 +655,8 @@ export class FFmpegHelper {
         args.push(
           '-map', '2:0',
           '-c:s', 'mov_text',
-          '-metadata:s:s:0', 'language=khm' // the CC badge shows Khmer, not "und"
+          // The CC badge shows the caption language, not "und".
+          '-metadata:s:s:0', `language=${subtitleLanguage || 'khm'}`
         );
       }
       args.push('-movflags', '+faststart'); // web streaming friendly
