@@ -259,7 +259,7 @@ export const UploadPanel: React.FC<UploadPanelProps> = ({
             </div>
             <div className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />
-              <span>តម្រឹមចង្វាក់សំឡេងឱ្យត្រូវតាមពេលវេលាដើម (Precise Lip-Sync Fit)</span>
+              <span>តម្រឹមចង្វាក់សំឡេងឱ្យត្រូវតាមពេលវេលាដើម</span>
             </div>
             <div className="flex items-start gap-2">
               <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" />

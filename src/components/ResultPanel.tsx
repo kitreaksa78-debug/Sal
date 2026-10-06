@@ -126,16 +126,16 @@ export const ResultPanel: React.FC<ResultPanelProps> = ({ job, onReset }) => {
               {captionsOn ? 'លាក់អក្សររត់' : 'បង្ហាញអក្សររត់'}
             </button>
             <span className="text-[10px] text-slate-500">
-              {captionsOn ? 'Captions on · ស៊ីគ្នានឹងសំឡេង' : 'Captions off'}
+              {captionsOn ? 'Captions on' : 'Captions off'}
             </span>
           </div>
 
           <p className="text-[11px] text-slate-400 leading-relaxed">
             វីដេអូនេះមិនមានអក្សររត់គូសពីលើរូបភាពទេ។ អក្សរខ្មែរទាំងអស់ស្ថិតនៅក្នុងឯកសារវីដេអូ
-            ជា subtitle (CC) ដាច់ដោយឡែក ដូច្នេះវាត្រឹមត្រូវ និងស៊ីគ្នាជានិច្ចនឹងសំឡេង — ចុច
-            «បង្ហាញអក្សររត់» ខាងលើ ឬប្រើប៊ូតុង CC ក្នុងកម្មវិធីលេងវីដេអូ។ (No text is painted
-            onto the picture: the Khmer lines ship as a caption track, hidden until you turn it
-            on and always in sync.)
+            ជា subtitle (CC) ដាច់ដោយឡែក ដូច្នេះមិនបាំងរូបភាព ហើយកម្មវិធីលេងវីដេអូជាអ្នកកំណត់
+            ពេលអក្សរតាមសំឡេង — ចុច «បង្ហាញអក្សររត់» ខាងលើ ឬប្រើប៊ូតុង CC ក្នុងកម្មវិធីលេងវីដេអូ។
+            (No text is painted onto the picture: the Khmer lines ship as a caption track,
+            hidden until you turn it on, and the player times them against the audio.)
           </p>
         </div>
       </div>

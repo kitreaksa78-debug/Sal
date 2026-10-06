@@ -19,7 +19,7 @@ This Space runs the **whole app** (frontend + API) from one container.
 
 ## Pipeline
 
-Six steps, in the order the studio shows them:
+Four steps, in the order the studio shows them:
 
 | Step | Engine |
 | --- | --- |
@@ -27,13 +27,14 @@ Six steps, in the order the studio shows them:
 | 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
 | 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
 | 4. NLLB-200 | `facebook/nllb-200-distilled-600M` served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) and fitted to the timeline |
-| 5. Subtitle · Piper TTS | subtitles + Khmer TTS (the keyless Edge `km-KH` voices) |
-| 6. FFmpeg → Sync Audio + Video | FFmpeg (bundled in the image) — mix on the original timestamps + render MP4 |
 
-### Sync (row 6)
+The run does not stop at the fourth row. The Khmer voice and the subtitle files are
+produced next, and FFmpeg mixes and renders the final MP4 — but those closing steps
+have no rows of their own, so the checklist on screen shows the four stages above
+and the overall progress bar carries the rest of the job.
 
-There is no separate timing row: the sync happens inside the last step. The voice
-is already in time when that row starts, and it costs nothing extra:
+Nothing is lost by not naming them. The voice is already in time when the mixer
+starts, and that costs nothing extra:
 
 - The assembler places every line at its own timestamp (`adelay`), trims it to the
   window the synthesizer was given, and pads the track to the video's length
