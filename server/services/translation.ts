@@ -142,8 +142,10 @@ export function mergeDialogueFragments(
  * The translation stage runs on **NLLB-200 and nothing else**.
  *
  * The owner asked for Groq and Gemini to be taken out of translation and for
- * `nllb-200-distilled-600M` to do the translating, served from Google Colab (the
- * model needs ~1.5 GB, which the free Render instance does not have). So the
+ * NLLB-200 to do the translating, served from Google Colab (every NLLB-200 needs
+ * more RAM than the free Render instance has). The Colab service runs the
+ * strongest preset by default (`facebook/nllb-200-3.3B`, `NLLB_MODE=best`) and
+ * steps down that table when a runtime cannot hold it. So the
  * provider is no longer a choice: every block goes to the NLLB service, and
  * `TRANSLATION_PROVIDER` / `GEMINI_*` / `GROQ_TRANSLATION_*` no longer pick a
  * translator. Groq is still used for speech-to-text, which the owner kept.

@@ -13,9 +13,20 @@
 #   ៥. បើក cloudflared quick tunnel រួចពិនិត្យពីខាងក្រៅថាដើរពិតៗ
 #   ៦. បង្ហាញ **URL + API Key** ដែលត្រូវ paste ក្នុងកាត «បកប្រែ · NLLB API» លើគេហទំព័រ
 #
+# ម៉ូឌែល (mode) — លំនាំដើមគឺ **best** គឺម៉ូឌែលខ្លាំងជាងគេ (គុណភាពបកប្រែខ្ពស់ជាងគេ)៖
+#   best      facebook/nllb-200-3.3B             ខ្លាំងជាងគេ (ត្រូវការ GPU — T4 គ្រប់គ្រាន់)
+#   balanced  facebook/nllb-200-distilled-1.3B   ជិតស្មើ តែស្រាលជាងពាក់កណ្តាល
+#   fast      facebook/nllb-200-distilled-600M   តូចជាងគេ លឿនជាងគេ
+#
+# បើ GPU មិនអាចផ្ទុកម៉ូឌែលដែលជ្រើសបាន (អស់ memory ឬគ្មាន GPU) សេវានឹងធ្លាក់ចុះទៅ
+# ម៉ូឌែលតូចជាងដោយស្វ័យប្រវត្តិ — ដូច្នេះទាំង «លឿន» និង «ត្រូវល្អ» បានទាំងពីរ។
+#
 # កំណត់តាម env បាន (ស្រេចចិត្ត)៖
 #   NLLB_API_KEY=<key ផ្ទាល់ខ្លួន>   បើទទេ = បង្កើត key ថ្មីឲ្យស្វ័យប្រវត្តិ
-#   NLLB_MODEL=facebook/nllb-200-distilled-600M
+#   NLLB_MODE=best|balanced|fast      លំនាំដើម best (ខ្លាំងជាងគេ)
+#   NLLB_MODEL=facebook/…             បង្ខំម៉ូឌែលជាក់លាក់មួយ (ឈ្នះលើ NLLB_MODE)
+#   NLLB_NUM_BEAMS=1                  ដាក់ 4 ដើម្បីគុណភាពខ្ពស់ជាង តែយឺតជាង ~៣ ដង
+#   NLLB_BATCH_SIZE=16               ចំនួនបន្ទាត់បកប្រែក្នុងពេលតែមួយ
 #   NLLB_HOME=/content/nllb-api     កន្លែងទុកឯកសារ
 #   PORT=8000                       port (tunnel បញ្ជូនមក port នេះ)
 #
@@ -90,7 +101,18 @@ KEY="${NLLB_API_KEY:-}"
 if [ -z "$KEY" ]; then
   KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
 fi
-MODEL="${NLLB_MODEL:-facebook/nllb-200-distilled-600M}"
+MODE="${NLLB_MODE:-best}"
+case "$MODE" in
+  best) DEFAULT_MODEL=facebook/nllb-200-3.3B ;;
+  balanced) DEFAULT_MODEL=facebook/nllb-200-distilled-1.3B ;;
+  fast) DEFAULT_MODEL=facebook/nllb-200-distilled-600M ;;
+  *)
+    echo "⚠️ NLLB_MODE='$MODE' មិនស្គាល់ — ប្រើ 'best' ជំនួស"
+    MODE=best
+    DEFAULT_MODEL=facebook/nllb-200-3.3B
+    ;;
+esac
+MODEL="${NLLB_MODEL:-$DEFAULT_MODEL}"
 
 pkill -f nllb_api.py 2>/dev/null || true
 sleep 1
@@ -104,10 +126,12 @@ while [ "$_tries" -lt 12 ]; do
   _tries=$((_tries + 1))
 done
 
-say "៤/៦  បើក API នៅ port $PORT (model: $MODEL)"
+say "៤/៦  បើក API នៅ port $PORT (mode: $MODE · model: $MODEL)"
 : > api.log
 
-NLLB_API_KEY="$KEY" NLLB_MODEL="$MODEL" NLLB_HOST=127.0.0.1 PORT="$PORT" \
+NLLB_API_KEY="$KEY" NLLB_MODE="$MODE" NLLB_MODEL="${NLLB_MODEL:-}" \
+  NLLB_NUM_BEAMS="${NLLB_NUM_BEAMS:-1}" NLLB_BATCH_SIZE="${NLLB_BATCH_SIZE:-16}" \
+  NLLB_HOST=127.0.0.1 PORT="$PORT" \
   setsid python3 nllb_api.py > api.log 2>&1 < /dev/null &
 
 i=0
@@ -123,12 +147,16 @@ if ! api_up; then
   exit 1
 fi
 
-echo "រង់ចាំម៉ូឌែលផ្ទុក (ដំបូងគេយូរ ១–៣ នាទី)..."
+# ម៉ូឌែលខ្លាំងជាងគេត្រូវទាញយកទម្ងន់ធំ (ប្រហែល ៦–១៣ GB) ដូច្នេះការបើកលើកដំបូងយូរជាងមុន។
+echo "រង់ចាំម៉ូឌែលផ្ទុក (mode: $MODE · $MODEL) — ដំបូងគេ ២–៦ នាទី..."
 j=0
-while [ "$j" -lt 180 ]; do
+while [ "$j" -lt 300 ]; do
   api_ready && break
   j=$((j + 1))
   sleep 2
+  if [ $((j % 30)) -eq 0 ]; then
+    echo "  ... $((j * 2))s — $(tail -n 1 api.log 2>/dev/null | cut -c1-110)"
+  fi
 done
 if ! api_ready; then
   echo "⚠️  API រត់ហើយ តែម៉ូឌែលនៅមិនទាន់ផ្ទុករួច — មើល log ចុងក្រោយ៖"
@@ -240,6 +268,10 @@ if [ "$ok" = "1" ]; then
     URL      : $URL
     API Key  : $KEY
 
+EOF
+  echo "  ម៉ូឌែលដែលកំពុងប្រើ ៖ $INFO"
+  echo
+  cat <<EOF
   បើសាកល្បងជោគជ័យ វាបង្ហាញឈ្មោះ service **និង device** — ត្រូវឃើញ «cuda» (= កំពុងប្រើ GPU)។
 
   ⚠️ ទុក tab នេះចោលបើកចុះ។ បិទ tab ឬទុក idle ~៩០ នាទី = session ដាច់ ហើយការបកប្រែឈប់

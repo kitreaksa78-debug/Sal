@@ -8,7 +8,7 @@ interface TranslationSettingsProps {
   disabled?: boolean;
   /**
    * `<provider> · <model>` the server will translate with, e.g.
-   * "nllb · nllb-200-distilled-600M". Read from the config status; absent until
+   * "nllb · nllb-200-3.3B". Read from the config status; absent until
    * the probe answers, so the line is simply not drawn while it is unknown.
    */
   engine?: string | null;

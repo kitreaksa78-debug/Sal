@@ -26,7 +26,7 @@ Four steps, in the order the studio shows them:
 | 1. Upload Video | upload + FFmpeg audio extraction |
 | 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
 | 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
-| 4. NLLB-200 | `facebook/nllb-200-distilled-600M` served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) |
+| 4. NLLB-200 | Strongest mode by default — `facebook/nllb-200-3.3B` (`NLLB_MODE=best`) served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) |
 
 The run does not stop at the fourth row. The Khmer voice and the subtitle files are
 produced next, and FFmpeg mixes and renders the final MP4 — but those closing steps
@@ -163,10 +163,17 @@ Cloudflare R2 / S3 bucket to persist them:
   Spaces need a PRO subscription. Deploy this folder elsewhere for free — see
   `render.yaml` for a Render free web service — or self-host it.
 - Free instances sleep after a period of inactivity and wake on the next visit.
-- Translation runs on **NLLB-200** (`facebook/nllb-200-distilled-600M`) served
-  from a Google Colab session (`tools/nllb-colab/`), because the model needs
-  ~1.5 GB of RAM and the free Render instance has 512 MB. The Colab URL/key are
-  pasted into the «បកប្រែ · NLLB API» panel in the studio (or set with
+- Translation runs on **NLLB-200** served from a Google Colab session
+  (`tools/nllb-colab/`), because every NLLB-200 needs more RAM than the free
+  Render instance has (512 MB). The Colab service picks its model from a quality
+  preset — `NLLB_MODE=best` (default) is `facebook/nllb-200-3.3B`, the strongest
+  NLLB-200; `balanced` is `facebook/nllb-200-distilled-1.3B` and `fast` is
+  `facebook/nllb-200-distilled-600M`. It loads in fp16 on a GPU and generates in
+  chunks (`NLLB_BATCH_SIZE`), and if a runtime cannot hold the chosen model — out
+  of memory, or a CPU-only runtime — it steps down the preset table instead of
+  timing out. `GET /` reports the model and mode in use (and `fallback: true`
+  when it had to step down), which the studio's test button shows. The Colab
+  URL/key are pasted into the «បកប្រែ · NLLB API» panel in the studio (or set with
   `NLLB_TRANSLATION_URL` / `NLLB_TRANSLATION_API_KEY`). Termux/Demucs and Groq
   Whisper speech-to-text are unchanged.
 - Video processing is CPU-bound: a ~1 minute video takes roughly 1–3 minutes.

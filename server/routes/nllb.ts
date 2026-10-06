@@ -10,7 +10,9 @@ import {
 } from '../utils/serviceConnection.js';
 import {
   NLLB_HF_MODEL,
+  NLLB_QUALITY_MODE,
   NLLB_TRANSLATION_MODEL,
+  type NllbServiceInfo,
   clearNllbConnection,
   describeNllbService,
   getNllbConnection,
@@ -51,8 +53,27 @@ function describeConnection() {
     provider: 'nllb',
     model: NLLB_TRANSLATION_MODEL,
     hfModel: NLLB_HF_MODEL,
+    /** The quality preset the Colab service runs by default. */
+    mode: NLLB_QUALITY_MODE,
     configured: isNllbConfigured(),
   };
+}
+
+/**
+ * How one answered service is described (`NLLB Translation API · … · mode best ·
+ * cuda`). The mode is read from the service itself, not assumed: a runtime that
+ * could not hold the strongest model walks down the preset table, and the owner
+ * should be told which model is actually answering.
+ */
+function serviceLabel(service: NllbServiceInfo): string {
+  return [
+    service.service,
+    service.model,
+    service.mode ? `mode ${service.mode}` : '',
+    service.device,
+  ]
+    .filter(Boolean)
+    .join(' · ');
 }
 
 /** GET /api/config/nllb — what the pipeline uses to translate, and where it came from. */
@@ -146,7 +167,7 @@ router.post('/test', async (req: Request, res: Response) => {
     logger.info(`NLLB quick test by ${session.email}: wrong service (${connection.url})`);
     return res.json({
       ok: false,
-      service: `${service.service} · ${service.model}${service.device ? ` · ${service.device}` : ''}`,
+      service: serviceLabel(service),
       latencyMs,
       detail:
         'URL នេះជាម៉ាស៊ីនញែកភ្លេង (Demucs) មិនមែន NLLB API ទេ។ សូមដាក់ URL របស់ NLLB API វិញ។ (This URL is the stem/Demucs service, not the NLLB translation API — paste the NLLB URL instead.)',
@@ -165,7 +186,7 @@ router.post('/test', async (req: Request, res: Response) => {
     if (!sample) {
       return res.json({
         ok: false,
-        service: `${service.service} · ${service.model}${service.device ? ` · ${service.device}` : ''}`,
+        service: serviceLabel(service),
         latencyMs,
         detail:
           'API ឆ្លើយតប តែបកប្រែចេញទទេ។ សាកបើក API ឡើងវិញក្នុង Colab។ (The service answered but translated nothing.)',
@@ -174,13 +195,19 @@ router.post('/test', async (req: Request, res: Response) => {
     }
 
     logger.info(
-      `NLLB test by ${session.email}: ok (${latencyMs}ms) ${service.service} ${service.device}`
+      `NLLB test by ${session.email}: ok (${latencyMs}ms) ${service.service} ${service.model} ${
+        service.mode || NLLB_QUALITY_MODE
+      } ${service.device}${service.fallback ? ' (fell back from the strongest mode)' : ''}`
     );
     return res.json({
       ok: true,
-      service: `${service.service} · ${service.model}${service.device ? ` · ${service.device}` : ''}`,
+      service: serviceLabel(service),
       latencyMs,
-      detail: `បកប្រែបាន៖ “${sample}”`,
+      detail: service.fallback
+        ? `បកប្រែបាន៖ “${sample}” — តែម៉ូឌែលខ្លាំងជាងគេផ្ទុកមិនបាននៅលើ runtime នេះ ដូច្នេះកំពុងប្រើ mode «${
+            service.mode || NLLB_QUALITY_MODE
+          }» ជំនួស។ (The strongest mode could not load here, so a smaller one is answering.)`
+        : `បកប្រែបាន៖ “${sample}”`,
       sample,
       url: connection.url,
     });
@@ -188,7 +215,7 @@ router.post('/test', async (req: Request, res: Response) => {
     logger.warn('NLLB translate test failed:', err);
     return res.json({
       ok: false,
-      service: `${service.service} · ${service.model}${service.device ? ` · ${service.device}` : ''}`,
+      service: serviceLabel(service),
       latencyMs,
       detail: err?.message || 'ការបកប្រែសាកល្បងបរាជ័យ។ (The translation probe failed.)',
       url: connection.url,

@@ -34,11 +34,14 @@ interface NllbPanelProps {
 /**
  * Admin setup for the translation engine.
  *
- * Translation runs on **NLLB-200** (`facebook/nllb-200-distilled-600M`), served
- * from a Google Colab session because the model needs ~1.5 GB of RAM and the free
- * Render instance has 512 MB. A Colab quick tunnel gets a new hostname every time
- * it is reopened, so the address lives here rather than only in environment
- * variables: pasting the new URL is the whole job, with no redeploy.
+ * Translation runs on **NLLB-200**, served from a Google Colab session because
+ * every NLLB-200 needs more RAM than the free Render instance (512 MB) has. The
+ * Colab script runs the strongest preset by default (`facebook/nllb-200-3.3B`,
+ * mode `best`) and steps down the preset table when a runtime cannot hold it, so
+ * the test result below is where the mode actually in use is read from. A Colab
+ * quick tunnel gets a new hostname every time it is reopened, so the address
+ * lives here rather than only in environment variables: pasting the new URL is
+ * the whole job, with no redeploy.
  */
 export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
   const [connection, setConnection] = useState<NllbConnectionView | null>(null);
@@ -205,7 +208,7 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
           </div>
           <p className={`text-xs mt-1 truncate ${connected ? 'text-emerald-300' : 'text-slate-400'}`}>
             {connection
-              ? `NLLB-200 · ${connection.model}${connection.url ? ` · ${connection.url}` : ''}`
+              ? `NLLB-200 · ${connection.model} · mode ${connection.mode}${connection.url ? ` · ${connection.url}` : ''}`
               : 'កំពុងផ្ទុក...'}
           </p>
         </div>
@@ -231,6 +234,13 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
               <p>
                 ២. វាបង្ហាញ <b>URL</b> និង <b>API Key</b> — paste ទាំងពីរក្នុងប្រអប់ខាងក្រោម រួចចុច «រក្សាទុក និងសាកល្បង»។
                 ជោគជ័យ = ឃើញ <code className="text-violet-300">cuda</code> និងប្រយោគខ្មែរសាកល្បងមួយ។
+              </p>
+              <p>
+                ម៉ូឌែលលំនាំដើមគឺ <b>ខ្លាំងជាងគេ</b> ({' '}
+                <code className="text-violet-300">facebook/nllb-200-3.3B</code> · mode{' '}
+                <code className="text-violet-300">best</code>) ដើម្បីឲ្យការបកប្រែត្រូវល្អជាងគេ។ បើ GPU ផ្ទុកវាមិនបាន
+                (អស់ memory ឬគ្មាន GPU) វាធ្លាក់ទៅ mode តូចជាងដោយស្វ័យប្រវត្តិ — លទ្ធផលសាកល្បងខាងក្រោមនឹងបង្ហាញ{' '}
+                <code className="text-violet-300">mode</code> ពិតដែលកំពុងប្រើ។
               </p>
               <p>
                 ៣. ទុក tab Colab ចោលបើកចុះ — បិទ tab ឬទុក idle ~៩០ នាទី = session ដាច់ ហើយ URL ស្លាប់។

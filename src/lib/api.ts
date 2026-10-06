@@ -319,6 +319,8 @@ export interface NllbConnectionView {
   provider: string;
   model: string;
   hfModel: string;
+  /** Quality preset the Colab service runs by default (`best`). */
+  mode: string;
   configured: boolean;
 }
 

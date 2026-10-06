@@ -8,10 +8,13 @@ import { getStorage } from './storage.js';
  * The translation stage, and the only engine it has: **NLLB-200**.
  *
  * The owner asked for Groq and Gemini to be removed from translation and for
- * `facebook/nllb-200-distilled-600M` to be the translator, run on Google Colab.
- * The model needs roughly 1.5 GB of RAM, which the free Render instance
- * (512 MB) does not have, so it is served over HTTP from a Colab session instead
- * of being loaded in-process — the same shape as the Demucs stem service.
+ * NLLB-200 to be the translator, run on Google Colab. The Colab service picks the
+ * model from a quality preset (`NLLB_MODE`, default **best** =
+ * `facebook/nllb-200-3.3B`, the strongest NLLB-200) and walks down that table when
+ * a runtime cannot hold it, so a smaller model answers instead of the block timing
+ * out. Every NLLB-200 needs more RAM than the free Render instance (512 MB) has,
+ * so it is served over HTTP from a Colab session instead of being loaded
+ * in-process — the same shape as the Demucs stem service.
  *
  * Where the connection comes from, first one wins:
  *
@@ -26,11 +29,20 @@ import { getStorage } from './storage.js';
  * need a redeploy.
  */
 
-/** The one translation model this project uses. */
-export const NLLB_TRANSLATION_MODEL = 'nllb-200-distilled-600M';
+/**
+ * The translation model this project asks for, and the mode that selects it.
+ *
+ * These are labels: the Colab service owns the real choice, and its own `GET /`
+ * reports the model (and mode) actually loaded — which is what the panel shows
+ * after a test, because a runtime that cannot hold the strongest model falls back
+ * and the owner should see which one answered.
+ */
+export const NLLB_TRANSLATION_MODEL = 'nllb-200-3.3B';
 
-/** The Hugging Face model the Colab service loads. Shown to the owner. */
-export const NLLB_HF_MODEL = 'facebook/nllb-200-distilled-600M';
+export const NLLB_HF_MODEL = 'facebook/nllb-200-3.3B';
+
+/** The strongest preset the Colab service runs unless it is told otherwise. */
+export const NLLB_QUALITY_MODE = 'best';
 
 /** Baked-in address; empty so the website panel or the env decides. */
 export const PINNED_NLLB_URL = '';
@@ -252,6 +264,10 @@ export interface NllbServiceInfo {
   model: string;
   device: string;
   loaded?: boolean;
+  /** Quality preset in use on the Colab side (`best` / `balanced` / `fast`). */
+  mode?: string;
+  /** True when the strongest preset could not load and a smaller one answered. */
+  fallback?: boolean;
 }
 
 /** Probe the service's `GET /`, which is what the panel's test button calls. */
@@ -274,6 +290,8 @@ export async function describeNllbService(
       model: String(data.model || NLLB_HF_MODEL),
       device: String(data.device || 'unknown'),
       loaded: data.loaded === undefined ? undefined : Boolean(data.loaded),
+      mode: data.mode ? String(data.mode) : undefined,
+      fallback: data.fallback === undefined ? undefined : Boolean(data.fallback),
     };
   } catch {
     return null;

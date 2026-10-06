@@ -32,8 +32,9 @@ interface StepItem {
  * when the job is inside one of them every row above is already finished, and
  * the overall progress bar is where that remaining work is visible.
  *
- * The dialogue is translated by NLLB-200 (`nllb-200-distilled-600M`), served from
- * the owner's Google Colab session, so row 4 names it. The speech-to-text step
+ * The dialogue is translated by NLLB-200 (`facebook/nllb-200-3.3B`, the
+ * strongest preset the Colab service runs by default), served from the owner's
+ * Google Colab session, so row 4 names it. The speech-to-text step
  * runs on Groq Whisper, and the subtitle files and the Khmer voice are produced
  * on the server itself — no language model is asked to do either of them.
  */
@@ -85,7 +86,7 @@ const LATE_STATUSES: JobStatus[] = [
  * said under the list so it travels with what it describes.
  */
 const ENGINE_NOTE =
-  'ការបកប្រែប្រើ NLLB-200 (nllb-200-distilled-600M) ដែលរត់នៅលើ Google Colab របស់អ្នក។ ការស្តាប់ចាប់អក្សរប្រើ Groq Whisper ហើយអក្សររត់ (Subtitle) និងសំឡេងបកប្រែ បង្កើតនៅលើម៉ាស៊ីនបម្រើផ្ទាល់។ (Translation runs on NLLB-200 (nllb-200-distilled-600M) served from your Google Colab session. Speech-to-text runs on Groq Whisper; subtitles and the Khmer voice are produced on the server itself.)';
+  'ការបកប្រែប្រើ NLLB-200 (mode ខ្លាំងជាងគេ — facebook/nllb-200-3.3B) ដែលរត់នៅលើ Google Colab របស់អ្នក។ ការស្តាប់ចាប់អក្សរប្រើ Groq Whisper ហើយអក្សររត់ (Subtitle) និងសំឡេងបកប្រែ បង្កើតនៅលើម៉ាស៊ីនបម្រើផ្ទាល់។ (Translation runs on NLLB-200 (strongest preset — facebook/nllb-200-3.3B) served from your Google Colab session. Speech-to-text runs on Groq Whisper; subtitles and the Khmer voice are produced on the server itself.)';
 
 export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onRetry }) => {
   const currentStatus = job.status;
