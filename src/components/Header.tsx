@@ -60,7 +60,7 @@ export const Header: React.FC<HeaderProps> = ({
             onClick={() => setActiveTab('studio')}
             className="flex items-center gap-2.5 sm:gap-3 min-w-0 cursor-pointer select-none group"
           >
-            {/* Same dark tone as the page, so the logo's pencil "cuts" the frame cleanly. */}
+            {/* Same dark tone as the page, so the indigo mark sits on its own tile. */}
             <span className="flex items-center justify-center w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-[#0b0f17] border border-slate-800 shadow-lg shadow-black/30 shrink-0 group-hover:scale-105 transition-transform duration-200">
               <Logo className="w-6 h-6 sm:w-7 sm:h-7" />
             </span>
