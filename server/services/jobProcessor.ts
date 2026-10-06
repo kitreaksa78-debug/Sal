@@ -14,7 +14,7 @@ import { getTranscriptionProvider } from './transcription.js';
 import { SpeakerDetector } from './speakerDetection.js';
 import { getTranslationService } from './translation.js';
 import { getTTSProvider } from './tts.js';
-import { AudioMixingService, DIALOGUE_GAP_SECONDS } from './audioMixing.js';
+import { AudioMixingService } from './audioMixing.js';
 import { VideoRenderingService } from './videoRendering.js';
 import { logger } from '../utils/logger.js';
 import { mapWithConcurrency } from '../utils/concurrency.js';
@@ -70,9 +70,10 @@ export const ENGLISH_STEP_MESSAGES: Record<JobStatus, string> = {
 };
 
 /**
- * Progress percentage mapping, spread across the six steps the studio shows:
+ * Progress percentage mapping, spread across the four stages the studio shows:
  *
- *   Upload → Demucs → Speech-to-Text → NLLB-200 → Subtitle · TTS → Sync
+ *   Upload → Demucs → Speech-to-Text → NLLB-200
+ *   (then the closing steps: subtitles + Khmer voice, and the final render)
  *
  * `detecting_speakers` is no longer reported — speaker naming happens inside the
  * Whisper pass — but it stays in the map because jobs recorded before that change
@@ -363,36 +364,6 @@ export class JobProcessor {
       const segmentsDir = path.join(jobTempDir, 'tts_segments');
       if (!fs.existsSync(segmentsDir)) fs.mkdirSync(segmentsDir, { recursive: true });
 
-      // How long each line may be.
-      //
-      // A line may use the silence that follows it, right up to the moment the
-      // next speaker starts: leftover silence is worth nothing to the video,
-      // while a line squeezed into its own slot is first sped up and then cut
-      // mid-syllable — which is exactly what makes a dub sound choppy. So the
-      // window is the segment's own length plus a little headroom, never past
-      // the next line. The assembler is handed the very same windows, so the
-      // room the voice was given is the room it keeps on the timeline.
-      const windowStretch = Math.max(1, Number(process.env.SPEECH_WINDOW_STRETCH || '1.4'));
-      const timeline = [...dialogueSegments].sort((a, b) => a.start - b.start);
-      const speechWindows = new Map<string, number>();
-      timeline.forEach((seg, index) => {
-        const own = Math.max(0.5, seg.end - seg.start);
-        const next = timeline[index + 1];
-        const beforeNext = next
-          ? Math.max(0, next.start - seg.start - DIALOGUE_GAP_SECONDS)
-          : Number.POSITIVE_INFINITY;
-        // The last line has no next speaker to run into; the video's own end is
-        // the only limit left.
-        const beforeEnd =
-          meta.duration > 0
-            ? Math.max(own, meta.duration - seg.start - DIALOGUE_GAP_SECONDS)
-            : Number.POSITIVE_INFINITY;
-        speechWindows.set(
-          seg.id,
-          Math.max(0.5, Math.min(beforeNext, beforeEnd, own * windowStretch))
-        );
-      });
-
       if (ttsAvailable) {
         // Lines are independent, so synthesize several at once instead of the
         // old one-at-a-time loop; a 60-line video used to spend a full minute here.
@@ -416,7 +387,6 @@ export class JobProcessor {
           // already synthesised are simply discarded with the temp folder.
           await this.throwIfCancelled(jobId);
           const segOutPath = path.join(segmentsDir, `segment_${i + 1}.wav`);
-          const originalDuration = speechWindows.get(seg.id) ?? Math.max(0.5, seg.end - seg.start);
 
           // Determine voice gender
           let gender: 'male' | 'female' | 'neutral' = seg.speakerGender || 'male';
@@ -430,7 +400,6 @@ export class JobProcessor {
               gender,
               emotion: seg.emotion,
               voiceStyle: job.settings.voiceStyle,
-              targetDuration: originalDuration,
             });
 
             seg.audioFile = ttsResult.audioPath;
@@ -501,15 +470,13 @@ export class JobProcessor {
         await AudioMixingService.assembleDialogueTrack(
           dialogueSegments,
           meta.duration,
-          masterSpeechTrack,
-          jobTempDir,
-          { speechWindows }
+          masterSpeechTrack
         );
 
-        // The assembler already placed every line on its own timestamp and padded
-        // the track to the video's length, and the render caps the result at that
+        // The assembler placed every line on its own timestamp and padded the
+        // track to the video's length, and the render caps the result at that
         // same length, so the voice is in time without a measuring pass in
-        // between — which is one fewer full-length audio decode per job.
+        // between — one fewer full-length audio decode per job.
 
         // Mixing walks the whole track and is the slowest step on a small host,
         // so it reports how much audio it has written instead of leaving the bar

@@ -9,25 +9,11 @@ import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { withRetry } from '../utils/retry.js';
 import { getGeminiApiKey } from '../utils/aiKeys.js';
 
-/**
- * How far a Khmer line may be squeezed to fit its original slot.
- *
- * Khmer usually needs more words than the source language, so a translated line
- * often runs past its slot. Padding silence is stripped before the fit is judged
- * (see fitAudioToSlot), which already recovers a good part of that, and 1.5x is
- * still intelligible for speech — whereas a tighter cap means the line is cut
- * mid-syllable, which sounds broken and loses the words the viewer needs. Slow
- * it down with MAX_SPEECH_TEMPO if the owner prefers calmer delivery and can
- * accept trimming instead.
- */
-const MAX_SPEECH_TEMPO = Number(process.env.MAX_SPEECH_TEMPO || '1.5');
-
 export interface TTSOptions {
   gender?: 'male' | 'female' | 'neutral';
   emotion?: string;
   speed?: number; // 0.8 to 1.5
   voiceStyle?: string;
-  targetDuration?: number; // in seconds
 }
 
 export interface TTSResult {
@@ -166,14 +152,12 @@ export class GeminiTTSProvider implements TTSProvider {
       { operationName: 'Gemini Khmer Speech Synthesis' }
     );
 
-    // Fit exactly to the original slot so the Khmer voice starts where the mouth
-    // starts and never bleeds into the next line.
-    const targetDur = options.targetDuration && options.targetDuration > 0.3 ? options.targetDuration : 0;
-    if (targetDur) {
-      await FFmpegHelper.fitAudioToSlot(rawWavPath, outputPath, targetDur, MAX_SPEECH_TEMPO);
-    } else {
-      fs.copyFileSync(rawWavPath, outputPath);
-    }
+    // The line is used exactly as the engine produced it. It is no longer sped
+    // up or trimmed to fit the original slot — that per-line FFmpeg pass was the
+    // "audio must match the video" step, and dropping it removes two encodes per
+    // line. The voice is still placed on its own timestamp when the tracks are
+    // assembled, so lines start where they should without being squeezed.
+    fs.copyFileSync(rawWavPath, outputPath);
 
     if (fs.existsSync(rawWavPath)) {
       try { fs.unlinkSync(rawWavPath); } catch {}
@@ -265,12 +249,9 @@ export class EdgeTTSProvider implements TTSProvider {
       rawWavPath,
     ]);
 
-    const targetDur = options.targetDuration && options.targetDuration > 0.3 ? options.targetDuration : 0;
-    if (targetDur) {
-      await FFmpegHelper.fitAudioToSlot(rawWavPath, outputPath, targetDur, MAX_SPEECH_TEMPO);
-    } else {
-      fs.copyFileSync(rawWavPath, outputPath);
-    }
+    // Used as produced: no tempo fit and no trim to the original slot (see the
+    // Gemini provider above for why).
+    fs.copyFileSync(rawWavPath, outputPath);
 
     for (const tempPath of [rawMp3Path, rawWavPath]) {
       if (fs.existsSync(tempPath)) {

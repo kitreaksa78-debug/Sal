@@ -1,43 +1,26 @@
 import fs from 'fs';
-import path from 'path';
 import { DialogueSegment, JobSettings } from '../types.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
 
-/**
- * The breathing gap left between two lines on the assembled track. A line may
- * therefore only use the time up to `next.start - this gap`, which is the window
- * the synthesizer is asked to fit into as well — otherwise a line built for its
- * own longer slot gets cut here, mid-syllable.
- */
-export const DIALOGUE_GAP_SECONDS = 0.03;
-
-function slotDuration(seg: DialogueSegment): number {
-  return Math.max(0.3, seg.end - seg.start);
-}
-
 export class AudioMixingService {
   /**
-   * Assembles all individual dialogue audio segments onto a single master dialogue track
-   * with precise timestamp alignment (adelay filter), ensuring zero dialogue overlap.
-   * Each line is hard-trimmed to its original slot so even if TTS slightly overran,
-   * it never bleeds into the next mouth movement — this is what makes lip-sync 100%.
+   * Assembles all individual dialogue audio segments onto a single master
+   * dialogue track, each line placed at its own timestamp (`adelay`) and the
+   * whole track padded to the video's length (`apad`), so every line starts
+   * where it was spoken and the master track never comes up short.
+   *
+   * Lines are deliberately **not** cut to their original slot any more. Trimming
+   * a Khmer line down to the length of the English one is the "make the audio
+   * match the video" step the owner asked to remove — it sliced long sentences
+   * mid-syllable. A line that runs past its slot now simply plays out; `amix`
+   * handles any overlap and the render still caps the file at the video's own
+   * length.
    */
   public static async assembleDialogueTrack(
     segments: DialogueSegment[],
     totalDuration: number,
-    outputSpeechTrackPath: string,
-    tempDir: string,
-    options: {
-      /**
-       * How long each line may be, as the synthesizer was told. Silence between
-       * two speakers belongs to the line before it, so this is usually longer
-       * than the segment's own slot: giving it to the line is what stops the
-       * Khmer voice being sliced mid-syllable. It stays clamped to the next
-       * mouth start below, so two lines can never talk over each other.
-       */
-      speechWindows?: Map<string, number>;
-    } = {}
+    outputSpeechTrackPath: string
   ): Promise<string> {
     const raw = segments.filter(s => s.audioFile && fs.existsSync(s.audioFile));
     // Mouth order is timeline order; WHISPER can return out-of-order chunks
@@ -56,39 +39,6 @@ export class AudioMixingService {
       return outputSpeechTrackPath;
     }
 
-    // Clamp overlaps: if a slot overlaps the next mouth start, trim the line
-    // to gap-to-next so lines never talk over each other.
-    const effectiveSlots: number[] = validSegments.map(
-      (seg) => options.speechWindows?.get(seg.id) ?? slotDuration(seg)
-    );
-    for (let i = 0; i < validSegments.length - 1; i++) {
-      const gap = validSegments[i + 1].start - validSegments[i].start;
-      // Keep a tiny breathing gap so cuts are not clicky
-      const maxForSlot = Math.max(0.3, gap - DIALOGUE_GAP_SECONDS);
-      if (effectiveSlots[i] > maxForSlot) {
-        logger.info(`Trimming segment ${validSegments[i].id} slot ${effectiveSlots[i].toFixed(2)}s -> ${maxForSlot.toFixed(2)}s to avoid overlap with next line.`);
-        effectiveSlots[i] = maxForSlot;
-      }
-    }
-
-    if (validSegments.length === 1) {
-      const seg = validSegments[0];
-      const delayMs = Math.max(0, Math.round(seg.start * 1000));
-      // The same fade the fit uses, so a line that reaches the cut point decays
-      // instead of stopping dead; a line that ends earlier is unaffected.
-      const trim = FFmpegHelper.slotTrimChain(effectiveSlots[0]);
-      await FFmpegHelper.execute([
-        '-y',
-        '-i', seg.audioFile!,
-        '-filter_complex', `[0:a]${trim},adelay=${delayMs}|${delayMs},apad=whole_dur=${Math.ceil(totalDuration)}[out]`,
-        '-map', '[out]',
-        '-ac', '2',
-        '-ar', '44100',
-        outputSpeechTrackPath,
-      ]);
-      return outputSpeechTrackPath;
-    }
-
     const inputArgs: string[] = [];
     const filterClauses: string[] = [];
     const mixInputs: string[] = [];
@@ -96,10 +46,7 @@ export class AudioMixingService {
     validSegments.forEach((seg, idx) => {
       inputArgs.push('-i', seg.audioFile!);
       const delayMs = Math.max(0, Math.round(seg.start * 1000));
-      // Trimming to the window guarantees no line ever overruns its mouth
-      // window; the fade inside slotTrimChain keeps that cut from clicking.
-      const trim = FFmpegHelper.slotTrimChain(effectiveSlots[idx]);
-      filterClauses.push(`[${idx}:a]${trim},adelay=${delayMs}|${delayMs}[a${idx}]`);
+      filterClauses.push(`[${idx}:a]adelay=${delayMs}|${delayMs}[a${idx}]`);
       mixInputs.push(`[a${idx}]`);
     });
 
@@ -107,31 +54,33 @@ export class AudioMixingService {
       `${mixInputs.join('')}amix=inputs=${validSegments.length}:dropout_transition=0:normalize=0,apad=whole_dur=${Math.ceil(totalDuration)}[out]`
     );
 
-    const filterComplex = filterClauses.join(';');
-
     await FFmpegHelper.execute([
       '-y',
       ...inputArgs,
-      '-filter_complex', filterComplex,
+      '-filter_complex', filterClauses.join(';'),
       '-map', '[out]',
       '-ac', '2',
       '-ar', '44100',
       outputSpeechTrackPath,
     ]);
 
-    logger.info(`Assembled ${validSegments.length} dialogue segments (sorted, trimmed to slots) into master track: ${outputSpeechTrackPath}`);
+    logger.info(
+      `Assembled ${validSegments.length} dialogue segment(s), each placed at its own timestamp, into master track: ${outputSpeechTrackPath}`
+    );
     return outputSpeechTrackPath;
   }
 
   /**
-   * Intelligently mix dubbed Khmer dialogue track with background music/ambient audio (no_vocals.wav)
+   * Mixes the dubbed Khmer dialogue track with the background music/ambient audio
+   * (no_vocals.wav).
    *
-   * `segments` supplies the dialogue windows: the background is ducked inside them so
-   * the original voices cannot be heard under the Khmer dub, while the music is kept
-   * at full quality everywhere else. Windows are sorted and merged so the gate
-   * expression is short and never flickers on overlapping timestamps. These are the
-   * same windows the synthesizer was given, so the music comes back exactly where
-   * the Khmer line stops.
+   * `segments` supplies the dialogue windows: when the background still carries
+   * the original voices (a mono source that could not be separated), the
+   * background is ducked inside them so the old dialogue cannot be heard under
+   * the Khmer dub. With real stem separation the background is already
+   * voice-free, so a plain volume balance is used instead. Windows are sorted and
+   * merged so the ducking expression stays short and never flickers on
+   * overlapping timestamps.
    */
   public static async mixDubbedWithBackground(
     speechTrackPath: string,

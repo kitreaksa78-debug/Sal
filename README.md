@@ -26,7 +26,7 @@ Four steps, in the order the studio shows them:
 | 1. Upload Video | upload + FFmpeg audio extraction |
 | 2. Demucs API | Demucs (remote stem API) — ញែកសំឡេងនិយាយ និងតន្ត្រី |
 | 3. Demucs Speech-to-Text | Whisper via Groq `whisper-large-v3` |
-| 4. NLLB-200 | `facebook/nllb-200-distilled-600M` served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) and fitted to the timeline |
+| 4. NLLB-200 | `facebook/nllb-200-distilled-600M` served from Google Colab (`tools/nllb-colab/`) — the only translator. Gemini and Groq are no longer used for translation. Transcript fragments Whisper split mid-sentence are rejoined before translation, and the Khmer output is sanitised (no Thai/Lao) |
 
 The run does not stop at the fourth row. The Khmer voice and the subtitle files are
 produced next, and FFmpeg mixes and renders the final MP4 — but those closing steps
@@ -36,13 +36,13 @@ and the overall progress bar carries the rest of the job.
 Nothing is lost by not naming them. The voice is already in time when the mixer
 starts, and that costs nothing extra:
 
-- The assembler places every line at its own timestamp (`adelay`), trims it to the
-  window the synthesizer was given, and pads the track to the video's length
-  (`apad=whole_dur`).
+- The assembler places every line at its own timestamp (`adelay`) and pads the
+  track to the video's length (`apad=whole_dur`).
 - The render caps the result at the video's own length (`-t meta.duration`), so the
   file can never end a frame early or leave the last frames in silence.
-- The mixer ducks the background inside the same windows, so the music comes back
-  exactly where the Khmer line stops.
+- The mixer balances the Khmer voice against the background music. When the
+  background still carries the original voices (a mono source that could not be
+  separated) it is ducked inside the dialogue windows instead.
 
 A measuring pass over the finished track was tried and removed: it needed a second
 full-length audio decode per job and only confirmed what the assembler and the
@@ -113,13 +113,16 @@ Set `subtitle: false` in a job's settings to leave the caption track out.
 
 ## Voice timing
 
-A line may use the silence that follows it, up to the moment the next speaker
-starts, so a long Khmer sentence is spoken at close to its natural speed instead
-of being sped up and cut off mid-syllable. `SPEECH_WINDOW_STRETCH` (default
-`1.4`) sets how much room past its own slot a line may claim, and
-`SPEECH_TRIM_FADE_SECONDS` (default `0.12`) fades the end of any line that still
-has to be cut, so a hard cut sounds cut short rather than chopped. `MAX_SPEECH_TEMPO`
-(default `1.5`) is the fastest a line may be sped up in the first place.
+Every Khmer line is used exactly as the voice engine produced it. Nothing is sped
+up (`atempo`) or cut down to the length of the English line any more: that
+"make the audio match the video" pass ran one or two extra FFmpeg encodes on every
+single line, which was the slowest part of the whole job, and it chopped long
+Khmer sentences mid-syllable. Instead each line is simply placed at the timestamp
+where it was spoken (`adelay`), and a line that runs past its slot plays out —
+`amix` handles any overlap and the MP4 is still capped at the video's own length.
+
+The Khmer speech is therefore a little longer than the source at times, but the
+stages are much faster and nothing is sliced mid-word.
 
 ## Required secrets
 

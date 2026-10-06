@@ -261,192 +261,6 @@ export class FFmpegHelper {
   }
 
   /**
-   * The audio filter that cuts a line to `trim` seconds and fades the very end.
-   *
-   * Cutting speech dead mid-syllable is what a listener hears as a broken, choppy
-   * dub, so every hard cut ends in a short fade. The fade is anchored to the cut
-   * point, which means a line that finishes before it is never touched: the fade
-   * only exists where the cut actually happens.
-   */
-  public static slotTrimChain(trim: number, fadeSeconds?: number): string {
-    const fade = Math.min(
-      fadeSeconds ?? Number(process.env.SPEECH_TRIM_FADE_SECONDS || '0.12'),
-      Math.max(0, trim / 3)
-    );
-    const parts = [`atrim=end=${trim.toFixed(3)}`, 'asetpts=PTS-STARTPTS'];
-    if (fade > 0.005) {
-      parts.push(`afade=t=out:st=${Math.max(0, trim - fade).toFixed(3)}:d=${fade.toFixed(3)}`);
-    }
-    return parts.join(',');
-  }
-
-  /** Build a safe atempo chain for any factor using 0.5..2.0 steps. */
-  public static buildAtempoChain(factor: number): string {
-    const clamped = Math.max(0.25, Math.min(4.0, factor));
-    // Decompose into 0.5..2.0 pieces
-    let remaining = clamped;
-    const parts: string[] = [];
-    // Push 2.0s while >2
-    while (remaining > 2.0 + 1e-6) {
-      parts.push('atempo=2.000');
-      remaining /= 2.0;
-    }
-    while (remaining < 0.5 - 1e-6) {
-      parts.push('atempo=0.500');
-      remaining /= 0.5;
-    }
-    parts.push(`atempo=${remaining.toFixed(3)}`);
-    return parts.join(',');
-  }
-
-  /**
-   * Adjust audio tempo/duration using atempo filter without altering pitch.
-   * Supports any factor via chained atempo (FFmpeg single atempo is 0.5..2.0).
-   */
-  public static async adjustTempo(
-    inputAudioPath: string,
-    outputAudioPath: string,
-    tempoFactor: number
-  ): Promise<void> {
-    // Keep within broadly safe range; chain handles >2 or <0.5
-    const factor = Math.max(0.25, Math.min(4.0, tempoFactor));
-    const chain = this.buildAtempoChain(factor);
-    const args = [
-      '-y',
-      '-i', inputAudioPath,
-      '-filter:a', chain,
-      '-vn',
-      outputAudioPath,
-    ];
-    await this.execute(args);
-  }
-
-  /**
-   * Fit generated speech into the original slot exactly so lip-sync is 100%:
-   * - If duration is within 8% of slot -> keep natural (no tempo) to preserve voice.
-   * - If longer -> speed up capped at maxTempo, then hard-trim to slot so it never
-   *   bleeds into the next line. Trim is last resort; tempo cap keeps voice human.
-   * - If much shorter (<75% of slot) -> keep natural duration; the assembler will
-   *   leave silence for the rest of the slot (no artificial slow-down).
-   * Returns measured final duration.
-   */
-  /**
-   * Make one synthesized line occupy its slot on the timeline.
-   *
-   * Three things have to hold at once for the Khmer voice to land on the original
-   * mouth movement: the line starts when the speaker starts, it finishes inside
-   * the slot, and it is not cut mid-word.
-   *
-   * TTS engines pad every line with silence, so the raw file is measured wrong
-   * twice over — the padding makes a line look longer than it is, and the leading
-   * padding pushes the actual voice away from the mouth. So the padding is
-   * removed first, the fit is judged on the speech that is left, and a speed-up
-   * within `maxTempo` is the normal way to make it fit. Only a line that needs
-   * more than the cap is trimmed, and that is logged as the real compromise it
-   * is rather than presented as a clean fit.
-   */
-  public static async fitAudioToSlot(
-    inputAudioPath: string,
-    outputAudioPath: string,
-    slotDuration: number,
-    maxTempo: number = 1.5
-  ): Promise<number> {
-    const rawDuration = await this.getAudioDuration(inputAudioPath);
-    if (!rawDuration || !slotDuration || slotDuration < 0.35) {
-      fs.copyFileSync(inputAudioPath, outputAudioPath);
-      return await this.getAudioDuration(outputAudioPath);
-    }
-
-    const speechDuration = await this.stripSilence(inputAudioPath, outputAudioPath);
-
-    // A line that is silent from start to finish has nothing to place; hand the
-    // original through rather than an empty file.
-    if (speechDuration <= 0.05) {
-      fs.copyFileSync(inputAudioPath, outputAudioPath);
-      return rawDuration;
-    }
-
-    const ratio = speechDuration / slotDuration;
-
-    // Already fits — a little slack either way is natural delivery.
-    if (ratio <= 1.04) {
-      if (ratio < 0.92) {
-        logger.debug(
-          `Slot ${slotDuration.toFixed(2)}s: speech ${speechDuration.toFixed(2)}s is shorter; the pause carries it.`
-        );
-      }
-      return speechDuration;
-    }
-
-    const needed = Math.min(maxTempo, ratio);
-    const tempoPath = `${outputAudioPath}.tempo.wav`;
-    await this.execute([
-      '-y',
-      '-i', outputAudioPath,
-      '-filter:a', `${this.buildAtempoChain(needed)},asetpts=PTS-STARTPTS`,
-      '-vn',
-      tempoPath,
-    ]);
-    let outDur = await this.getAudioDuration(tempoPath);
-
-    if (outDur > slotDuration + 0.01) {
-      // Even at the cap this line is too long, so cutting it is the only way to
-      // hold the sync. The trim stays, but it is reported: a clipped syllable is
-      // audible and the line it came from is worth knowing. The cut itself ends
-      // in a fade (see slotTrimChain) so it sounds cut short rather than chopped.
-      await this.execute([
-        '-y',
-        '-i', tempoPath,
-        '-filter:a', this.slotTrimChain(slotDuration),
-        '-vn',
-        outputAudioPath,
-      ]);
-      outDur = await this.getAudioDuration(outputAudioPath);
-      logger.warn(
-        `Slot ${slotDuration.toFixed(2)}s: speech ${speechDuration.toFixed(2)}s needs ${ratio.toFixed(2)}x but is capped at ${maxTempo}x; trimmed to ${outDur.toFixed(2)}s (a syllable may be cut).`
-      );
-    } else {
-      fs.renameSync(tempoPath, outputAudioPath);
-      logger.info(
-        `Slot ${slotDuration.toFixed(2)}s: fitted speech ${speechDuration.toFixed(2)}s -> ${outDur.toFixed(2)}s (${needed.toFixed(2)}x).`
-      );
-    }
-
-    if (fs.existsSync(tempoPath)) {
-      try {
-        fs.unlinkSync(tempoPath);
-      } catch {
-        /* temp file, discarded with the job folder */
-      }
-    }
-    return outDur;
-  }
-
-  /**
-   * Drop the silence a TTS engine pads around a line so the voice begins where
-   * the speaker begins. A little is kept at each end so the cut does not click.
-   */
-  private static async stripSilence(inputPath: string, outputPath: string): Promise<number> {
-    const threshold = process.env.TTS_SILENCE_DB || '-45dB';
-    const keepSeconds = process.env.TTS_SILENCE_KEEP || '0.04';
-    const trim = `silenceremove=start_periods=1:start_silence=${keepSeconds}:start_threshold=${threshold}:detection=peak`;
-    try {
-      await this.execute([
-        '-y',
-        '-i', inputPath,
-        '-filter:a', `${trim},areverse,${trim},areverse,asetpts=PTS-STARTPTS`,
-        '-vn',
-        outputPath,
-      ]);
-      return await this.getAudioDuration(outputPath);
-    } catch (err) {
-      logger.warn('Could not trim silence from a synthesized line; using it as-is:', err);
-      fs.copyFileSync(inputPath, outputPath);
-      return await this.getAudioDuration(outputPath);
-    }
-  }
-
-  /**
    * Separate audio into vocals and no_vocals using DSP center-cancellation + spectral bandpass
    * In typical mixes, vocals sit centered in the stereo image, while music and stereo effects have out-of-phase L/R components.
    * This extracts:
@@ -691,41 +505,34 @@ export class FFmpegHelper {
     const musicVol = options.backgroundMusic === 'reduce' ? 0.35 : (options.musicVolume ?? 0.65);
     const speechVol = options.speechVolume ?? 1.35;
 
-    // Duck the background inside each dialogue window instead of muting it.
-    // A professional dub lowers the soundtrack a few dB under the voice and keeps
-    // it playing; cutting it to silence every time somebody speaks is the single
-    // most obvious \"this video was dubbed\" give-away, and it is what a whole-band
-    // -60 dB gate used to do. So:
-    //   * centre-cancelled background (only bleed left) -> a light 6 dB dip, the
-    //     music stays continuous and the Khmer voice simply sits on top of it;
-    //   * mono source (no separation possible, original voices are still in the
-    //     background) -> a deep but still not silent dip, so bass and air stay
-    //     audible under the dub.
-    const gateDepthDb = options.backgroundHasOriginalVoice
-      ? Number(process.env.BACKGROUND_GATE_DB_MONO || '-30')
-      : Number(process.env.BACKGROUND_GATE_DB_STEREO || '-6');
-    const gatePadMs = Number(process.env.BACKGROUND_GATE_PAD_MS || '150');
-
-    const gateExpression = this.buildDialogueGateExpression(
-      options.dialogueWindows || [],
-      musicVol,
-      gateDepthDb,
-      gatePadMs
-    );
+    // The background is lowered only when it still carries the original voices —
+    // a mono source that could not be separated, where a per-window gate keeps
+    // the old dialogue out from under the Khmer voice. With real stem separation
+    // the background is already voice-free, so a plain volume balance is enough.
+    // Dropping the gate in that (normal) case removes both the per-frame gain
+    // expression and the sidechain compressor, which are what made this step
+    // slow on a free host.
+    const gateExpression =
+      options.backgroundHasOriginalVoice && (options.dialogueWindows?.length ?? 0) > 0
+        ? this.buildDialogueGateExpression(
+            options.dialogueWindows || [],
+            musicVol,
+            Number(process.env.BACKGROUND_GATE_DB_MONO || '-30'),
+            Number(process.env.BACKGROUND_GATE_PAD_MS || '150')
+          )
+        : null;
 
     const backgroundStage = gateExpression
       ? `[0:a]volume=volume='${gateExpression}':eval=frame[bg]`
       : `[0:a]volume=${musicVol}[bg]`;
 
-    // Filter: duck the background music under the speech (sidechain compression).
-    // [0:a] is background, [1:a] is speech. The speech has to be split because a
-    // filter output can only be consumed once, and it feeds both the sidechain key
-    // and the mix. normalize=0 keeps the per-input volumes as set above.
+    // [0:a] is the background, [1:a] the Khmer voice. normalize=0 keeps the two
+    // volumes above exactly as set, and the single loudnorm pass keeps the result
+    // at a consistent level.
     const filter = [
       backgroundStage,
-      `[1:a]volume=${speechVol},asplit=2[voiceKey][voiceMix]`,
-      `[bg][voiceKey]sidechaincompress=threshold=0.1:ratio=3:attack=20:release=300[duckedbg]`,
-      `[duckedbg][voiceMix]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[mixed]`,
+      `[1:a]volume=${speechVol}[voice]`,
+      `[bg][voice]amix=inputs=2:duration=longest:dropout_transition=2:normalize=0[mixed]`,
       `[mixed]loudnorm=I=-16:TP=-1.5:LRA=11[out]`,
     ].join(';');
 
@@ -744,13 +551,13 @@ export class FFmpegHelper {
         progress
       );
     } catch (err) {
-      logger.warn('Sidechain ducking mix failed, falling back to static balanced amix:', err);
+      logger.warn('Ducking mix failed, falling back to a static balanced amix:', err);
       await this.execute(
         [
           '-y',
           '-i', backgroundTrack,
           '-i', dubbedSpeechTrack,
-          '-filter_complex', `${backgroundStage};[1:a]volume=${speechVol}[voice];[bg][voice]amix=inputs=2:duration=longest[out]`,
+          '-filter_complex', `[0:a]volume=${musicVol}[bg];[1:a]volume=${speechVol}[voice];[bg][voice]amix=inputs=2:duration=longest[out]`,
           '-map', '[out]',
           '-ac', '2',
           '-ar', '44100',
@@ -848,7 +655,7 @@ export class FFmpegHelper {
       // The picture is the clock: the file ends where the video ends. `-shortest`
       // would let whichever stream is shorter decide — a caption track that ends
       // at its last cue, or an audio track a frame short, silently cutting the
-      // video. The sync step pads the mixed audio to this exact length, so capping
+      // video. The assembler pads the mixed audio to this exact length, so capping
       // here keeps the sound and the picture starting and ending together.
       if (Number.isFinite(meta.duration) && meta.duration > 0) {
         args.push('-t', String(meta.duration));
