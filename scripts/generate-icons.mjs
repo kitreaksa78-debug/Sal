@@ -10,7 +10,8 @@
 // Run with: node scripts/generate-icons.mjs
 //
 // The geometry below is a copy of Logo.tsx in its 24x24 coordinate space, so the
-// tab icon, the header mark and the app icon all stay the same drawing.
+// tab icon, the header mark and the app icon all stay the same drawing: a row of
+// rounded waveform bars over a microphone.
 
 import { deflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -20,38 +21,44 @@ import { fileURLToPath } from 'node:url';
 const OUT_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'public');
 
 // ---------------------------------------------------------------- the artwork
-// Same numbers as the inline SVG: a video frame with a play button, crossed by a
-// pencil whose dark outline cuts the frame exactly where they overlap.
-const FRAME = { x: 2.6, y: 5.6, w: 18.8, h: 12.8, r: 3.6, stroke: 2 };
-const PLAY = [
-  [7.4, 8.7],
-  [12.2, 12],
-  [7.4, 15.3],
+// Same numbers as the inline SVG: a row of rounded waveform bars over a
+// microphone — yoke, stem and base — all filled with one indigo.
+const BARS = [
+  { x: 4.2, height: 3.2 },
+  { x: 6.8, height: 5.6 },
+  { x: 9.4, height: 7.4 },
+  { x: 12, height: 8.8 },
+  { x: 14.6, height: 7.4 },
+  { x: 17.2, height: 5.6 },
+  { x: 19.8, height: 3.2 },
 ];
-const PLAY_STROKE = 0.9; // width of the stroke that rounds the triangle's corners
-const PENCIL = [
-  [9.6, 17.4],
-  [12.43, 16.83],
-  [22.47, 6.79],
-  [20.21, 4.53],
-  [10.17, 14.57],
-];
-const PENCIL_STROKE = 1.5;
+const BAR_WIDTH = 1.6;
+/** The row's centre line: every bar keeps this and grows both ways. */
+const BAR_MIDLINE = 7;
+/** The mic yoke: one cubic curve, stroked, so its ends come out round. */
+const ARC = {
+  from: [4.4, 13.2],
+  controlA: [6.5, 17.6],
+  controlB: [17.5, 17.6],
+  to: [19.6, 13.2],
+  stroke: 2,
+};
+const STEM = { from: [12, 17.4], to: [12, 19.4], stroke: 2 };
+const BASE = { x: 9.2, y: 19.4, w: 5.6, h: 2, r: 1 };
 
-/** The app's darkest background, used for the icon tile and the pencil outline. */
+/** The app's darkest background, used for the icon tile. */
 const TILE = [11, 15, 23]; // #0b0f17
 const GRADIENT = [
-  { at: 0, rgb: [0x22, 0xd3, 0xee] }, // cyan
-  { at: 0.5, rgb: [0x3b, 0x82, 0xf6] }, // blue
-  { at: 1, rgb: [0xa8, 0x55, 0xf7] }, // purple
+  { at: 0, rgb: [0x63, 0x66, 0xf1] }, // indigo-500
+  { at: 1, rgb: [0x4f, 0x46, 0xe5] }, // indigo-600
 ];
 
 // The mark is drawn inside the tile rather than edge to edge, so the icon keeps
 // breathing room and survives Android's maskable crop (content must stay inside
 // the middle 80%).
 const MARK_SCALE = 0.94;
-/** Middle of the mark's bounding box (x 2.6–22.47, y 4.53–18.4), so it sits centred. */
-const MARK_CENTER = { x: 12.53, y: 11.47 };
+/** Middle of the mark's bounding box (x 3.4–20.6, y 2.6–21.4), so it sits centred. */
+const MARK_CENTER = { x: 12, y: 12 };
 const TILE_RADIUS = 5.2; // of a 24-unit tile
 
 // ------------------------------------------------------------- shape helpers
@@ -62,32 +69,52 @@ function roundedRectSdf(px, py, cx, cy, halfW, halfH, radius) {
   return outside + Math.min(Math.max(dx, dy), 0) - radius;
 }
 
-/** Signed distance to a polygon: negative inside, positive outside. */
-function polygonSdf(px, py, points) {
-  let distance = Infinity;
-  let inside = false;
-
-  for (let i = 0, j = points.length - 1; i < points.length; j = i++) {
-    const [xi, yi] = points[i];
-    const [xj, yj] = points[j];
-
-    // Distance to this edge.
-    const ex = xj - xi;
-    const ey = yj - yi;
-    const wx = px - xi;
-    const wy = py - yi;
-    const len2 = ex * ex + ey * ey;
-    const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, (wx * ex + wy * ey) / len2));
-    distance = Math.min(distance, Math.hypot(wx - t * ex, wy - t * ey));
-
-    // Ray casting for the inside test.
-    if (yi > py !== yj > py && px < ((xj - xi) * (py - yi)) / (yj - yi) + xi) {
-      inside = !inside;
-    }
-  }
-
-  return inside ? -distance : distance;
+/** Distance from a point to one line segment. */
+function distanceToSegment(px, py, [ax, ay], [bx, by]) {
+  const ex = bx - ax;
+  const ey = by - ay;
+  const len2 = ex * ex + ey * ey;
+  const t = len2 === 0 ? 0 : Math.max(0, Math.min(1, ((px - ax) * ex + (py - ay) * ey) / len2));
+  return Math.hypot(px - (ax + t * ex), py - (ay + t * ey));
 }
+
+/**
+ * Distance to a stroked open curve, sampled into a polyline.
+ *
+ * A round stroke is exactly "everything within half the stroke of the path", and
+ * the ends of a polyline carry round caps for free — which is the shape
+ * `stroke-linecap="round"` draws in the SVG.
+ */
+function distanceToPolyline(px, py, points) {
+  let distance = Infinity;
+  for (let i = 0; i < points.length - 1; i++) {
+    distance = Math.min(distance, distanceToSegment(px, py, points[i], points[i + 1]));
+  }
+  return distance;
+}
+
+/** Sample one cubic Bézier into a polyline the distance test can walk. */
+function cubicPoints({ from, controlA, controlB, to }, steps = 24) {
+  const points = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const u = 1 - t;
+    points.push([
+      u * u * u * from[0] +
+        3 * u * u * t * controlA[0] +
+        3 * u * t * t * controlB[0] +
+        t * t * t * to[0],
+      u * u * u * from[1] +
+        3 * u * u * t * controlA[1] +
+        3 * u * t * t * controlB[1] +
+        t * t * t * to[1],
+    ]);
+  }
+  return points;
+}
+
+/** Sampled once: the distance test runs for every subsample of every pixel. */
+const ARC_POINTS = cubicPoints(ARC);
 
 function gradientAt(x, y) {
   // Linear gradient running from the bottom-left to the top-right, as in the SVG.
@@ -129,26 +156,35 @@ function sample(x, y) {
   const mx = MARK_CENTER.x + (x - 12) / MARK_SCALE;
   const my = MARK_CENTER.y + (y - 12) / MARK_SCALE;
 
-  const frameDistance = roundedRectSdf(
-    mx,
-    my,
-    FRAME.x + FRAME.w / 2,
-    FRAME.y + FRAME.h / 2,
-    FRAME.w / 2,
-    FRAME.h / 2,
-    FRAME.r
-  );
-  if (Math.abs(frameDistance) <= FRAME.stroke / 2) colour = gradientAt(mx, my);
+  // The sound: rounded bars, tallest in the middle.
+  for (const bar of BARS) {
+    const halfHeight = bar.height / 2;
+    if (
+      roundedRectSdf(mx, my, bar.x, BAR_MIDLINE, BAR_WIDTH / 2, halfHeight, BAR_WIDTH / 2) <= 0
+    ) {
+      colour = gradientAt(mx, my);
+    }
+  }
 
-  // Dilating the triangle by half the stroke is exactly what a round-joined
-  // stroke does to it, so the corners come out soft here too.
-  if (polygonSdf(mx, my, PLAY) <= PLAY_STROKE / 2) colour = gradientAt(mx, my);
-
-  // Paint order matters: the pencil's outline goes down first, then its body, so
-  // the outline eats the frame stroke where the two cross.
-  const pencilDistance = polygonSdf(mx, my, PENCIL);
-  if (Math.abs(pencilDistance) <= PENCIL_STROKE / 2) colour = TILE;
-  if (pencilDistance < 0) colour = gradientAt(mx, my);
+  // The mic yoke, then the stem and the pill under it. Half the stroke lies
+  // either side of the path, which is what makes the caps round.
+  if (distanceToPolyline(mx, my, ARC_POINTS) <= ARC.stroke / 2) colour = gradientAt(mx, my);
+  if (distanceToSegment(mx, my, STEM.from, STEM.to) <= STEM.stroke / 2) {
+    colour = gradientAt(mx, my);
+  }
+  if (
+    roundedRectSdf(
+      mx,
+      my,
+      BASE.x + BASE.w / 2,
+      BASE.y + BASE.h / 2,
+      BASE.w / 2,
+      BASE.h / 2,
+      BASE.r
+    ) <= 0
+  ) {
+    colour = gradientAt(mx, my);
+  }
 
   return [colour[0], colour[1], colour[2], 255];
 }
@@ -272,19 +308,29 @@ function encodeIco(images) {
 
 // --------------------------------------------------------------- the SVG twin
 function buildSvg() {
+  const bars = BARS.map(
+    (bar) =>
+      `    <rect x="${(bar.x - BAR_WIDTH / 2).toFixed(2)}" y="${(
+        BAR_MIDLINE -
+        bar.height / 2
+      ).toFixed(2)}" width="${BAR_WIDTH}" height="${bar.height}" rx="${(
+        BAR_WIDTH / 2
+      ).toFixed(2)}" fill="url(#mark)"/>`
+  ).join('\n');
+
   return `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" role="img" aria-label="AI translate video">
   <defs>
     <linearGradient id="mark" x1="2" y1="22" x2="22" y2="2" gradientUnits="userSpaceOnUse">
-      <stop offset="0" stop-color="#22d3ee"/>
-      <stop offset="0.5" stop-color="#3b82f6"/>
-      <stop offset="1" stop-color="#a855f7"/>
+      <stop offset="0" stop-color="#6366f1"/>
+      <stop offset="1" stop-color="#4f46e5"/>
     </linearGradient>
   </defs>
   <rect width="24" height="24" rx="${TILE_RADIUS}" fill="#0b0f17"/>
   <g transform="translate(12 12) scale(${MARK_SCALE}) translate(${-MARK_CENTER.x} ${-MARK_CENTER.y})">
-    <rect x="2.6" y="5.6" width="18.8" height="12.8" rx="3.6" fill="none" stroke="url(#mark)" stroke-width="2"/>
-    <path d="M7.4 8.7 12.2 12l-4.8 3.3z" fill="url(#mark)" stroke="url(#mark)" stroke-width="0.9" stroke-linejoin="round"/>
-    <path d="M9.6 17.4 12.43 16.83 22.47 6.79 20.21 4.53 10.17 14.57Z" fill="url(#mark)" stroke="#0b0f17" stroke-width="1.5" stroke-linejoin="round" paint-order="stroke"/>
+${bars}
+    <path d="M${ARC.from[0]} ${ARC.from[1]} C${ARC.controlA[0]} ${ARC.controlA[1]} ${ARC.controlB[0]} ${ARC.controlB[1]} ${ARC.to[0]} ${ARC.to[1]}" fill="none" stroke="url(#mark)" stroke-width="${ARC.stroke}" stroke-linecap="round"/>
+    <path d="M${STEM.from[0]} ${STEM.from[1]} L${STEM.to[0]} ${STEM.to[1]}" fill="none" stroke="url(#mark)" stroke-width="${STEM.stroke}" stroke-linecap="round"/>
+    <rect x="${BASE.x}" y="${BASE.y}" width="${BASE.w}" height="${BASE.h}" rx="${BASE.r}" fill="url(#mark)"/>
   </g>
 </svg>
 `;
@@ -348,11 +394,12 @@ const isTile = ([r, g, b, a]) => a === 255 && r < 50 && g < 60 && b < 80;
 const checks = [
   ['corner is transparent', atSize(192, 1, 1)[3] === 0],
   ['centre of the tile is opaque', atSize(192, 12, 12)[3] === 255],
-  ['frame stroke is drawn', isBright(onMark(6.5, 5.6))],
-  ['play button is filled', isBright(onMark(10.2, 12))],
-  ['pencil body is drawn', isBright(onMark(19, 8))],
-  ['pencil outline cuts the frame', isTile(onMark(21.61, 8.07))],
-  ['tile background stays dark', isTile(onMark(12, 4))],
+  ['outer waveform bar is drawn', isBright(onMark(4.2, 7))],
+  ['tallest waveform bar is drawn', isBright(onMark(12, 3.2))],
+  ['mic yoke is drawn', isBright(onMark(12, 16.5))],
+  ['mic stem is drawn', isBright(onMark(12, 18.4))],
+  ['mic base is drawn', isBright(onMark(12, 20.4))],
+  ['tile background stays dark', isTile(onMark(4.2, 18.6))],
 ];
 
 console.log(written.join('\n'));
