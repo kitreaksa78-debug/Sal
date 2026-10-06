@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
+import { normaliseServiceKey, normaliseServiceUrl } from '../utils/serviceConnection.js';
 import { getStorage } from './storage.js';
 
 /**
@@ -65,14 +66,17 @@ export interface ResolvedNllbConnection {
   updatedAt?: string;
 }
 
-function normaliseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, '');
-}
-
+/**
+ * One spelling per connection.
+ *
+ * The URL and the key arrive as whatever the owner copied out of Colab (see
+ * `utils/serviceConnection`), so they are cleaned here rather than at each call
+ * site: a value saved once is stored the way every later comparison expects.
+ */
 function normalise(input: Partial<NllbConnection>): NllbConnection {
   return {
-    url: normaliseUrl(String(input.url ?? '')),
-    apiKey: String(input.apiKey ?? '').trim(),
+    url: normaliseServiceUrl(input.url),
+    apiKey: normaliseServiceKey(input.apiKey),
     ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
   };
 }
@@ -105,7 +109,7 @@ export function getNllbConnection(): ResolvedNllbConnection {
   const saved = getStoredNllbConnection();
   const env = (name: string) => (process.env[name] || '').trim();
 
-  const pinned = normaliseUrl(PINNED_NLLB_URL);
+  const pinned = normaliseServiceUrl(PINNED_NLLB_URL);
   if (pinned) {
     return {
       url: pinned,
@@ -119,7 +123,7 @@ export function getNllbConnection(): ResolvedNllbConnection {
     return { url: saved.url, apiKey: saved.apiKey, source: 'app', updatedAt: saved.updatedAt };
   }
 
-  const envUrl = normaliseUrl(env('NLLB_TRANSLATION_URL'));
+  const envUrl = normaliseServiceUrl(env('NLLB_TRANSLATION_URL'));
   if (envUrl) {
     return { url: envUrl, apiKey: env('NLLB_TRANSLATION_API_KEY'), source: 'env' };
   }
@@ -145,8 +149,10 @@ export async function saveNllbConnection(input: Partial<NllbConnection>): Promis
   const current = getStoredNllbConnection() ?? { url: '', apiKey: '' };
   // An empty key field means "keep the one already saved", so the owner does not
   // have to retype the token every time the tunnel URL changes.
-  const apiKey =
-    input.apiKey === undefined || input.apiKey === '' ? current.apiKey : String(input.apiKey).trim();
+  // An empty field means "keep the stored key"; a cleaned-to-empty paste must not
+  // wipe it, so the current value decides rather than the raw input.
+  const typedKey = normaliseServiceKey(input.apiKey);
+  const apiKey = typedKey === '' ? current.apiKey : typedKey;
 
   stored = {
     ...normalise({ ...current, ...input, apiKey }),
@@ -255,7 +261,7 @@ export async function describeNllbService(
   timeoutMs = 6_000
 ): Promise<NllbServiceInfo | null> {
   try {
-    const response = await fetch(`${normaliseUrl(url)}/`, {
+    const response = await fetch(`${normaliseServiceUrl(url)}/`, {
       headers: authHeaders(apiKey),
       signal: AbortSignal.timeout(timeoutMs),
     });
@@ -338,7 +344,7 @@ async function requestNllbTranslate(
 ): Promise<Map<string, string>> {
   let response: Response;
   try {
-    response = await fetch(`${normaliseUrl(url)}/translate`, {
+    response = await fetch(`${normaliseServiceUrl(url)}/translate`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', ...authHeaders(apiKey) },
       body: JSON.stringify({ lines, src_lang: srcLang, tgt_lang: NLLB_TARGET_LANGUAGE }),

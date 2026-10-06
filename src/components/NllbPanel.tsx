@@ -20,6 +20,11 @@ import {
   saveNllbConnection,
   testNllbConnection,
 } from '../lib/api';
+import {
+  normaliseServiceKey,
+  normaliseServiceUrl,
+  parseServicePaste,
+} from '@/server/utils/serviceConnection';
 
 interface NllbPanelProps {
   /** Only the app owner sees this: the translator belongs to the whole app. */
@@ -77,11 +82,40 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
 
   const pinned = connection?.source === 'pinned';
 
+  /**
+   * Filling the two fields from one paste.
+   *
+   * Colab ends by printing the pair under labels (`URL : …` / `API Key : …`), and
+   * selecting that block is the obvious thing to do on a phone. A paste that
+   * carries an address fills the URL field — and the key too when the block
+   * carried one — while the label, the quotes and a missing `https://` are
+   * stripped on the way in. Anything unrecognised is left to the browser.
+   */
+  const handlePaste =
+    (field: 'url' | 'apiKey') => (event: React.ClipboardEvent<HTMLInputElement>) => {
+      const { url: pastedUrl, apiKey: pastedKey } = parseServicePaste(
+        event.clipboardData.getData('text')
+      );
+      if (field === 'url' && pastedUrl) {
+        event.preventDefault();
+        setUrl(pastedUrl);
+        if (pastedKey) setApiKey(pastedKey);
+      } else if (field === 'apiKey' && pastedKey) {
+        event.preventDefault();
+        setApiKey(pastedKey);
+      }
+    };
+
   const handleSave = async () => {
     setBusy('save');
     setStatus(null);
     try {
-      apply(await saveNllbConnection({ url, apiKey: apiKey.trim() }));
+      apply(
+        await saveNllbConnection({
+          url: normaliseServiceUrl(url),
+          apiKey: normaliseServiceKey(apiKey),
+        })
+      );
       setStatus({
         tone: 'ok',
         text: 'រក្សាទុករួចរាល់។ ឥឡូវសាកល្បងការតភ្ជាប់ដើម្បីបញ្ជាក់ថាវាបកប្រែបាន។ (Saved — run the test to confirm.)',
@@ -99,8 +133,8 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
     try {
       // Pasting the new tunnel URL (and, when it changed, the key) and pressing
       // this button is the whole job — both fields are saved first.
-      const typed = url.trim().replace(/\/+$/, '');
-      const keyTyped = apiKey.trim();
+      const typed = normaliseServiceUrl(url);
+      const keyTyped = normaliseServiceKey(apiKey);
       if (typed && (typed !== connection?.url || keyTyped)) {
         apply(await saveNllbConnection({ url: typed, apiKey: keyTyped }));
       }
@@ -229,6 +263,7 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
               inputMode="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
+              onPaste={handlePaste('url')}
               readOnly={pinned}
               placeholder="https://xxxx.trycloudflare.com"
               className={`w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs border border-slate-800 placeholder:text-slate-600 focus:outline-none ${
@@ -237,6 +272,12 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
                   : 'bg-slate-900/60 text-slate-200 focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20'
               }`}
             />
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              ចម្លងបន្ទាត់ដែល Colab បង្ហាញដាក់ទីនេះបាន៖ ទាំង URL តែម្នាក់ឯង ឬទាំងប្លុកពេញ
+              («URL : … / API Key : …») — ប្រព័ន្ធស្រង់យកតែ URL ហើយបើមាន Key ក្នុងនោះ
+              វាបំពេញឲ្យក្នុងប្រអប់ API Key ដោយស្វ័យប្រវត្តិ។ (Paste the Colab URL, or the whole
+              block it printed — only the address is kept, and its key fills the field below.)
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -255,6 +296,7 @@ export const NllbPanel: React.FC<NllbPanelProps> = ({ visible }) => {
               spellCheck={false}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
+              onPaste={handlePaste('apiKey')}
               placeholder={connection?.hasApiKey ? 'ទុកទទេ = ប្រើ key ដែលរក្សាទុករួច' : 'key របស់ NLLB API'}
               className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/60 text-slate-200 border border-slate-800 placeholder:text-slate-600 focus:outline-none focus:border-violet-500/50 focus:ring-2 focus:ring-violet-500/20"
             />

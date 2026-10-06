@@ -1,6 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import { logger } from '../utils/logger.js';
+import { normaliseServiceKey, normaliseServiceUrl } from '../utils/serviceConnection.js';
 import { getStorage } from './storage.js';
 
 /**
@@ -75,17 +76,17 @@ function emptyConnection(): SeparatorConnection {
   return { url: '', apiKey: '', model: '', path: '' };
 }
 
-/** Trim a URL and drop any trailing slashes, so two spellings compare equal. */
-function normaliseUrl(value: string): string {
-  return value.trim().replace(/\/+$/, '');
-}
-
+/**
+ * One spelling per connection.
+ *
+ * The URL and the key arrive as whatever the owner copied out of Colab (see
+ * `utils/serviceConnection`), so they are cleaned here rather than at each call
+ * site: a value saved once is stored the way every later comparison expects.
+ */
 function normalise(input: Partial<SeparatorConnection>): SeparatorConnection {
   return {
-    url: String(input.url ?? '')
-      .trim()
-      .replace(/\/+$/, ''),
-    apiKey: String(input.apiKey ?? '').trim(),
+    url: normaliseServiceUrl(input.url),
+    apiKey: normaliseServiceKey(input.apiKey),
     model: String(input.model ?? '').trim(),
     path: String(input.path ?? '').trim(),
     ...(input.updatedAt ? { updatedAt: input.updatedAt } : {}),
@@ -121,7 +122,7 @@ export function getSeparatorConnection(): ResolvedSeparatorConnection {
   const saved = getStoredSeparatorConnection();
   const env = (name: string) => (process.env[name] || '').trim();
 
-  const pinned = normaliseUrl(PINNED_SEPARATOR_URL);
+  const pinned = normaliseServiceUrl(PINNED_SEPARATOR_URL);
   if (pinned) {
     return {
       // Everything comes from the deployment's configuration: the phone's Demucs
@@ -150,7 +151,7 @@ export function getSeparatorConnection(): ResolvedSeparatorConnection {
     };
   }
 
-  const envUrl = normaliseUrl(env('AUDIO_SEPARATOR_URL'));
+  const envUrl = normaliseServiceUrl(env('AUDIO_SEPARATOR_URL'));
   if (envUrl) {
     return {
       url: envUrl,
@@ -180,9 +181,11 @@ export async function saveSeparatorConnection(
 ): Promise<SeparatorConnection> {
   const current = getStoredSeparatorConnection() ?? emptyConnection();
   // An empty key field means "keep the one already saved", so the owner does not
-  // have to retype the token every time the tunnel URL changes.
-  const apiKey =
-    input.apiKey === undefined || input.apiKey === '' ? current.apiKey : String(input.apiKey).trim();
+  // have to retype the token every time the tunnel URL changes. The typed value is
+  // cleaned first: a field holding only spaces, or a paste that carried no key at
+  // all, must not be read as "replace the stored key with nothing".
+  const typedKey = normaliseServiceKey(input.apiKey);
+  const apiKey = typedKey === '' ? current.apiKey : typedKey;
 
   stored = {
     ...normalise({ ...current, ...input, apiKey }),

@@ -21,6 +21,11 @@ import {
   SeparatorTestResult,
   testSeparatorConnection,
 } from '../lib/api';
+import {
+  normaliseServiceKey,
+  normaliseServiceUrl,
+  parseServicePaste,
+} from '@/server/utils/serviceConnection';
 
 interface DemucsPanelProps {
   /** Only the app owner sees this: the stem service belongs to the whole app. */
@@ -105,11 +110,38 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible, onConnectionC
 
   const pinned = connection?.source === 'pinned';
 
+  /**
+   * Filling the two fields from one paste.
+   *
+   * Colab ends by printing the pair under labels (`URL : …` / `API Key : …`), and
+   * selecting that block is the obvious thing to do on a phone. A paste that
+   * carries an address fills the URL field — and the key too when the block
+   * carried one — while the label, the quotes and a missing `https://` are
+   * stripped on the way in. Anything unrecognised is left to the browser.
+   */
+  const handlePaste =
+    (field: 'url' | 'apiKey') => (event: React.ClipboardEvent<HTMLInputElement>) => {
+      const { url: pastedUrl, apiKey: pastedKey } = parseServicePaste(
+        event.clipboardData.getData('text')
+      );
+      if (field === 'url' && pastedUrl) {
+        event.preventDefault();
+        setUrl(pastedUrl);
+        if (pastedKey) setApiKey(pastedKey);
+      } else if (field === 'apiKey' && pastedKey) {
+        event.preventDefault();
+        setApiKey(pastedKey);
+      }
+    };
+
   const handleSave = async () => {
     setBusy('save');
     setStatus(null);
     try {
-      const next = await saveSeparatorConnection({ url, apiKey: apiKey.trim() });
+      const next = await saveSeparatorConnection({
+        url: normaliseServiceUrl(url),
+        apiKey: normaliseServiceKey(apiKey),
+      });
       apply(next);
       onConnectionChange?.();
       setStatus({
@@ -130,8 +162,8 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible, onConnectionC
       // Pasting the new tunnel URL and pressing this button is the whole job, so
       // whatever is in the field is saved first — no separate save step to
       // forget, and no developer needed when the phone's tunnel is reopened.
-      const typed = url.trim().replace(/\/+$/, '');
-      const keyTyped = apiKey.trim();
+      const typed = normaliseServiceUrl(url);
+      const keyTyped = normaliseServiceKey(apiKey);
       // Pasting a new tunnel URL — and, for a Colab/GPU service, its key — and
       // pressing this button is the whole job: both fields are saved first, so
       // there is no separate save step to forget.
@@ -296,6 +328,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible, onConnectionC
               inputMode="url"
               value={url}
               onChange={(e) => setUrl(e.target.value)}
+              onPaste={handlePaste('url')}
               readOnly={pinned}
               placeholder="https://xxxx.trycloudflare.com"
               className={`w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs border border-slate-800 placeholder:text-slate-600 focus:outline-none ${
@@ -304,6 +337,12 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible, onConnectionC
                   : 'bg-slate-900/60 text-slate-200 focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20'
               }`}
             />
+            <p className="text-[10px] text-slate-500 leading-relaxed">
+              ចម្លងបន្ទាត់ដែល Colab បង្ហាញដាក់ទីនេះបាន៖ ទាំង URL តែម្នាក់ឯង ឬទាំងប្លុកពេញ
+              («URL : … / API Key : …») — ប្រព័ន្ធស្រង់យកតែ URL ហើយបើមាន Key ក្នុងនោះ
+              វាបំពេញឲ្យក្នុងប្រអប់ API Key ដោយស្វ័យប្រវត្តិ។ (Paste the Colab URL, or the whole
+              block it printed — only the address is kept, and its key fills the field below.)
+            </p>
           </div>
 
           <div className="space-y-1.5">
@@ -322,6 +361,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ visible, onConnectionC
               spellCheck={false}
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
+              onPaste={handlePaste('apiKey')}
               placeholder={connection?.hasApiKey ? 'ទុកទទេ = ប្រើ key ដែលរក្សាទុករួច' : 'key របស់ម៉ាស៊ីនញែកភ្លេង (បើមាន)'}
               className="w-full min-h-[44px] px-3 py-2.5 rounded-xl text-xs bg-slate-900/60 text-slate-200 border border-slate-800 placeholder:text-slate-600 focus:outline-none focus:border-cyan-500/50 focus:ring-2 focus:ring-cyan-500/20"
             />

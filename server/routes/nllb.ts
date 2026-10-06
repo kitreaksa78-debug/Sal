@@ -4,6 +4,11 @@ import { isAppOwner } from '../services/accounts.js';
 import { SessionRecord } from '../types.js';
 import { logger } from '../utils/logger.js';
 import {
+  SERVICE_URL_REJECTED_MESSAGE,
+  normaliseServiceKey,
+  normaliseServiceUrl,
+} from '../utils/serviceConnection.js';
+import {
   NLLB_HF_MODEL,
   NLLB_TRANSLATION_MODEL,
   clearNllbConnection,
@@ -67,21 +72,20 @@ router.put('/', async (req: Request, res: Response) => {
   const session = await requireAdmin(req, res);
   if (!session) return;
 
-  const url = String(req.body?.url ?? '')
-    .trim()
-    .replace(/\/+$/, '');
+  // Whatever Colab printed, pasted whole: the label (`URL : …`), quotes and a
+  // missing scheme are all handled by the shared normaliser, so a bare
+  // `xxxx.trycloudflare.com` is a valid answer here.
+  const url = normaliseServiceUrl(req.body?.url);
 
-  if (!/^https?:\/\/[^\s]+$/i.test(url)) {
-    return res.status(400).json({
-      error:
-        'URL មិនត្រឹមត្រូវទេ — ត្រូវចាប់ផ្តើមដោយ http:// ឬ https://។ (The URL must start with http:// or https://)',
-    });
+  if (!url) {
+    return res.status(400).json({ error: SERVICE_URL_REJECTED_MESSAGE });
   }
 
   try {
     const saved = await saveNllbConnection({
       url,
-      apiKey: req.body?.apiKey === undefined ? undefined : String(req.body.apiKey).trim(),
+      apiKey:
+        req.body?.apiKey === undefined ? undefined : normaliseServiceKey(req.body.apiKey),
     });
     logger.info(`NLLB translation service set to ${saved.url} by ${session.email}`);
     return res.json(describeConnection());
