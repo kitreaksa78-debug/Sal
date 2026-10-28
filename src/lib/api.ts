@@ -1,4 +1,4 @@
-import { JobRecord, JobSettings, SystemConfigStatus } from '../types';
+import { JobRecord, SystemConfigStatus } from '../types';
 
 // The API normally lives on the same origin (dev + Freebuff preview).
 // A static host such as Cloudflare Pages can either be given a remote API at
@@ -24,14 +24,19 @@ export class ApiError extends Error {
   }
 }
 
-export async function uploadVideoJob(
+/**
+ * Upload a video or an audio file and start separating it.
+ *
+ * The multipart field is still called `video` — that is the field name the
+ * server reads — but what arrives can be a bare audio file, which is exactly
+ * what "separate the singing from the music" is applied to.
+ */
+export async function uploadSeparationJob(
   file: File,
-  settings: JobSettings,
   onUploadProgress?: (pct: number) => void
 ): Promise<{ jobId: string; job: JobRecord }> {
   const formData = new FormData();
   formData.append('video', file);
-  formData.append('settings', JSON.stringify(settings));
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -140,29 +145,21 @@ export function subscribeToJobUpdates(
   };
 }
 
-export function getDownloadUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/download`;
-}
-
 /**
- * The dubbed video, played in the page. Its Khmer captions ride along as a
- * caption track inside the MP4 (hidden until the viewer turns them on).
- * `inline=1` makes the browser play it instead of saving it.
+ * One URL per deliverable: `vocals` (the spoken dialogue and the singing, with
+ * no music under it) or `music` (everything that is not a human voice), as an
+ * MP3 — or, when the upload had a picture, `mp4` plays that same stem over the
+ * original video. `inline` makes the browser play it instead of saving it.
  */
-export function getSubtitledVideoUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/download?inline=1`;
-}
-
-export function getSubtitlesUrl(jobId: string, format: 'srt' | 'vtt' = 'vtt'): string {
-  return `${API_BASE}/jobs/${jobId}/subtitles?format=${format}`;
-}
-
-export function getAudioDownloadUrl(jobId: string): string {
-  return `${API_BASE}/jobs/${jobId}/audio`;
-}
-
-export function getMediaFileUrl(category: 'uploads' | 'outputs', filename: string): string {
-  return `${API_BASE}/files/${category}/${encodeURIComponent(filename)}`;
+export function getStemDownloadUrl(
+  jobId: string,
+  stem: 'vocals' | 'music',
+  format: 'mp3' | 'mp4' = 'mp3',
+  inline = false
+): string {
+  const params = new URLSearchParams({ stem, format });
+  if (inline) params.set('inline', '1');
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
 }
 
 // ---------------------------------------------------- stem separation service

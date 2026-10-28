@@ -23,7 +23,7 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'ok',
-    app: 'AI translate video',
+    app: 'AI separate voice',
     timestamp: new Date().toISOString(),
   });
 });
@@ -82,7 +82,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    logger.info(`KhmerDub AI server listening on http://0.0.0.0:${PORT}`);
+    logger.info(`Voice/music separation studio listening on http://0.0.0.0:${PORT}`);
   });
 }
 

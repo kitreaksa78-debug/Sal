@@ -22,35 +22,14 @@ services:
     envVars:
       - key: NODE_ENV
         value: production
-      - key: STT_PROVIDER
-        value: groq
 
-      # Translation order is in the code: Gemini leads and Groq takes over the
-      # moment Gemini cannot answer a block. There is no setting for it because
-      # the pipeline already picks the other configured provider by itself.
-
-      # Edge TTS pays nothing and needs no key, so the Khmer voice runs without
-      # a quota.
-      - key: TTS_PROVIDER
-        value: edge
-      # Stem separation runs on Demucs and nothing else — there is no FFmpeg
-      # substitute, so a job needs AUDIO_SEPARATOR_URL (below) or a service URL
-      # saved in the website's stem panel. Without one it stops here.
-      - key: AUDIO_SEPARATION_PROVIDER
-        value: demucs_api
-
-      # Secrets — set these in the Render dashboard, not in git.
-      - key: GROQ_API_KEY
-        sync: false
-      - key: GROQ_API_KEY2
-        sync: false
-      - key: GROQ_API_KEY3
-        sync: false
-
-      # Where the Demucs service lives: a phone tunnel, a home server, or the
-      # bundled tools/audio-separator-server sidecar. A phone tunnel URL changes
-      # every time it is reopened, so it can also be pasted into the website's
-      # stem panel — which wins over this value.
+      # Where the Demucs service lives: a phone tunnel, a Google Colab GPU, a
+      # home server, or the bundled tools/audio-separator-server sidecar. A phone
+      # tunnel URL changes every time it is reopened, so it can also be pasted
+      # into the website's stem panel — which wins over this value.
+      #
+      # Separation is the whole product: with no service connected the upload
+      # endpoint refuses every file.
       - key: AUDIO_SEPARATOR_URL
         sync: false
       - key: AUDIO_SEPARATOR_API_KEY

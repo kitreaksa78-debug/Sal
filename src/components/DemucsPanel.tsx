@@ -52,7 +52,7 @@ function formatBytes(bytes: number): string {
 }
 
 /**
- * Setup for the model that pulls the voice out of a video before dubbing.
+ * Setup for the model that pulls the human voice out of the music.
  *
  * The address lives here rather than only in environment variables because a
  * phone served over a quick tunnel gets a new URL every time the tunnel is
@@ -295,8 +295,7 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ onConnectionChange }) 
               </p>
               <p>
                 ៦. ពេល tunnel ប្តូរ URL ថ្មី គ្រាន់តែ paste ថ្មីម្តងទៀតនៅទីនេះ។ បើមិនភ្ជាប់ Demucs
-                ការងារបកប្រែនៅតែដំណើរការជោគជ័យ តែសំឡេងដើមនឹងនៅក្នុងភ្លេងផ្ទៃខាងក្រោយ
-                (ត្រូវបានបន្ថយក្រោមសំឡេងខ្មែរ) ជំនួសការញែកចេញស្អាត។
+                គេហទំព័រមិនទទួលយកឯកសារឡើងទេ ព្រោះការញែកសំឡេងចេញពីភ្លេងត្រូវការម៉ាស៊ីននេះ។
               </p>
             </div>
           </div>
@@ -305,10 +304,10 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ onConnectionChange }) 
             <div className="flex items-start gap-2.5 p-3 rounded-xl bg-amber-950/30 border border-amber-500/30">
               <TriangleAlert className="w-4 h-4 text-amber-300 shrink-0 mt-0.5" />
               <p className="text-[11px] text-amber-200 leading-relaxed">
-                មិនទាន់ភ្ជាប់ Demucs API ទេ — ការងារបកប្រែនៅតែដំណើរការ តែសំឡេងដើមនឹងនៅជាប់ក្នុង
-                ភ្លេងផ្ទៃខាងក្រោយ ហើយត្រូវបានបន្ថយក្រោមសំឡេងខ្មែរ។ ភ្ជាប់ Demucs ដើម្បីបានគុណភាពខ្ពស់ជាង។
-                (No Demucs API: jobs still complete, but the original voices stay in the background and are
-                dipped under the Khmer dub. Connect Demucs for a cleaner result.)
+                មិនទាន់ភ្ជាប់ Demucs API ទេ — គេហទំព័រនឹងបដិសេធការបញ្ចូលឯកសារ (វីដេអូ/សំឡេង)
+                រហូតដល់ភ្ជាប់ម៉ាស៊ីនញែកភ្លេង។ ភ្ជាប់ Demucs API ក្នុងប្រអប់ខាងក្រោម ឬកំណត់
+                AUDIO_SEPARATOR_URL សិន។ (No Demucs API: uploads are refused until a stem service is
+                connected.)
               </p>
             </div>
           )}

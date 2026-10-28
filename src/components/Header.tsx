@@ -21,11 +21,11 @@ export const Header: React.FC = () => {
               <span className="flex items-center gap-2">
                 <h1 className="text-base sm:text-xl font-bold tracking-tight text-white leading-tight whitespace-nowrap">
                   <span className="text-emerald-400 font-extrabold">AI</span>{' '}
-                  <span>translate video</span>
+                  <span>separate voice</span>
                 </h1>
               </span>
               <span className="hidden sm:block text-[11px] md:text-xs text-slate-400 font-light truncate">
-                វេទិកាបកប្រែ និងបញ្ចូលសំឡេងខ្មែរ AI
+                ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេង
               </span>
             </span>
           </div>

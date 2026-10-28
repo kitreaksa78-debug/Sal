@@ -2,13 +2,12 @@ import React, { useState, useEffect, useRef } from 'react';
 import { AlertCircle } from 'lucide-react';
 import { Header } from './components/Header';
 import { UploadPanel } from './components/UploadPanel';
-import { TranslationSettings } from './components/TranslationSettings';
 import { ProcessingProgress } from './components/ProcessingProgress';
 import { ResultPanel } from './components/ResultPanel';
 import { DemucsPanel } from './components/DemucsPanel';
-import { JobRecord, JobSettings } from './types';
+import { JobRecord } from './types';
 import {
-  uploadVideoJob,
+  uploadSeparationJob,
   getJob,
   subscribeToJobUpdates,
   getSystemConfigStatus,
@@ -19,44 +18,30 @@ import {
  * its own — the same rule the server enforces, in the studio's own words.
  */
 const DEMUCS_REQUIRED_NOTICE =
-  'បើគ្មានម៉ាស៊ីនញែកភ្លេង (Demucs) ទេ ការបញ្ចូលសំឡេងខ្មែរមិនដំណើរការទេ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API»។';
+  'បើគ្មានម៉ាស៊ីនញែកភ្លេង (Demucs) ទេ ការញែកសំឡេងមិនដំណើរការទេ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API»។';
+
+/** Video and audio are both uploaded to the same endpoint. */
+const AUDIO_RE = /\.(mp3|wav|m4a|aac|ogg|opus|flac)$/i;
+const isAudioFile = (file: File) =>
+  file.type.startsWith('audio/') || (!file.type.startsWith('video/') && AUDIO_RE.test(file.name));
 
 export function App() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [videoPreviewUrl, setVideoPreviewUrl] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
-  const [videoResolution, setVideoResolution] = useState<{ width: number; height: number } | null>(null);
-
-  const [settings, setSettings] = useState<JobSettings>({
-    voice: 'auto',
-    voiceStyle: 'natural',
-    backgroundMusic: 'keep',
-    subtitle: true,
-    outputQuality: 'original',
-    translationStyle: 'natural',
-    sourceLanguage: 'auto',
-    // Khmer is the default dub; the picker in the settings card can change it.
-    targetLanguage: 'km',
-    glossary: '',
-  });
+  const [videoResolution, setVideoResolution] = useState<{ width: number; height: number } | null>(
+    null
+  );
 
   /**
-   * Demucs is part of the product, so the studio has to say so before a video is
-   * chosen rather than after the upload is refused. `null` means "a stem service
-   * is connected" or "the probe failed" — in the second case the studio stays
+   * Demucs is the product, so the studio has to say so before a file is chosen
+   * rather than after the upload is refused. `null` means "a stem service is
+   * connected" or "the probe failed" — in the second case the studio stays
    * open, because the upload endpoint makes the same check again on the server.
    */
   const [demucsNotice, setDemucsNotice] = useState<string | null>(null);
   /** Bumped when the stem-separation panel changes the connection. */
   const [demucsCheckToken, setDemucsCheckToken] = useState(0);
-  /**
-   * Which service and model translate the dialogue, read from the same status the
-   * pipeline reports. Shown in the settings panel so the engine is visible where
-   * the translation is configured, instead of only in the job log.
-   */
-  const [translationEngine, setTranslationEngine] = useState<string | null>(null);
-  /** The service that takes over if the one above fails, when there is one. */
-  const [translationFallback, setTranslationFallback] = useState<string | null>(null);
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -69,7 +54,7 @@ export function App() {
    * their heading from here.
    */
   useEffect(() => {
-    document.title = 'ស្ទូឌីយោបកប្រែវីដេអូ · AI translate video';
+    document.title = 'ញែកសំឡេងចេញពីភ្លេង · Separate voice from music';
   }, []);
 
   // Subscribe to SSE updates when a job is active
@@ -116,20 +101,35 @@ export function App() {
   // Clean object URL on unmount or file change
   useEffect(() => {
     return () => {
-      if (videoPreviewUrl) URL.revokeObjectURL(videoPreviewUrl);
+      if (previewUrl) URL.revokeObjectURL(previewUrl);
     };
-  }, [videoPreviewUrl]);
+  }, [previewUrl]);
 
   const handleFileSelect = (file: File) => {
-    if (videoPreviewUrl) {
-      URL.revokeObjectURL(videoPreviewUrl);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
     }
 
     setSelectedFile(file);
     const objectUrl = URL.createObjectURL(file);
-    setVideoPreviewUrl(objectUrl);
+    setPreviewUrl(objectUrl);
+    setVideoResolution(null);
 
-    // Read metadata via HTML video element
+    // Read metadata: an <audio> element for a bare sound file, a <video> one
+    // otherwise. The duration is what tells the visitor they picked the right
+    // file before they spend a minute waiting on the separator.
+    if (isAudioFile(file)) {
+      const tempAudio = document.createElement('audio');
+      tempAudio.preload = 'metadata';
+      tempAudio.src = objectUrl;
+      tempAudio.onloadedmetadata = () => {
+        // The same object URL stays in state for the preview player, so it is
+        // revoked on the next selection — never here.
+        setVideoDuration(Number.isFinite(tempAudio.duration) ? tempAudio.duration : null);
+      };
+      return;
+    }
+
     const tempVideo = document.createElement('video');
     tempVideo.preload = 'metadata';
     tempVideo.src = objectUrl;
@@ -159,18 +159,10 @@ export function App() {
             ? null
             : status.audioSeparation.message || DEMUCS_REQUIRED_NOTICE
         );
-        setTranslationEngine(
-          status.translation?.configured && status.translation.model
-            ? `${status.translation.provider} · ${status.translation.model}`
-            : null
-        );
-        setTranslationFallback(status.translation?.fallbackProvider || null);
       })
       .catch(() => {
         if (cancelled) return;
         setDemucsNotice(null);
-        setTranslationEngine(null);
-        setTranslationFallback(null);
       });
 
     return () => {
@@ -178,7 +170,7 @@ export function App() {
     };
   }, [demucsCheckToken]);
 
-  const handleStartDubbing = async () => {
+  const handleStartSeparating = async () => {
     if (!selectedFile) return;
 
     if (demucsNotice) {
@@ -190,13 +182,13 @@ export function App() {
       setIsUploading(true);
       setUploadProgress(0);
 
-      const result = await uploadVideoJob(selectedFile, settings, (pct) => {
+      const result = await uploadSeparationJob(selectedFile, (pct) => {
         setUploadProgress(pct);
       });
 
       setCurrentJob(result.job);
     } catch (err: any) {
-      alert(err?.message || 'ការបញ្ចូលវីដេអូបរាជ័យ');
+      alert(err?.message || 'ការបញ្ចូលឯកសារបរាជ័យ');
     } finally {
       setIsUploading(false);
     }
@@ -207,11 +199,11 @@ export function App() {
       sseUnsubscribeRef.current();
       sseUnsubscribeRef.current = null;
     }
-    if (videoPreviewUrl) {
-      URL.revokeObjectURL(videoPreviewUrl);
+    if (previewUrl) {
+      URL.revokeObjectURL(previewUrl);
     }
     setSelectedFile(null);
-    setVideoPreviewUrl(null);
+    setPreviewUrl(null);
     setVideoDuration(null);
     setVideoResolution(null);
     setCurrentJob(null);
@@ -229,7 +221,7 @@ export function App() {
           {!currentJob && (
             <div className="space-y-8 animate-in fade-in duration-300">
               {/* Demucs is required: without it the server refuses the upload, so
-                  the reason is shown before anyone picks a video. */}
+                  the reason is shown before anyone picks a file. */}
               {demucsNotice && (
                 <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs leading-relaxed flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
@@ -249,23 +241,13 @@ export function App() {
               <UploadPanel
                 onFileSelect={handleFileSelect}
                 selectedFile={selectedFile}
-                videoPreviewUrl={videoPreviewUrl}
+                previewUrl={previewUrl}
                 videoDuration={videoDuration}
                 videoResolution={videoResolution}
-                settings={settings}
-                onStartDubbing={handleStartDubbing}
+                onStart={handleStartSeparating}
                 isUploading={isUploading}
                 uploadProgress={uploadProgress}
                 startBlocked={Boolean(demucsNotice)}
-              />
-
-              {/* Settings Panel */}
-              <TranslationSettings
-                settings={settings}
-                onChange={setSettings}
-                disabled={isUploading}
-                engine={translationEngine}
-                engineFallback={translationFallback}
               />
             </div>
           )}
@@ -277,7 +259,7 @@ export function App() {
             </div>
           )}
 
-          {/* If job is completed, show Result Panel */}
+          {/* If the separation finished, show the two downloads */}
           {currentJob && currentJob.status === 'completed' && (
             <div className="animate-in fade-in duration-300">
               <ResultPanel job={currentJob} onReset={handleReset} />
@@ -289,10 +271,10 @@ export function App() {
       {/* Modern Minimal Footer */}
       <footer className="border-t border-slate-900 py-6 px-4 pb-8 text-center text-[11px] sm:text-xs text-slate-400 leading-relaxed">
         <p className="mx-auto max-w-md">
-          AI translate video · បកប្រែវីដេអូ និងបញ្ចូលសំឡេងខ្មែរ
+          ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេង — ឥតគិតថ្លៃ
         </p>
         <p className="mt-1 text-[10px] text-slate-500 sm:text-[11px]">
-          AI Video Translation &amp; Khmer Dubbing
+          Separate voice &amp; singing from music · Free
         </p>
       </footer>
     </div>

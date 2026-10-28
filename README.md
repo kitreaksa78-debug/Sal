@@ -6,68 +6,61 @@ colorTo: teal
 sdk: docker
 app_port: 7860
 pinned: false
-short_description: AI video translation with natural Khmer dubbing
+short_description: Separate the voice (speech and singing) from the music
 ---
 
-# KhmerDub AI
+# AI separate voice · ញែកសំឡេងចេញពីភ្លេង
 
-AI video translation and natural dubbing. Upload a video, and the pipeline
-splits the voices out of the music, transcribes the speech, translates it into
-the language you choose (**Khmer** by default, or
-English/Chinese/Thai/Vietnamese/Korean/Japanese/French/Spanish), speaks the
-translation with gTTS, keeps the original music/background, and muxes a new MP4
-with subtitles.
+Upload a video or a song, get **two files back**: the human voice — the spoken
+dialogue *and* the singing — and the music it was mixed with. The separation
+runs on **Demucs**, the model that actually lifts a voice out of a mix; nothing
+in this repository substitutes a lesser trick for it.
 
 There is no account to create and no history to keep: every visit opens the
-studio, uploads straight away, and hands back the finished file. This Space runs
-the **whole app** (frontend + API) from one container.
+studio, uploads straight away, and hands back the finished tracks. This Space
+runs the **whole app** (frontend + API) from one container.
 
 ## Pipeline
 
-Six engines, in the order they run:
+Four steps, in the order they run:
 
 | Step | Engine |
 | --- | --- |
-| 1. Upload Video | upload + FFmpeg audio extraction |
-| 2. Demucs | Demucs (remote stem API) — ញែកសំឡេងនិយាយចេញពីតន្ត្រី/ផ្ទៃខាងក្រោយ |
-| 3. ASR | Whisper via Groq `whisper-large-v3` — បំលែងសំឡេងទៅជាអក្សរ |
-| 4. Google Translate | the free `translate_a/single` endpoint — the same one the Python `googletrans` package uses. **No API key and no model download**: each line is one HTTPS request, translated into the **target language** the studio picked (Khmer by default). Transcript fragments Whisper split mid-sentence are rejoined first, and a **Khmer** target is sanitised (no Thai/Lao); any other target keeps its own script untouched. A line the endpoint refuses (Google blocks whole datacenter IP ranges with 429) is handed to **Groq** — the same key the ASR step uses — and, without that, to the keyless MyMemory service, so a blocked IP no longer leaves the dub in the source language |
-| 5. gTTS | Google Translate's own `translate_tts` endpoint — what the `gTTS` package wraps. Keyless, no voice model, one MP3 per request (a long line is cut at punctuation into ≤180-character pieces and joined back into one WAV) |
-| 6. Sync + FFmpeg | every line is placed on the timestamp where it was spoken (`adelay`), mixed under the kept music/background, and muxed back into the video as the final MP4 |
+| 1. Upload File | multer + FFmpeg — a video or an audio file (MP4, MOV, WEBM, MP3, WAV, M4A) |
+| 2. Extract Audio | FFmpeg `-vn` → 44.1 kHz stereo WAV, whatever was uploaded |
+| 3. Separate voice / music | **Demucs** over HTTP — ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេង |
+| 4. Package | FFmpeg encodes both stems as VBR MP3, plus an MP4 twin for a video upload |
 
-The studio's checklist shows all six rows — upload, Demucs, ASR, translate, the
-dubbed voice and **Sync + Final MP4** — so the sync pass is on screen while it
-runs instead of hiding inside the voice stage. The subtitle track is written
-inside that last row and the overall progress bar carries the detail.
+The studio's checklist shows those four rows, so each stage is on screen while it
+runs. `queued → extracting_audio → separating_audio → mixing → completed`.
 
-Nothing is lost by not naming those closing steps. The voice is already in time
-when the mixer starts, and that costs nothing extra:
+### What comes back
 
-- The assembler places every line at its own timestamp (`adelay`) and pads the
-  track to the video's length (`apad=whole_dur`), so a line starts where it was
-  spoken even though the translated sentence is longer than the original one.
-- The render caps the result at the video's own length (`-t meta.duration`), so the
-  file can never end a frame early or leave the last frames in silence.
-- The mixer balances the dubbed voice against the background music. When the
-  background still carries the original voices (a mono source that could not be
-  separated) it is ducked inside the dialogue windows instead.
+| Deliverable | File |
+| --- | --- |
+| សំឡេង (voice: speech + singing, no music) | `vocals-<id>.mp3` |
+| ភ្លេង (music: everything that is not a human voice) | `music-<id>.mp3` |
+| The voice over the original picture | `vocals-<id>.mp4` (video uploads only) |
+| The music over the original picture | `music-<id>.mp4` (video uploads only) |
 
-A measuring pass over the finished track was tried and removed: it needed a second
-full-length audio decode per job and only confirmed what the assembler and the
-render already guarantee.
+All four come from one route, `GET /api/jobs/:id/download?stem=vocals|music&format=mp3|mp4`,
+which honours byte ranges so the previews seek instead of downloading first.
+
+The MP4 twins mux each stem over the original picture with a stream copy, so the
+video is never re-encoded — a container FFmpeg cannot write simply yields no
+twin while the MP3 downloads keep working.
 
 ## Stem separation (Demucs required)
 
 Splitting the voices out of the mix runs on Demucs, reached over HTTP. Model
 separation is never faked: a job that reaches Demucs gets real stems.
 
-Demucs is a **requirement**, not an upgrade. Removing the original voices is what
-lets the Khmer dub be the dialogue instead of a voice laid over the source one,
-and nothing else in the pipeline does it. So with no service connected the upload
-endpoint refuses the video (HTTP 400, `DEMUCS_REQUIRED_MESSAGE`), and a job whose
-service breaks mid-run fails with the service's own reason instead of publishing a
-dub played under the original voices. `getAudioSeparationProvider()` has no
-fallback provider for exactly this reason.
+Demucs is a **requirement**, not an upgrade — it *is* the product. With no
+service connected the upload endpoint refuses the file (HTTP 400,
+`DEMUCS_REQUIRED_MESSAGE`), and a job whose service breaks mid-run fails with
+the service's own reason instead of publishing something that was never
+separated. `getAudioSeparationProvider()` has no fallback provider for exactly
+this reason.
 
 Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 
@@ -78,107 +71,29 @@ Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 | Home server / VPS | `tools/demucs-termux/run-local.sh` |
 | Bundled sidecar | `tools/audio-separator-server/` |
 
-Translation and voice need no service to connect: both are the public Google
-endpoints described above, reached from the server's own HTTPS request. A line
-Google refuses goes to Groq when `GROQ_API_KEY` is set (it already is, for the
-ASR step), and to the keyless MyMemory service when it is not.
-
-Google throttles a datacenter IP it does not recognise, and a free host shares
-its address with every other tenant on that machine — on Render every line came
-back `429`, which left the `2/2 lines could not be translated` warning and an
-English dub under Khmer captions. So the lines Google refuses are translated by
-**Groq** instead, with the same `GROQ_API_KEY` the speech-to-text step already
-needs: they are batched (~20 lines per request) and answered as JSON. Three
-refusals in a row mark Google as blocked for the next ten minutes, so the rest of
-the job does not spend four backoff rounds per line. A deployment without a Groq
-key still gets the keyless `api.mymemory.translated.net` fallback, and a line
-nothing could translate keeps its original text and says so in the job warning.
-
-Overrides: `GROQ_TRANSLATION_MODEL` (default: the first of
-`llama-3.3-70b-versatile`, `openai/gpt-oss-120b`, `llama-3.1-8b-instant` the
-account offers), `GROQ_TRANSLATION_LINES_PER_CALL`,
-`GOOGLE_TRANSLATE_HOSTS`, `GOOGLE_TRANSLATE_FALLBACK=off`,
-`GOOGLE_TRANSLATE_BLOCK_MS`.
-
-Colab is the fast option: the same `demucs_api.py` runs on a free GPU, so the API
-answers with `"device":"cuda"` and the pipeline then sends it far bigger pieces
-(`AUDIO_SEPARATOR_GPU_CHUNK_SECONDS`, 90s by default) instead of the 15s pieces a
-phone needs — a CPU service keeps the phone-sized default.
-
 The URL can also be pasted into the `ញែកភ្លេង · Demucs API` panel in the studio,
-and that value wins over the environment variable — a phone tunnel gets a
-new URL every time it is reopened, so re-pointing it must not need a redeploy.
+and that value wins over the environment variable — a phone tunnel gets a new
+URL every time it is reopened, so re-pointing it must not need a redeploy.
 
-## Target language
+### Long files
 
-The studio translates into one of nine languages. **Khmer is the default** and a
-job without the setting behaves exactly as it did before the picker existed; pick
-another language and both the dub and the caption track follow it. The whole
-pipeline is target-aware:
+A quick Cloudflare tunnel cuts a request at roughly 100 seconds (HTTP 524), and a
+phone separating on CPU runs several times slower than realtime. So the audio is
+cut into pieces, each separated by its own request, and the stems are joined
+back in order — the timeline is unchanged, because the pieces are cut at exact
+offsets and both of a piece's stems come from the same separation:
 
-- translation asks Google Translate for the chosen target code (`zh` is sent as
-  `zh-CN`, every other language keeps its own two-letter code);
-- gTTS speaks it (`km`, `en`, `zh-CN`, `th`, `vi`, `ko`, `ja`, `fr`, `es`). The
-  free endpoint has one voice per language, so the studio's male/female choice
-  cannot change the speaker here — every line is spoken by that language's gTTS
-  voice.
-- the MP4's caption track is tagged with the target's ISO 639-3 code, so the
-  player's CC badge names the right language.
+- the default piece is 15s on a phone; a service that reports `cuda`/`mps` in
+  `/health` is sent **90s** pieces (`AUDIO_SEPARATOR_GPU_CHUNK_SECONDS`),
+  because on a GPU the round trip dominates;
+- a piece that times out is halved (first to one 7.5s Demucs window) and the
+  smaller size is remembered for the rest of the run; pieces that finish with
+  the budget to spare grow it back;
+- a dropped tunnel request is retried with the same audio before it is believed.
 
-## Subtitles
-
-The finished MP4 carries the translated text as a caption track inside the file
-(`mov_text`, language `khm` for Khmer — the target's own code otherwise), never
-painted onto the picture: the frame stays clean, and every cue comes from the
-same timeline as the audio, so the words always stay in sync with what is being
-said. The result panel starts with the
-text hidden — **បង្ហាញអក្សររត់** shows it, **លាក់អក្សររត់** hides it again, and any
-player's own CC button does the same. `subtitles-<id>.srt` and `.vtt` are still
-produced next to the file, for editing or for loading as a separate track.
-
-Painting text onto frames — how jobs were made before this change — needs a
-Khmer font, which the hosts this runs on do not have, so
-`assets/fonts/NotoSansKhmer-*.ttf` travels with the repository, and a missing one
-is downloaded into `data/fonts` once (`SUBTITLE_FONTS_DIR` overrides where it
-looks). New jobs skip drawing entirely: captions are a track, so no font can
-fail a render and no text can cover the picture.
-
-### Turning the subtitles off
-
-Nothing has to be switched off at render time: every job produces a single clean
-MP4 with the captions inside it as a hidden track, and the panel's
-**បង្ហាញអក្សររត់ / លាក់អក្សររត់** button only shows or hides them while watching.
-The one download button hands over that same file — clean picture, translated
-captions included. Jobs made before this change still have their burned-in text
-plus the subtitle-free twin (`khmer-dubbed-clean-<id>.mp4`), and their old links
-keep working.
-
-Set `subtitle: false` in a job's settings to leave the caption track out.
-
-## Voice timing (Sync)
-
-Each line is placed at the timestamp where it was spoken (`adelay`), so every
-entry lands on the mouth it belongs to. A translated line is often longer than
-the source one — Khmer gTTS speech runs longer than the English it replaces — so
-one extra pass keeps the dub from talking over itself:
-
-- **Only overflowing lines are touched.** The sync pass compares each line with
-  the gap to the next spoken line; anything that already fits (or overruns by
-  less than 8%, which lands in the pause) is used exactly as gTTS produced it.
-- **Nothing is cut.** An overflowing line is time-stretched with `atempo` (pitch
-  preserved), capped at `DUB_SYNC_MAX_TEMPO` (1.75× by default), so it ends
-  before the next line starts. A line that even the cap cannot fit plays out as
-  before and `amix`/the render cap handle the rest.
-- The pass costs one short FFmpeg run per overflowing line — not per line — and
-  `DUB_SYNC_ENABLED=false` turns it off. Khmer gTTS speech often runs nearly
-  twice as long as the English it replaces, which is why the default cap is
-  1.75×: below that, dense dialogue still overlaps.
-- It runs as its own row in the studio's checklist (**តម្រឹមសំឡេង និងបញ្ចូលវីដេអូ ·
-  Sync + Final MP4**), so sync is visible while it works instead of hiding
-  inside the voice stage.
-
-The MP4 is still capped at the video's own length, so the file can never end a
-frame early or leave the last frames in silence.
+`AUDIO_SEPARATOR_CHUNK_SECONDS`, `AUDIO_SEPARATOR_MIN_CHUNK_SECONDS`,
+`AUDIO_SEPARATOR_MAX_ATTEMPTS`, `AUDIO_SEPARATOR_RETRY_DELAY_MS` and
+`AUDIO_SEPARATOR_TIMEOUT_MS` override those numbers.
 
 ## Required secrets
 
@@ -186,29 +101,14 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 
 | Name | Required | Notes |
 | --- | --- | --- |
-| `GROQ_API_KEY` | yes | [console.groq.com/keys](https://console.groq.com/keys) — speech-to-text, and the translator for lines Google Translate refuses |
-| `GROQ_API_KEY2`, `GROQ_API_KEY3` | optional | Extra keys; the app rotates to them automatically on 401/429 |
-| `STT_PROVIDER` | optional | `groq` (default) |
-| `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service |
+| `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service (or paste it in the studio panel) |
 | `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
-| `FFMPEG_RENDER_ARGS` | optional | x264 settings for the release MP4 (default `-preset veryfast -crf 21`) |
-| `GOOGLE_TRANSLATE_CONCURRENCY` | optional | Lines translated at once (default 6) |
-| `TTS_CONCURRENCY` | optional | Lines voiced at once (default 3) |
 
-Translation and voice need **no key of their own**: Google Translate and gTTS are
-called keylessly, and the Groq key the ASR step already needs covers any line
-Google refuses. `GOOGLE_TRANSLATE_ENABLED=false` / `GTTS_ENABLED=false` are the
-only switches, and they exist so a deployment can take those stages out on
-purpose.
+Translation, speech-to-text and text-to-speech were removed with the dubbing
+flow: the site no longer transcribes, translates or re-voices anything, so no
+`GROQ_*`, `STT_*`, `TTS_*` or Google key is read anywhere.
 
-The release encode is the slowest step on a free host, which has a fraction of
-one CPU, so its settings are chosen for that: the measurements behind
-`RENDER_ENCODER_ARGS` in `server/utils/ffmpeg.ts` are written next to the
-constant. `-preset ultrafast -crf 24` is roughly 3x faster again but writes a
-much larger file, which is the trade `FFMPEG_RENDER_ARGS` exists to make
-without a code change.
-
-Optional — keep results after a restart. A Space's disk is **ephemeral**, so
+Optional — keep results after a restart. A free host's disk is **ephemeral**, so
 uploads and outputs are lost whenever the container restarts. Point the app at a
 Cloudflare R2 / S3 bucket to persist them:
 
@@ -219,24 +119,19 @@ Cloudflare R2 / S3 bucket to persist them:
 | `S3_ACCESS_KEY_ID` | R2 access key id |
 | `S3_SECRET_ACCESS_KEY` | R2 secret access key |
 
+`MAX_VIDEO_SIZE_MB` (default 500) is the upload ceiling for both video and audio.
+
 ## Hosting notes
 
 - Hugging Face only allows **Static** Spaces on the free plan; Gradio and Docker
   Spaces need a PRO subscription. Deploy this folder elsewhere for free — see
   `render.yaml` for a Render free web service — or self-host it.
 - Free instances sleep after a period of inactivity and wake on the next visit.
-- Translation and voice run on Google's public endpoints, so there is no Colab
-  session to keep alive: the translate stage is always ready. Those endpoints are
-  keyless but shared by IP, so a throttled request (429) is retried on a second
-  host with a short backoff, a few refused requests in a row skip Google for the
-  next 10 minutes, and a line Google still refuses is translated by Groq (the key
-  the ASR step already needs) and, without that, by MyMemory. Only a line every
-  translator refused keeps the original text, and that says so in the job
-  warning. `GOOGLE_TRANSLATE_CONCURRENCY` and `TTS_CONCURRENCY` lower the
-  parallel requests if a host is being throttled.
-- Demucs is still the one service you must run somewhere (see above) and
-  `GROQ_API_KEY` is still required for the ASR step.
-- Video processing is CPU-bound: a ~1 minute video takes roughly 1–3 minutes.
+- Demucs is the one service you must run somewhere (see above). Everything else
+  — reading the audio, encoding the stems, muxing the video twins — runs on this
+  host with the bundled FFmpeg.
+- Separation is CPU/GPU-bound on the *service* side; a minute of audio on a
+  phone takes a minute or two, and seconds on a Colab GPU.
 
 ## Local / self-hosted run
 
@@ -246,5 +141,8 @@ bun run dev      # http://localhost:3000
 # or, production mode:
 bun run build && npm start
 ```
+
+Set `AUDIO_SEPARATOR_URL` (or paste it into the stem panel) before uploading,
+or the studio will refuse the file and say why.
 
 Deploy this folder to a Space with `HF_TOKEN=... sh scripts/deploy-hf.sh`.

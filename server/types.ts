@@ -1,11 +1,9 @@
 /**
- * Every state a run can be in. `detecting_speakers` is no longer reported —
- * speaker naming happens inside the Whisper pass — but it stays in the union
- * because jobs recorded before that change still carry it. `syncing` reports
- * the timing pass: the short per-line time-stretch that pulls a dubbed line back
- * into the slot it was spoken in (`AudioMixingService.fitDialogueToSlots`), so
- * the studio can show sync as a row of its own. It is not the old full-length
- * measuring pass — that was removed and never came back.
+ * Every state a run can be in. The site now separates voices from music and
+ * reports `queued → extracting_audio → separating_audio → mixing → completed`,
+ * but the dubbing-era statuses stay in the union because jobs recorded while
+ * the studio translated video are still stored and still render on screen —
+ * a status a saved job carries must never fall outside this type.
  */
 export type JobStatus =
   | 'queued'
@@ -142,7 +140,21 @@ export interface JobRecord {
   originalFilename: string;
   inputMimeType: string;
   metadata?: VideoMetadata;
-  settings: JobSettings;
+  /** What was uploaded: a video carries a picture, an audio file does not. */
+  inputKind?: 'video' | 'audio';
+  /**
+   * Optional because jobs recorded while the studio dubbed video carry the old
+   * settings block and new separation jobs carry none — the separator never
+   * asks what language to dub into.
+   */
+  settings?: JobSettings;
+  /** The separated voice track: spoken dialogue and singing, without the music. */
+  vocalsFile?: string;
+  /** The separated music track: everything that is not a human voice. */
+  musicFile?: string;
+  /** The same two stems muxed back over the original picture, when a video was uploaded. */
+  vocalsVideoFile?: string;
+  musicVideoFile?: string;
   segments?: DialogueSegment[];
   speakers?: SpeakerInfo[];
   outputFile?: string;
@@ -164,17 +176,6 @@ export interface JobRecord {
 }
 
 export interface SystemConfigStatus {
-  /** `fallbackProvider` is the service that takes over when `provider` fails, and
-   * `fallbackModels` is the model rotation inside it. */
-  translation: {
-    configured: boolean;
-    provider: string;
-    model: string;
-    fallbackModels?: string[];
-    fallbackProvider?: string;
-  };
-  stt: { configured: boolean; provider: string; model: string };
-  tts: { configured: boolean; provider: string; model: string };
   audioSeparation: { configured: boolean; provider: string; model?: string; message?: string };
   storage: {
     configured: boolean;
@@ -185,8 +186,5 @@ export interface SystemConfigStatus {
     message?: string;
   };
   ffmpeg: { configured: boolean; version?: string };
-  /** x264 settings the release MP4 is encoded with (see `RENDER_ENCODER_ARGS`). */
-  rendering?: { encoder: string };
   maxVideoSizeMb: number;
-  videoSegmentSeconds: number;
 }

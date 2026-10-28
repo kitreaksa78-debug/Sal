@@ -1,7 +1,7 @@
 {
-  "name": "AI translate video",
-  "short_name": "AI translate",
-  "description": "AI video translation with natural Khmer dubbing that keeps the original music.",
+  "name": "AI separate voice",
+  "short_name": "Separate voice",
+  "description": "Separate the human voice (speech and singing) from the music in any video or song — free.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

@@ -1278,7 +1278,7 @@ export async function testRemoteSeparation(
  * never disagree about why a video was refused.
  */
 export const DEMUCS_REQUIRED_MESSAGE =
-  'គេហទំព័រនេះត្រូវការ Demucs ជាចាំបាច់ — បើគ្មានម៉ាស៊ីនញែកភ្លេងទេ ការបញ្ចូលសំឡេងខ្មែរមិនដំណើរការទេ ព្រោះសំឡេងដើមនឹងនៅជាប់ក្នុងវីដេអូ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API» ឬកំណត់ AUDIO_SEPARATOR_URL សិន។ (Demucs is required: without stem separation the Khmer dub would play under the original voices, so jobs are refused until a Demucs API is connected.)';
+  'គេហទំព័រនេះត្រូវការ Demucs ជាចាំបាច់ — ការញែកសំឡេងចេញពីភ្លេងប្រើតែម៉ូដែល Demucs ប៉ុណ្ណោះ ដូច្នេះគ្មានម៉ាស៊ីនញែកភ្លេងទេ គេហទំព័រមិនអាចញែកសំឡេងបានទេ។ សូមភ្ជាប់ Demucs API ក្នុងផ្ទាំង «ញែកភ្លេង · Demucs API» ឬកំណត់ AUDIO_SEPARATOR_URL សិន។ (Demucs is required: separating the voice from the music runs on the Demucs model and nothing else, so uploads are refused until a Demucs API is connected or AUDIO_SEPARATOR_URL is set.)';
 
 /**
  * The separation provider the pipeline uses.

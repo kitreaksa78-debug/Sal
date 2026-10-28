@@ -3,8 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
-    <title>បកប្រែវីដេអូជាភាសាខ្មែរ · AI translate video — Khmer AI Dubbing</title>
-    <meta name="description" content="បកប្រែវីដេអូជាភាសាខ្មែរដោយ AI ដោយរក្សាភ្លេងដើម — បញ្ចូលសំឡេងខ្មែរធម្មជាតិ អក្សររត់ និងទាញយក MP4. AI video translation into natural Khmer dubbing that keeps the original music and background audio." />
+    <title>ញែកសំឡេងចេញពីភ្លេង · Separate voice from music — សំឡេងនិយាយ និងច្រៀង</title>
+    <meta name="description" content="ញែកសំឡេងមនុស្សចេញពីភ្លេងដោយ AI — បំបែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីបទភ្លេង ពីវីដេអូ ឬបទចម្រៀង ដោយឥតគិតថ្លៃ។ Separate spoken and sung voice from music in any video or song, free." />
     <!-- The site answers on several hosts; the custom domain is the one Google
          should index, so the aliases point here instead of competing with it. -->
     <link rel="canonical" href="https://aivideotranslate.dev/" />
@@ -12,11 +12,11 @@
          tag keeps the property verified even if DNS ever changes. -->
     <meta name="google-site-verification" content="QcoheQpq51Rz9wtLcPoOE4hpeW5CtGwT5BX5ST6oAZk" />
     <meta name="robots" content="index, follow, max-image-preview:large, max-snippet:-1" />
-    <meta property="og:title" content="បកប្រែវីដេអូជាភាសាខ្មែរ · AI translate video" />
-    <meta property="og:description" content="បកប្រែវីដេអូជាភាសាខ្មែរដោយ AI ដោយរក្សាភ្លេងដើម — សំឡេងខ្មែរធម្មជាតិ អក្សររត់ និងឯកសារទាញយក។" />
+    <meta property="og:title" content="ញែកសំឡេងចេញពីភ្លេង · Separate voice from music" />
+    <meta property="og:description" content="ញែកសំឡេងមនុស្សចេញពីភ្លេងដោយ AI — បំបែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីបទភ្លេង ឬវីដេអូ ដោយឥតគិតថ្លៃ។" />
     <meta property="og:type" content="website" />
     <meta property="og:url" content="https://aivideotranslate.dev/" />
-    <meta property="og:site_name" content="AI translate video" />
+    <meta property="og:site_name" content="AI separate voice" />
     <meta property="og:locale" content="km_KH" />
     <meta property="og:locale:alternate" content="en_US" />
     <link rel="alternate" hreflang="km" href="https://aivideotranslate.dev/" />
@@ -34,11 +34,11 @@
     <link rel="icon" type="image/png" sizes="512x512" href="/icon-512.png" />
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <link rel="manifest" href="/site.webmanifest" />
-    <meta name="apple-mobile-web-app-title" content="AI translate video" />
-    <meta name="application-name" content="AI translate video" />
+    <meta name="apple-mobile-web-app-title" content="AI separate voice" />
+    <meta name="application-name" content="AI separate voice" />
     <meta property="og:image:width" content="512" />
     <meta property="og:image:height" content="512" />
-    <meta property="og:image:alt" content="AI translate video — បកប្រែវីដេអូជាភាសាខ្មែរ" />
+    <meta property="og:image:alt" content="AI separate voice — ញែកសំឡេងចេញពីភ្លេង" />
     <link rel="sitemap" type="application/xml" href="/sitemap.xml" />
 
     <!-- Structured data: tells Google what the site is, that it runs in Khmer,
@@ -51,34 +51,34 @@
             "@type": "WebSite",
             "@id": "https://aivideotranslate.dev/#website",
             "url": "https://aivideotranslate.dev/",
-            "name": "AI translate video",
-            "alternateName": "បកប្រែវីដេអូជាភាសាខ្មែរ",
+            "name": "AI separate voice",
+            "alternateName": "ញែកសំឡេងចេញពីភ្លេង",
             "inLanguage": "km",
-            "description": "បកប្រែវីដេអូជាភាសាខ្មែរដោយ AI ដោយរក្សាភ្លេងដើម។"
+            "description": "ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេងដោយ AI។"
           },
           {
             "@type": "SoftwareApplication",
             "@id": "https://aivideotranslate.dev/#app",
-            "name": "AI translate video",
+            "name": "AI separate voice",
             "url": "https://aivideotranslate.dev/",
             "applicationCategory": "MultimediaApplication",
             "operatingSystem": "Web, Android, iOS",
             "inLanguage": "km",
             "image": "https://aivideotranslate.dev/icon-512.png",
-            "description": "Upload a video and get a Khmer dub: speech is transcribed, translated and re-voiced while the original music and ambience stay in place.",
+            "description": "Upload a video or a song and get two files back: the human voice (speech and singing) and the music it was mixed with, separated by Demucs.",
             "featureList": [
-              "បកប្រែវីដេអូជាភាសាខ្មែរ (video to Khmer dubbing)",
-              "រក្សាភ្លេងដើម (keeps the original music)",
-              "អក្សររត់ខ្មែរ SRT/VTT (Khmer subtitles)",
-              "សំឡេងអ្នកនិយាយប្រុស/ស្រី (male and female voices)",
-              "ទាញយក MP4, WAV, SRT (downloads)"
+              "ញែកសំឡេងនិយាយចេញពីភ្លេង (speech from music)",
+              "ញែកសំឡេងច្រៀងចេញពីភ្លេង (singing from music)",
+              "ទាញយក MP3 និង MP4 (downloads)",
+              "គាំទ្រវីដេអូ និងឯកសារសំឡេង (video and audio files)",
+              "ឥតគិតថ្លៃ និងឥតចុះឈ្មោះ (free, no sign-up)"
             ],
             "offers": {
               "@type": "Offer",
               "name": "Free",
               "price": "0",
               "priceCurrency": "USD",
-              "description": "បកប្រែវីដេអូ និងបញ្ចូលសំឡេងខ្មែរ ដោយឥតគិតថ្លៃ និងឥតត្រូវចុះឈ្មោះ"
+              "description": "ញែកសំឡេងចេញពីភ្លេង ដោយឥតគិតថ្លៃ និងឥតត្រូវចុះឈ្មោះ"
             }
           }
         ]

@@ -18,75 +18,53 @@ interface StepItem {
 /**
  * The pipeline the studio actually runs, in order:
  *
- *   Upload Video → Demucs API → Speech-to-Text → Translate → Dubbed Voice
- *   → Sync + Final MP4
+ *   Upload File → Read the audio → Separate voice from music → Downloads
  *
- * Six rows, one per stage: the Khmer line names what the stage does, the line
+ * Four rows, one per stage: the Khmer line names what the stage does, the line
  * under it names the engine that does it. Each row owns every status the server
  * reports inside that step, which is what keeps the checklist lighting up from
  * top to bottom as the job moves.
  *
- * The last row carries the closing statuses — the sync pass that pulls each
- * dubbed line back into the slot it was spoken in, the mix under the music, the
- * final H.264/AAC render and the quality check — because they are all FFmpeg
- * writing the one deliverable, and sync is the part the owner asked to see.
- * `failed` is deliberately owned by no row: a run that died must not light the
- * whole list up green.
- *
- * The dialogue is translated by Google Translate (the keyless public endpoint the
- * `googletrans` package uses — no model is downloaded); a line that endpoint
- * refuses goes to Groq — whose key the speech-to-text step already needs — and,
- * without that, to a keyless public service, so a blocked Google IP no longer
- * leaves the dub in the source language. The speech-to-text step runs on Groq
- * Whisper and the dub is spoken by gTTS (Google Translate's own text-to-speech);
- * FFmpeg then syncs every line to its timestamp and muxes the result back into
- * the video on the server itself.
+ * Separation is a Demucs model running on the phone or Colab GPU the panel is
+ * pointed at — it is the only thing that can genuinely lift a voice out of a
+ * mix — and FFmpeg does the rest on this server: it reads the audio track out
+ * of whatever was uploaded and encodes the two stems as the MP3s that get
+ * downloaded. `failed` is deliberately owned by no row: a run that died must not
+ * light the whole list up green.
  */
 const PIPELINE_STAGES: StepItem[] = [
   {
     id: 'uploading',
-    khmer: 'អ្នកប្រើបញ្ចូលវីដេអូ',
-    english: 'Upload Video',
+    khmer: 'អ្នកប្រើបញ្ចូលឯកសារ',
+    english: 'Upload File',
     associatedStatuses: ['uploading'],
   },
   {
+    id: 'extracting_audio',
+    khmer: 'អានបន្ទាត់សំឡេងពីឯកសារ',
+    english: 'Extract Audio (FFmpeg)',
+    associatedStatuses: ['extracting_audio'],
+  },
+  {
     id: 'separating_audio',
-    khmer: 'ញែកសំឡេងនិយាយ និងតន្ត្រី',
-    english: 'Demucs API',
-    associatedStatuses: ['extracting_audio', 'separating_audio'],
+    khmer: 'ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេង',
+    english: 'Demucs (voice / music)',
+    associatedStatuses: ['separating_audio'],
   },
   {
-    id: 'transcribing',
-    khmer: 'បម្លែងសំឡេងនិយាយទៅជាអត្ថបទ',
-    english: 'Speech-to-Text (ASR)',
-    associatedStatuses: ['transcribing', 'detecting_speakers'],
-  },
-  {
-    id: 'translating',
-    khmer: 'បកប្រែអត្ថបទទៅភាសាគោលដៅ',
-    english: 'Google Translate (+ Groq fallback)',
-    associatedStatuses: ['translating'],
-  },
-  {
-    id: 'generating_voice',
-    khmer: 'បង្កើតសំឡេងបកប្រែ',
-    english: 'Dubbed Voice (gTTS)',
-    associatedStatuses: ['generating_voice'],
-  },
-  {
-    id: 'syncing',
-    khmer: 'តម្រឹមសំឡេង និងបញ្ចូលវីដេអូ',
-    english: 'Sync + Final MP4 (FFmpeg)',
-    associatedStatuses: ['syncing', 'mixing', 'rendering', 'quality_check'],
+    id: 'mixing',
+    khmer: 'បម្លែង និងរៀបចំឯកសារទាញយក',
+    english: 'Encode MP3 + video twin',
+    associatedStatuses: ['mixing', 'rendering', 'quality_check'],
   },
 ];
 
 /**
- * The one place the studio explains which AI services are behind the checklist,
- * said under the list so it travels with what it describes.
+ * The one place the studio explains which engine is behind the checklist, said
+ * under the list so it travels with what it describes.
  */
 const ENGINE_NOTE =
-  'ការញែកសំឡេងប្រើ Demucs ការស្តាប់ចាប់អក្សរប្រើ ASR (Groq Whisper) ការបកប្រែប្រើ Google Translate (googletrans — គ្មានការ download ម៉ូដែល) ហើយបន្ទាត់ដែល Google បដិសេធ Groq បកប្រែជំនួស សំឡេងបកប្រែបង្កើតដោយ gTTS ហើយ FFmpeg តម្រឹមសំឡេងនិងបញ្ចូលជាឯកសារចុងក្រោយ។ (Voices are split by Demucs, speech is transcribed by ASR (Groq Whisper), translated by Google Translate (googletrans — no model download) with Groq taking over refused lines, spoken by gTTS, then FFmpeg syncs and muxes the final file.)';
+  'ការញែកសំឡេងប្រើម៉ូដែល Demucs ដែលរត់នៅលើ GPU (Colab / ទូរស័ព្ទ) ដែលកាត «ញែកភ្លេង» ភ្ជាប់ទៅ រួច FFmpeg លើម៉ាស៊ីននេះអានបន្ទាត់សំឡេង និងបម្លែងសំឡេងដែលបានញែកទៅជាឯកសារ MP3 គុណភាពខ្ពស់។ (Voices are split by the Demucs model on the GPU the stem panel points at; FFmpeg on this server reads the audio track and encodes the results as high-quality MP3s.)';
 
 export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onRetry }) => {
   const currentStatus = job.status;
@@ -100,7 +78,7 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
   const handleCancel = async () => {
     if (
       !window.confirm(
-        'បោះបង់ការងារនេះ?\n\nវីដេអូដែលកំពុងដំណើរការនឹងឈប់ ហើយមិនទទួលបានលទ្ធផលទេ។'
+        'បោះបង់ការងារនេះ?\n\nឯកសារដែលកំពុងដំណើរការនឹងឈប់ ហើយមិនទទួលបានលទ្ធផលទេ។'
       )
     ) {
       return;
@@ -121,10 +99,13 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
     if (isCompleted) return 'completed';
     if (stage.associatedStatuses.includes(currentStatus)) return 'active';
 
-    const currentStageIndex = PIPELINE_STAGES.findIndex(s => s.associatedStatuses.includes(currentStatus));
+    const currentStageIndex = PIPELINE_STAGES.findIndex(s =>
+      s.associatedStatuses.includes(currentStatus)
+    );
 
-    // Every non-terminal status the server reports is owned by a row, so the
-    // only status left here is `queued`: nothing on screen has started yet.
+    // Every current status the server reports is owned by a row, so the only
+    // status left here is `queued` (nothing has started) or a legacy dubbing
+    // status from a job recorded before this studio separated stems.
     if (currentStageIndex === -1) return 'pending';
 
     const thisStageIndex = PIPELINE_STAGES.indexOf(stage);
@@ -146,14 +127,14 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
             {isFailed && <AlertCircle className="w-3.5 h-3.5 text-rose-400" />}
             <span>
               {isCompleted
-                ? 'ការបញ្ចូលសំឡេងរួចរាល់ (Dubbing Finished)'
+                ? 'ការញែកសំឡេងរួចរាល់ (Separation Finished)'
                 : isFailed
                 ? job.cancelled
                   ? 'បានបោះបង់ (Cancelled)'
                   : 'ការដំណើរការបរាជ័យ (Processing Failed)'
                 : cancelPending
                 ? 'កំពុងបោះបង់... (Cancelling)'
-                : 'ដំណើរការបកប្រែ និងបញ្ចូលសំឡេងខ្មែរ (Active Dubbing)'}
+                : 'កំពុងញែកសំឡេង (Separating Voice from Music)'}
             </span>
           </div>
 
@@ -231,16 +212,17 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
               >
                 {job.cancelled
                   ? 'បានបោះបង់ការងារនេះរួច (Job Cancelled)'
-                  : job.error || 'មានបញ្ហាក្នុងការដំណើរការសំឡេង'}
+                  : job.error || 'មានបញ្ហាក្នុងការញែកសំឡេង'}
               </div>
               {!job.cancelled && (
                 <p className="mt-1 text-slate-300">
-                  មិនអាចដំណើរការសំឡេងក្នុងវីដេអូនេះបានទេ។ សូមសាកល្បងវីដេអូមួយផ្សេងទៀត ឬពិនិត្យការកំណត់សេវាកម្ម AI។
+                  សូមពិនិត្យការតភ្ជាប់ទៅម៉ាស៊ីនញែកភ្លេង (Demucs API) ក្នុងផ្ទាំង «ញែកភ្លេង»
+                  រួចសាកល្បងម្តងទៀត។
                 </p>
               )}
               {job.cancelled && (
                 <p className="mt-1 text-slate-400">
-                  ឯកសារផ្ទៃខាងក្រោយត្រូវបានសម្អាត។ សូមបញ្ចូលវីដេអូឡើងវិញ ដើម្បីចាប់ផ្តើមថ្មី។
+                  ឯកសារផ្ទៃខាងក្រោយត្រូវបានសម្អាត។ សូមបញ្ចូលឯកសារឡើងវិញ ដើម្បីចាប់ផ្តើមថ្មី។
                 </p>
               )}
             </div>
@@ -257,7 +239,7 @@ export const ProcessingProgress: React.FC<ProcessingProgressProps> = ({ job, onR
               }`}
             >
               <RefreshCw className="w-3.5 h-3.5" />
-              <span>{job.cancelled ? 'បញ្ចូលវីដេអូថ្មី (New Video)' : 'សាកល្បងម្តងទៀត (Try Again)'}</span>
+              <span>{job.cancelled ? 'បញ្ចូលឯកសារថ្មី (New File)' : 'សាកល្បងម្តងទៀត (Try Again)'}</span>
             </button>
           )}
         </div>

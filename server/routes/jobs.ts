@@ -4,22 +4,23 @@ import path from 'path';
 import fs from 'fs';
 import { getDatabase } from '../services/db.js';
 import { getStorage, resolveStoredArtifact } from '../services/storage.js';
-import { JobProcessor, jobEvents, KHMER_CANCELLED_MESSAGE } from '../services/jobProcessor.js';
+import {
+  SeparationProcessor,
+  jobEvents,
+  KHMER_CANCELLED_MESSAGE,
+} from '../services/separationJob.js';
 import {
   getAudioSeparationProvider,
   DEMUCS_REQUIRED_MESSAGE,
 } from '../services/audioSeparation.js';
-import {
-  DEFAULT_TARGET_LANGUAGE,
-  JobRecord,
-  JobSettings,
-  SOURCE_LANGUAGES,
-  TARGET_LANGUAGES,
-} from '../types.js';
+import { JobRecord } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 
 const router = express.Router();
+
+/** The queued line, kept next to the record that carries it. */
+const KHMER_QUEUED_MESSAGE = 'កំពុងស្ថិតក្នុងជួររង់ចាំ...';
 
 const maxVideoSizeMb = parseInt(process.env.MAX_VIDEO_SIZE_MB || '500', 10);
 const maxBytes = maxVideoSizeMb * 1024 * 1024;
@@ -41,43 +42,57 @@ const storageEngine = multer.diskStorage({
   },
 });
 
+/**
+ * What the studio accepts: a video to pull the voices out of, or an audio file
+ * to pull the singing (or the speech) out of. Both reach the same separator —
+ * the only difference is whether the result is also written back over the
+ * original picture.
+ */
+const VIDEO_EXTENSIONS = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v'];
+const AUDIO_EXTENSIONS = ['.mp3', '.wav', '.m4a', '.aac', '.ogg', '.opus', '.flac'];
+
 const upload = multer({
   storage: storageEngine,
   limits: { fileSize: maxBytes },
   fileFilter: (req, file, cb) => {
-    const allowedExtensions = ['.mp4', '.mov', '.webm', '.mkv', '.avi', '.m4v'];
     const ext = path.extname(file.originalname).toLowerCase();
-    const allowedMime = [
-      'video/mp4',
-      'video/quicktime',
-      'video/webm',
-      'video/x-matroska',
-      'video/avi',
-      'video/x-msvideo',
-    ];
+    const isVideo = VIDEO_EXTENSIONS.includes(ext) || file.mimetype.startsWith('video/');
+    const isAudio = AUDIO_EXTENSIONS.includes(ext) || file.mimetype.startsWith('audio/');
 
-    if (allowedExtensions.includes(ext) || allowedMime.includes(file.mimetype)) {
+    if (isVideo || isAudio) {
       cb(null, true);
     } else {
-      cb(new Error(`ទម្រង់វីដេអូមិនត្រូវបានគាំទ្រទេ។ សូមបញ្ចូលឯកសារ MP4, MOV ឬ WEBM។ (Unsupported format: ${ext})`));
+      cb(
+        new Error(
+          `ទម្រង់ឯកសារមិនត្រូវបានគាំទ្រទេ។ សូមបញ្ចូលវីដេអូ (MP4, MOV, WEBM) ឬឯកសារសំឡេង (MP3, WAV, M4A)។ (Unsupported format: ${ext})`
+        )
+      );
     }
   },
 });
 
+/** True when the upload is a bare audio file rather than a video with sound. */
+function isAudioUpload(file: Express.Multer.File): boolean {
+  const ext = path.extname(file.originalname).toLowerCase();
+  if (AUDIO_EXTENSIONS.includes(ext)) return true;
+  return file.mimetype.startsWith('audio/') && !file.mimetype.startsWith('video/');
+}
+
 /**
  * POST /api/jobs
- * Upload video and start asynchronous processing
+ * Upload a video or an audio file and start the separation.
  */
 router.post('/', upload.single('video'), async (req: Request, res: Response) => {
   try {
     if (!req.file) {
-      return res.status(400).json({ error: 'សូមជ្រើសរើសវីដេអូដើម្បីបញ្ចូល។ (No video file provided)' });
+      return res
+        .status(400)
+        .json({ error: 'សូមជ្រើសរើសវីដេអូ ឬឯកសារសំឡេងដើម្បីបញ្ចូល។ (No file provided)' });
     }
 
-    // Demucs is part of the product, not an optional extra: the pipeline removes
-    // the original voices with it, so without a stem service there is nothing to
-    // translate that would not be heard over the source dialogue. The video is
-    // refused before it is stored, so no half-made job is left in the history.
+    // Separation *is* the product: with no Demucs service connected there is
+    // nothing to sell, so the upload is refused before the file is stored
+    // instead of failing minutes later with an empty result.
     if (!getAudioSeparationProvider().isConfigured()) {
       try {
         fs.unlinkSync(req.file.path);
@@ -85,43 +100,9 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       return res.status(400).json({ error: DEMUCS_REQUIRED_MESSAGE });
     }
 
-    const jobId = `kd_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    const jobId = `sep_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
     const storage = getStorage();
     const db = getDatabase();
-
-    // Parse settings
-    let settings: JobSettings = {
-      voice: 'auto',
-      voiceStyle: 'natural',
-      backgroundMusic: 'keep',
-      subtitle: true,
-      outputQuality: 'original',
-      translationStyle: 'natural',
-      sourceLanguage: 'auto',
-      targetLanguage: DEFAULT_TARGET_LANGUAGE,
-    };
-
-    if (req.body.settings) {
-      try {
-        const parsed = typeof req.body.settings === 'string' ? JSON.parse(req.body.settings) : req.body.settings;
-        settings = { ...settings, ...parsed };
-      } catch (e) {
-        logger.warn('Failed to parse custom settings string, using defaults');
-      }
-    }
-
-    // Only allow languages the studio offers; anything else falls back to auto-detect.
-    if (settings.sourceLanguage && !SOURCE_LANGUAGES.includes(settings.sourceLanguage)) {
-      logger.warn(`Unknown source language "${settings.sourceLanguage}" — using auto-detect.`);
-      settings.sourceLanguage = 'auto';
-    }
-
-    // Same for the target: the studio's list is the only source of truth, and an
-    // unknown value dubs into Khmer (what the pipeline always did).
-    if (settings.targetLanguage && !TARGET_LANGUAGES.includes(settings.targetLanguage)) {
-      logger.warn(`Unknown target language "${settings.targetLanguage}" — using Khmer.`);
-      settings.targetLanguage = DEFAULT_TARGET_LANGUAGE;
-    }
 
     // Save uploaded file into storage uploads directory
     const savedFilename = `input_${jobId}${path.extname(req.file.originalname)}`;
@@ -129,10 +110,13 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
 
     // Clean temp multer file if different
     if (req.file.path !== savedInputPath && fs.existsSync(req.file.path)) {
-      try { fs.unlinkSync(req.file.path); } catch {}
+      try {
+        fs.unlinkSync(req.file.path);
+      } catch {}
     }
 
-    // Probe initial metadata
+    // Probe initial metadata (duration, size, codecs) — the same numbers the
+    // result screen shows after the run.
     const meta = await FFmpegHelper.probeVideo(savedInputPath);
 
     const newJob: JobRecord = {
@@ -140,12 +124,12 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       status: 'queued',
       progress: 5,
       message: 'Job queued...',
-      khmerMessage: 'កំពុងស្ថិតក្នុងជួររង់ចាំ...',
+      khmerMessage: KHMER_QUEUED_MESSAGE,
       inputFile: savedInputPath,
       originalFilename: req.file.originalname,
       inputMimeType: req.file.mimetype,
+      inputKind: isAudioUpload(req.file) ? 'audio' : 'video',
       metadata: meta,
-      settings,
       createdAt: new Date().toISOString(),
     };
 
@@ -153,7 +137,7 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
 
     // Trigger asynchronous processing pipeline
     setImmediate(() => {
-      JobProcessor.processJob(jobId).catch((err) => {
+      SeparationProcessor.processJob(jobId).catch((err) => {
         logger.error(`Error processing job ${jobId}:`, err);
       });
     });
@@ -161,13 +145,13 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
     return res.status(201).json({
       jobId,
       status: 'queued',
-      message: 'វីដេអូបានបញ្ចូលដោយជោគជ័យ និងកំពុងចាប់ផ្តើមដំណើរការ...',
+      message: 'ឯកសារបានបញ្ចូលដោយជោគជ័យ និងកំពុងចាប់ផ្តើមការញែកសំឡេង...',
       job: newJob,
     });
   } catch (err: any) {
     logger.error('Failed to create job:', err);
     return res.status(500).json({
-      error: 'មានបញ្ហាក្នុងការបញ្ចូលវីដេអូ។ សូមសាកល្បងម្តងទៀត។',
+      error: 'មានបញ្ហាក្នុងការបញ្ចូលឯកសារ។ សូមសាកល្បងម្តងទៀត។',
       details: err?.message,
     });
   }
@@ -228,12 +212,14 @@ router.get('/:id/events', async (req: Request, res: Response) => {
 });
 
 /**
- * GET /api/jobs/:id/download
- * Download final dubbed MP4 file
+ * GET /api/jobs/:id/download?stem=vocals|music&format=mp3|mp4[&inline=1]
  *
- * `?variant=clean` serves the subtitle-free twin instead, which is what the
- * player's subtitles on/off switch plays. `?inline=1` asks for playback
- * headers so the browser shows the video rather than saving it.
+ * One route for every deliverable: the separated voice (spoken dialogue and
+ * singing) or the music it was lifted out of, as an MP3 — or, for an upload that
+ * had a picture, that same stem played over the original video.
+ *
+ * Byte ranges are honoured so the browser can seek inside the video preview
+ * instead of downloading the whole file before the first frame appears.
  */
 router.get('/:id/download', async (req: Request, res: Response) => {
   try {
@@ -243,31 +229,51 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     if (!job) {
       return res.status(404).send('Job not found');
     }
+    if (job.status !== 'completed') {
+      return res
+        .status(400)
+        .send('ការញែកសំឡេងមិនទាន់រួចរាល់ទេ។ (Separation not finished)');
+    }
 
-    const wantsClean = (req.query.variant as string || '').toLowerCase() === 'clean';
+    const stem = req.query.stem === 'music' ? 'music' : 'vocals';
+    const wantVideo = String(req.query.format || '').toLowerCase() === 'mp4';
+
+    const stored = wantVideo
+      ? stem === 'music'
+        ? job.musicVideoFile
+        : job.vocalsVideoFile
+      : stem === 'music'
+      ? job.musicFile
+      : job.vocalsFile;
 
     // A restart wipes the local disk, so the file usually has to come back from
     // object storage before it can be streamed.
-    const videoFile = await resolveStoredArtifact(
-      wantsClean ? job.outputFileClean || job.outputFile : job.outputFile
-    );
-    if (job.status !== 'completed' || !videoFile) {
-      return res.status(400).send('វីដេអូបកប្រែមិនទាន់រួចរាល់ ឬមានបញ្ហា។ (Output video not ready)');
+    const file = await resolveStoredArtifact(stored);
+    if (!file) {
+      return res
+        .status(404)
+        .send('ឯកសារនេះមិនអាចរកឃើញទេ។ (That stem is not available for this job.)');
     }
 
-    const disposition =
-      (req.query.inline as string || '') === '1'
-        ? 'inline'
-        : 'attachment';
-    const safeFilename = wantsClean
-      ? `khmer-dubbed-nosubtitles-${job.id}.mp4`
-      : `khmer-dubbed-${job.id}.mp4`;
-    res.setHeader('Content-Type', 'video/mp4');
-    res.setHeader('Content-Disposition', `${disposition}; filename="${safeFilename}"`);
+    const size = fs.statSync(file).size;
+    const ext = path.extname(file).toLowerCase();
+    const contentType =
+      ext === '.mp4'
+        ? 'video/mp4'
+        : ext === '.wav'
+        ? 'audio/wav'
+        : ext === '.mp3'
+        ? 'audio/mpeg'
+        : 'application/octet-stream';
 
-    // Byte ranges let the player seek instead of waiting for the whole file,
-    // and switching the subtitles off loads only what it needs.
-    const size = fs.statSync(videoFile).size;
+    const disposition = String(req.query.inline || '') === '1' ? 'inline' : 'attachment';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader(
+      'Content-Disposition',
+      `${disposition}; filename="${stem}-${job.id}${ext}"`
+    );
+    res.setHeader('Accept-Ranges', 'bytes');
+
     const range = req.headers.range;
     const match = range ? /^bytes=(\d*)-(\d*)$/.exec(range.trim()) : null;
     if (match) {
@@ -287,73 +293,17 @@ router.get('/:id/download', async (req: Request, res: Response) => {
       end = Math.min(end, size - 1);
       res.status(206);
       res.setHeader('Content-Range', `bytes ${start}-${end}/${size}`);
-      res.setHeader('Accept-Ranges', 'bytes');
       res.setHeader('Content-Length', String(end - start + 1));
       if (req.method === 'HEAD') return res.end();
-      return fs.createReadStream(videoFile, { start, end }).pipe(res);
+      return fs.createReadStream(file, { start, end }).pipe(res);
     }
 
-    res.setHeader('Accept-Ranges', 'bytes');
     res.setHeader('Content-Length', String(size));
     if (req.method === 'HEAD') return res.end();
-    const fileStream = fs.createReadStream(videoFile);
-    fileStream.pipe(res);
+    fs.createReadStream(file).pipe(res);
   } catch (err: any) {
     logger.error('Download error:', err);
     res.status(500).send('Download failed');
-  }
-});
-
-/**
- * GET /api/jobs/:id/subtitles
- * Download or stream subtitles (SRT or VTT)
- */
-router.get('/:id/subtitles', async (req: Request, res: Response) => {
-  try {
-    const db = getDatabase();
-    const job = await db.getJob(req.params.id);
-    if (!job) {
-      return res.status(404).send('Job not found');
-    }
-
-    const format = (req.query.format as string || 'vtt').toLowerCase();
-    const storedSubFile = format === 'srt' ? job.outputSubtitlesSrt : job.outputSubtitlesVtt;
-    const subFile = await resolveStoredArtifact(storedSubFile);
-
-    if (!subFile) {
-      return res.status(404).send('Subtitles not ready');
-    }
-
-    const mimeType = format === 'srt' ? 'application/x-subrip' : 'text/vtt; charset=utf-8';
-    res.setHeader('Content-Type', mimeType);
-    res.setHeader('Content-Disposition', `inline; filename="khmer-subtitles-${job.id}.${format}"`);
-    fs.createReadStream(subFile).pipe(res);
-  } catch (e) {
-    res.status(500).send('Failed to read subtitles');
-  }
-});
-
-/**
- * GET /api/jobs/:id/audio
- * Download mixed dubbed audio
- */
-router.get('/:id/audio', async (req: Request, res: Response) => {
-  try {
-    const db = getDatabase();
-    const job = await db.getJob(req.params.id);
-    if (!job) {
-      return res.status(404).send('Job not found');
-    }
-    const audioFile = await resolveStoredArtifact(job.outputAudioFile);
-    if (!audioFile) {
-      return res.status(404).send('Audio not ready');
-    }
-
-    res.setHeader('Content-Type', 'audio/wav');
-    res.setHeader('Content-Disposition', `attachment; filename="khmer-audio-${job.id}.wav"`);
-    fs.createReadStream(audioFile).pipe(res);
-  } catch (e) {
-    res.status(500).send('Failed to download audio');
   }
 });
 
@@ -367,10 +317,8 @@ function isBusy(job: JobRecord): boolean {
  * Stop a run that is still processing.
  *
  * The flag lives in the database because the pipeline checks it at every step
- * boundary — a job may be running in another process after a deploy, and an
- * in-memory flag would not reach it. A job nobody is running (queued before the
- * server restarted, for example) is finished right here so the button never
- * appears to do nothing.
+ * boundary. A job nobody is running (queued before the server restarted, for
+ * example) is finished right here so the button never appears to do nothing.
  */
 router.post('/:id/cancel', async (req: Request, res: Response) => {
   try {
@@ -387,8 +335,8 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
     jobEvents.emit(`job:${job.id}`, flagged);
 
     // Nothing is running this job in any process: mark it cancelled now instead
-    // of leaving a forever-spinning entry in the history.
-    if (!JobProcessor.isActive(job.id)) {
+    // of leaving a forever-spinning entry.
+    if (!SeparationProcessor.isActive(job.id)) {
       const cancelled = await db.updateJob(job.id, {
         status: 'failed',
         progress: 100,
