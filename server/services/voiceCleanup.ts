@@ -45,6 +45,18 @@ const MAX_REMOVED_SHARE = 0.6;
 /** The cut expression is one FFmpeg argument; keep it a sane length. */
 const MAX_CUT_SPANS = 64;
 
+/**
+ * How many parts of one recording are sent to Gemini at the same time.
+ *
+ * Each part is its own request — upload the audio, let the model listen, read
+ * its JSON answer — and the parts do not depend on one another, so answering
+ * them one after another was pure waiting: a five-part take waited for five
+ * answers in a row. The number stays modest because a free key has a
+ * per-minute limit and the pool needs room to rotate keys instead of tripping
+ * it.
+ */
+const CONCURRENCY = Math.max(1, Number(process.env.GEMINI_CLEANUP_CONCURRENCY || 3));
+
 /** The jobs this process is cleaning right now. */
 const activeJobs = new Set<string>();
 
@@ -308,12 +320,23 @@ export class CleanupProcessor {
       let servedKey = '';
       let failedChunks = 0;
 
+      // The parts this run will analyse, in order; a tail shorter than a blink
+      // is not worth a request.
+      const parts: { index: number; start: number; length: number }[] = [];
       for (let index = 0; index < chunkCount; index++) {
-        await checkpoint();
-
         const start = index * chunkSeconds;
         const length = Math.min(chunkSeconds, duration - start);
         if (length <= 0.2) break;
+        parts.push({ index, start, length });
+      }
+
+      let completedParts = 0;
+      let nextPart = 0;
+
+      /** Cut one part out, ask Gemini what is noise in it, and record the spans. */
+      const analysePart = async (part: { index: number; start: number; length: number }) => {
+        const { index, start, length } = part;
+        await checkpoint();
 
         const chunkPath = path.join(workDir, `chunk_${index}.mp3`);
         // Mono 16 kHz is plenty for the model to hear what is noise: it keeps a
@@ -364,13 +387,31 @@ export class CleanupProcessor {
           }
         }
 
-        const pct = 20 + Math.round(((index + 1) / chunkCount) * 35);
+        completedParts++;
+        const pct = 20 + Math.round((completedParts / parts.length) * 35);
         await update({
           progress: Math.min(55, pct),
-          message: `Listening with Gemini... ${index + 1}/${chunkCount}`,
-          khmerMessage: KHMER_MESSAGES.analysing,
+          message: `Listening with Gemini... ${completedParts}/${parts.length}`,
+          khmerMessage:
+            parts.length > 1
+              ? `${KHMER_MESSAGES.analysing.replace('...', '')} — កំណាត់ ${completedParts}/${parts.length}`
+              : KHMER_MESSAGES.analysing,
         });
-      }
+      };
+
+      // A small pool of workers pulls the parts off one shared cursor, so no part
+      // is sent twice and the slowest answer is not the one that decides when the
+      // next request starts.
+      const workerCount = Math.max(1, Math.min(CONCURRENCY, parts.length || 1));
+      await Promise.all(
+        Array.from({ length: workerCount }, async () => {
+          for (;;) {
+            const part = parts[nextPart++];
+            if (!part) return;
+            await analysePart(part);
+          }
+        })
+      );
 
       if (analysed === 0) {
         throw new Error(
