@@ -122,11 +122,18 @@ function readLines(
   offset: number,
   partIndex: number
 ): DialogueSegment[] {
+  // Models answer the requested shape most of the time, but a bare array of
+  // lines is just as common — and reading only `lines`/`segments` threw that
+  // perfectly good answer away, which is how a job ended with "no words found".
   const raw = (value ?? {}) as any;
-  const list = Array.isArray(raw.lines)
+  const list: any[] = Array.isArray(value)
+    ? value
+    : Array.isArray(raw.lines)
     ? raw.lines
     : Array.isArray(raw.segments)
     ? raw.segments
+    : Array.isArray(raw.lyrics)
+    ? raw.lyrics
     : [];
 
   const looksLikeMs = list.some((item: any) => {
