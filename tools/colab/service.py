@@ -14,6 +14,8 @@ Auth: set `SERVICE_KEY`, then send it as `Authorization: Bearer …`,
 a private Colab session, never on a public tunnel.
 """
 
+from __future__ import annotations
+
 import os
 import shlex
 import shutil
@@ -112,6 +114,109 @@ def _device() -> str:
         return "unknown"
 
 
+def _log(message: str) -> None:
+    print(f"[studio] {message}", flush=True)
+
+
+# Models kept between requests, and whether the in-process path may be used.
+# The command line loads torch and the weights again for every request — about
+# ten seconds before any audio is touched — and a song arrives as several
+# pieces, so that cost used to be paid once per piece.
+_MODELS: dict[str, object] = {}
+_INPROCESS = (os.environ.get("DEMUCS_INPROCESS") or "1").strip().lower() not in (
+    "0",
+    "false",
+    "no",
+    "off",
+)
+
+
+def _demucs_inprocess(wav: Path, model_name: str, out: Path) -> tuple[Path, Path] | None:
+    """Separate with the model already in memory, or None to use the command line.
+
+    Anything that goes wrong returns None, which makes the caller run Demucs the
+    way it always has; the two paths produce the same two WAV stems.
+    """
+    if not _INPROCESS:
+        return None
+    try:
+        import torch
+        from demucs.apply import apply_model
+        from demucs.audio import AudioFile, save_audio
+        from demucs.pretrained import get_model
+    except Exception as err:  # torch or demucs not importable here
+        _log(f"in-process Demucs unavailable ({err}); using the command line")
+        return None
+
+    try:
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        model = _MODELS.get(model_name)
+        if model is None:
+            _log(f"loading {model_name} into memory (first piece only)")
+            model = get_model(model_name)
+            model.eval()
+            _MODELS[model_name] = model
+        model = model.to(device)
+
+        # The same normalisation the Demucs CLI applies: separate the audio at
+        # zero mean / unit variance, then put the original scale back.
+        audio = AudioFile(str(wav)).read(
+            streams=0, samplerate=model.samplerate, channels=model.audio_channels
+        )
+        reference = audio.mean(0)
+        mix = (audio - reference.mean()) / (reference.std() + 1e-8)
+
+        with torch.no_grad():
+            sources = apply_model(
+                model,
+                mix[None],
+                device=device,
+                shifts=1,
+                split=True,
+                overlap=0.25,
+                progress=False,
+            )[0]
+        sources = sources * reference.std() + reference.mean()
+
+        names = list(model.sources)
+        vocals = sources[names.index("vocals")]
+        accompaniment = sum(source for name, source in zip(names, sources) if name != "vocals")
+
+        vocals_path = out / "vocals.wav"
+        other_path = out / "no_vocals.wav"
+        save_audio(vocals, str(vocals_path), model.samplerate)
+        save_audio(accompaniment, str(other_path), model.samplerate)
+        return vocals_path, other_path
+    except Exception as err:
+        _log(f"in-process separation failed ({err}); using the command line")
+        return None
+
+
+def _separate_demucs(wav: Path, model_name: str, tmp: Path) -> tuple[Path, Path]:
+    """The two stems of one file: in memory when possible, otherwise the CLI."""
+    stems = tmp / "stems"
+    stems.mkdir(parents=True, exist_ok=True)
+    fast = _demucs_inprocess(wav, model_name, stems)
+    if fast is not None:
+        return fast
+
+    out = tmp / "out"
+    _run(
+        shlex.split(DEMUCS_CMD)
+        + ["--two-stems", "vocals", "-n", model_name, "-o", str(out), str(wav)]
+    )
+    vocals = next(iter(sorted(out.rglob("vocals.*"))), None)
+    instrumental = next(iter(sorted(out.rglob("no_vocals.*"))), None)
+    if vocals is None or instrumental is None:
+        raise HTTPException(status_code=502, detail="Demucs returned no stems")
+    return vocals, instrumental
+
+
+def _to_flac(source: Path, target: Path) -> None:
+    """Ship stems as FLAC: lossless, and about half the bytes of 16-bit WAV."""
+    _run(["ffmpeg", "-y", "-v", "error", "-i", str(source), "-c:a", "flac", str(target)])
+
+
 def _public_url(request: Request, job: str, name: str) -> str:
     base = str(request.base_url).rstrip("/")
     return f"{base}/files/{job}/{name}"
@@ -133,6 +238,8 @@ def health():
         "device": _device(),
         "model": DEMUCS_MODEL,
         "enhance_models": ENHANCE_MODELS,
+        "inprocess": _INPROCESS,
+        "loaded": list(_MODELS),
         "busy": False,
     }
 
@@ -174,33 +281,23 @@ async def separate(request: Request):
         )
 
         model = str(form.get("model") or DEMUCS_MODEL).strip() or DEMUCS_MODEL
-        out = tmp / "out"
-        _run(
-            shlex.split(DEMUCS_CMD)
-            + ["--two-stems", "vocals", "-n", model, "-o", str(out), str(wav)]
-        )
+        vocals, instrumental = _separate_demucs(wav, model, tmp)
 
-        vocals = next(iter(sorted(out.rglob("vocals.*"))), None)
-        instrumental = next(iter(sorted(out.rglob("no_vocals.*"))), None)
-        if vocals is None or instrumental is None:
-            raise HTTPException(status_code=502, detail="Demucs returned no stems")
-
-        shutil.copyfile(vocals, work / f"vocals{vocals.suffix}")
-        shutil.copyfile(instrumental, work / f"no_vocals{instrumental.suffix}")
+        # FLAC, not WAV: the stems travel back over the same tunnel the audio came
+        # in on, so half the bytes is half the download for every piece.
+        _to_flac(vocals, work / "vocals.flac")
+        _to_flac(instrumental, work / "no_vocals.flac")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
     return {
         "status": "ok",
         "model": model,
-        "vocals": _public_url(request, job, f"vocals{vocals.suffix}"),
-        "instrumental": _public_url(request, job, f"no_vocals{instrumental.suffix}"),
+        "vocals": _public_url(request, job, "vocals.flac"),
+        "instrumental": _public_url(request, job, "no_vocals.flac"),
         "stems": [
-            {"name": "vocals", "url": _public_url(request, job, f"vocals{vocals.suffix}")},
-            {
-                "name": "instrumental",
-                "url": _public_url(request, job, f"no_vocals{instrumental.suffix}"),
-            },
+            {"name": "vocals", "url": _public_url(request, job, "vocals.flac")},
+            {"name": "instrumental", "url": _public_url(request, job, "no_vocals.flac")},
         ],
     }
 
@@ -250,4 +347,5 @@ def download(job: str, name: str):
     path = FILES / job / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    return FileResponse(path, media_type="audio/wav")
+    media_type = "audio/flac" if path.suffix.lower() == ".flac" else "audio/wav"
+    return FileResponse(path, media_type=media_type)

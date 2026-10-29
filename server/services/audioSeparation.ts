@@ -69,7 +69,7 @@ const GROW_STEP_SECONDS = 2;
  * boundaries in the joined stems. The cap stays under the tunnel's cutoff so the
  * bigger piece is never the reason a request is cut.
  */
-const GPU_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_GPU_CHUNK_SECONDS || '90');
+const GPU_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_GPU_CHUNK_SECONDS || '120');
 /** Devices that mean the model is not being run on a CPU. */
 const ACCELERATOR_DEVICES = /^(cuda|mps|metal|gpu|xpu|rocm|directml)/i;
 
@@ -216,6 +216,20 @@ export interface SeparationResult {
 }
 
 /**
+ * How far a separation has got, for the progress bar on the job.
+ *
+ * A song is sent as several pieces and each one is a full round trip, so the
+ * job used to sit at 35% until the very last piece came back — which reads as a
+ * frozen run. The provider reports after every piece instead, so the bar moves
+ * and the studio can say which piece is being separated.
+ */
+export interface SeparationProgress {
+  /** Pieces finished so far, and how many this run will send. */
+  done: number;
+  total: number;
+}
+
+/**
  * Splitting the voices out of a video. Real model separation is the Demucs
  * service and nothing else — there is no substitute that removes the original
  * voices, so a run without Demucs would lay Khmer over the untouched mix and
@@ -227,7 +241,27 @@ export interface SeparationResult {
 export interface AudioSeparationProvider {
   name: string;
   isConfigured(): boolean;
-  separate(inputWavPath: string, outputDir: string): Promise<SeparationResult>;
+  separate(
+    inputWavPath: string,
+    outputDir: string,
+    onProgress?: (progress: SeparationProgress) => void
+  ): Promise<SeparationResult>;
+}
+
+/** Audio containers a stem service may hand back, under whatever name. */
+const STEM_EXTENSIONS = new Set(['wav', 'flac', 'mp3', 'ogg', 'opus', 'm4a', 'aiff', 'aif']);
+
+/**
+ * A local file for one stem that keeps the format the service sent it in.
+ *
+ * A service may answer with FLAC (half the bytes of WAV for the same audio), and
+ * the file's own extension has to agree with what is inside it: FFmpeg's concat
+ * demuxer picks its decoder from the extension when the pieces are joined.
+ */
+function stemLocalPath(dir: string, name: 'vocals' | 'no_vocals', location: string): string {
+  const match = /\.([a-z0-9]{2,5})(?:[?#]|$)/i.exec(location);
+  const ext = match && STEM_EXTENSIONS.has(match[1].toLowerCase()) ? match[1].toLowerCase() : 'wav';
+  return path.join(dir, `${name}.${ext}`);
 }
 
 // --------------------------------------------------------------- remote stems
@@ -461,7 +495,11 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     return this.name === 'demucs_api' ? '' : 'UVR-MDX-NET-Inst_HQ_3';
   }
 
-  async separate(inputWavPath: string, outputDir: string): Promise<SeparationResult> {
+  async separate(
+    inputWavPath: string,
+    outputDir: string,
+    onProgress?: (progress: SeparationProgress) => void
+  ): Promise<SeparationResult> {
     const vocalsPath = path.join(outputDir, 'vocals.wav');
     const noVocalsPath = path.join(outputDir, 'no_vocals.wav');
     const connection = getSeparatorConnection();
@@ -491,6 +529,10 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       const instrumentalPieces: string[] = [];
       let model = '';
 
+      // Sampled before the first piece, so the bar leaves 35% straight away
+      // instead of waiting for the first answer to make it move.
+      onProgress?.({ done: 0, total: pieces.length });
+
       for (let i = 0; i < pieces.length; i++) {
         const label = `p${String(i + 1).padStart(4, '0')}`;
         const piece = await this.separatePiece(
@@ -512,6 +554,8 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
             `Stem piece ${i + 1}/${pieces.length} done (from ${pieces[i].start.toFixed(1)}s, ${pieces[i].length.toFixed(1)}s long).`
           );
         }
+
+        onProgress?.({ done: i + 1, total: pieces.length });
       }
 
       await this.joinPieces(vocalsPieces, vocalsPath);
@@ -645,7 +689,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     const dir = path.join(workDir, label);
     fs.mkdirSync(dir, { recursive: true });
 
-    const input = piece.length > 0 ? path.join(dir, 'piece.wav') : source;
+    const input = piece.length > 0 ? path.join(dir, 'piece.flac') : source;
     if (piece.length > 0) await this.cutPiece(source, piece, input);
 
     const budgetMs = this.requestTimeoutMs(base);
@@ -782,11 +826,11 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     targetDir: string
   ): Promise<{ vocalsPath: string; noVocalsPath: string; model?: string }> {
     fs.mkdirSync(targetDir, { recursive: true });
-    const vocalsPath = path.join(targetDir, 'vocals.wav');
-    const noVocalsPath = path.join(targetDir, 'no_vocals.wav');
     const timeoutMs = this.requestTimeoutMs(base);
 
     const stems = await this.requestStems(inputWavPath, base, apiKey, configuredPath, timeoutMs);
+    const vocalsPath = stemLocalPath(targetDir, 'vocals', stems.vocals.value);
+    const noVocalsPath = stemLocalPath(targetDir, 'no_vocals', stems.instrumental.value);
     await this.writeStem(base, stems.vocals, vocalsPath, apiKey, timeoutMs);
     await this.writeStem(base, stems.instrumental, noVocalsPath, apiKey, timeoutMs);
 
@@ -799,6 +843,8 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     piece: { start: number; length: number },
     target: string
   ): Promise<void> {
+    // FLAC rather than WAV: lossless, so the separation sees exactly what it
+    // would have seen, but about half the bytes to upload for every piece.
     await FFmpegHelper.execute([
       '-y',
       '-v',
@@ -810,7 +856,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       '-t',
       String(piece.length),
       '-acodec',
-      'pcm_s16le',
+      'flac',
       '-ar',
       '44100',
       '-ac',
@@ -824,7 +870,29 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
     if (parts.length === 0) throw new Error('no separated pieces to join');
 
     if (parts.length === 1) {
-      if (path.resolve(parts[0]) !== path.resolve(target)) fs.copyFileSync(parts[0], target);
+      if (path.resolve(parts[0]) === path.resolve(target)) return;
+      const sameContainer =
+        path.extname(parts[0]).toLowerCase() === path.extname(target).toLowerCase();
+      if (sameContainer) {
+        fs.copyFileSync(parts[0], target);
+        return;
+      }
+      // Same audio in another container (a service may answer with FLAC): the
+      // joined pair the rest of the pipeline expects is always WAV.
+      await FFmpegHelper.execute([
+        '-y',
+        '-v',
+        'error',
+        '-i',
+        parts[0],
+        '-acodec',
+        'pcm_s16le',
+        '-ar',
+        '44100',
+        '-ac',
+        '2',
+        target,
+      ]);
       return;
     }
 

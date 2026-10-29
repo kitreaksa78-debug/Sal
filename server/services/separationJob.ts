@@ -117,7 +117,20 @@ export class SeparationProcessor {
       await checkpoint();
 
       const provider = getAudioSeparationProvider();
-      const stems = await provider.separate(inputWav, workDir);
+      // A song left the bar at 35% for minutes while every piece was separated.
+      // Each finished piece now moves it, and the headline says which piece is
+      // being worked on, so a slow service looks slow instead of frozen.
+      const stems = await provider.separate(inputWav, workDir, ({ done, total }) => {
+        const share = total > 0 ? done / total : 0;
+        void update({
+          progress: Math.round(35 + share * 47),
+          message: `Separating voice from music (Demucs) — piece ${done}/${total}`,
+          khmerMessage:
+            total > 1
+              ? `${KHMER_MESSAGES.separating.replace('...', '')} — កំណាត់ ${done}/${total}`
+              : KHMER_MESSAGES.separating,
+        }).catch(() => {});
+      });
       await checkpoint();
 
       // -------------------------------------------------------- package
