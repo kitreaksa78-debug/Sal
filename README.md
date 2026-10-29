@@ -123,7 +123,7 @@ Set `AUDIO_SEPARATOR_URL` to wherever Demucs runs:
 | Host | How |
 | --- | --- |
 | Phone (Termux) | `tools/demucs-termux/` starts the API and a tunnel |
-| **Google Colab (GPU)** | `tools/demucs-colab/` — one cell installs, serves and tunnels the API |
+| **Google Colab (GPU)** | `tools/colab/studio_t4.ipynb` — installs Demucs **and** the UVR cleanup models, serves both and prints a tunnel URL |
 | Home server / VPS | `tools/demucs-termux/run-local.sh` |
 | Bundled sidecar | `tools/audio-separator-server/` |
 
