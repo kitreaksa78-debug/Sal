@@ -87,12 +87,13 @@ A free AI Studio key runs out of quota during the day, so the cleanup holds a
 2, …, `Key 2`/model 1, …). A pair that answers `429` turns **red** until its
 `retryDelay` (or a minute) expires and the request moves on; a refused key
 (401/403) reds out that whole key, and a retired model (404) reds out that model
-for every key. The panel in the studio shows the grid live, so a rotation is
-visible instead of guessed at — green is usable, red is not.
+for every key. The rotation runs entirely on the server: the studio has no key
+panel, there is nothing to configure in the browser, and a key is never sent to
+it. Every switch is logged, and the finished job reports the pair that served it.
 
-Keys are saved from that panel (mirrored to object storage so a restart keeps
-them) or supplied as `GEMINI_API_KEYS`. The browser only ever receives a mask
-(`AQ.Ab8…lq1g`), never a key.
+Keys come from `GEMINI_API_KEYS` in the deployment's environment (one key, or
+several separated by commas/spaces/new lines). The finished job reports which
+model and which key slot served it, and every rotation is logged.
 
 Model names are retired (Google stopped serving the 2.5 family to new projects),
 so the list in `GEMINI_MODELS` is a starting point, not a promise: when every
@@ -155,7 +156,7 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 | --- | --- | --- |
 | `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service (or paste it in the studio panel) |
 | `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
-| `GEMINI_API_KEYS` | for the cleanup | One Gemini API key, or several separated by commas/spaces/new lines — the rotation uses them in order (they can also be saved from the cleanup panel) |
+| `GEMINI_API_KEYS` | for the cleanup | One Gemini API key, or several separated by commas/spaces/new lines — the rotation uses them in order (set in the host's environment — the studio has no key panel) |
 
 Translation, speech-to-text and text-to-speech were removed with the dubbing
 flow: the site no longer transcribes, translates or re-voices anything, so no
@@ -197,7 +198,7 @@ bun run build && npm start
 
 Set `AUDIO_SEPARATOR_URL` (or paste it into the stem panel) before separating,
 or the studio will refuse the file and say why. For «សម្អាតសំឡេង», add
-`GEMINI_API_KEYS` (or paste the keys into that studio's panel) — with no key the
-cleanup upload is refused with a message rather than failing mid-job.
+`GEMINI_API_KEYS` in the environment — with no key the cleanup upload is refused
+with a message rather than failing mid-job.
 
 Deploy this folder to a Space with `HF_TOKEN=... sh scripts/deploy-hf.sh`.

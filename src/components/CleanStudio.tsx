@@ -18,12 +18,12 @@ import { JobRecord } from '../types';
 import {
   cancelJob,
   getCleanDownloadUrl,
+  getGeminiSettings,
   getJob,
   getOriginalDownloadUrl,
   subscribeToJobUpdates,
   uploadCleanupJob,
 } from '../lib/api';
-import { GeminiPanel } from './GeminiPanel';
 
 /**
  * The stages of a cleanup, in the order the server reports them. `queued` is
@@ -85,6 +85,27 @@ export const CleanStudio: React.FC = () => {
   const [uploadPct, setUploadPct] = useState(0);
   const [cancelBusy, setCancelBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  /**
+   * The cleanup runs on the deployment's own Gemini keys — there is nothing to
+   * configure from the browser. The studio only asks whether a key exists, so a
+   * missing one is explained before a file is uploaded instead of after.
+   */
+  useEffect(() => {
+    let cancelled = false;
+
+    getGeminiSettings()
+      .then((settings) => {
+        if (!cancelled) setConfigured(settings.configured);
+      })
+      .catch(() => {
+        if (!cancelled) setConfigured(null);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const unsubscribeRef = useRef<(() => void) | null>(null);
@@ -226,12 +247,19 @@ export const CleanStudio: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <GeminiPanel onConfiguredChange={setConfigured} />
-
       {error && (
         <div className="p-3 rounded-xl bg-red-500/10 border border-red-500/30 text-red-200 text-xs leading-relaxed flex items-start gap-2">
           <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
           <p>{error}</p>
+        </div>
+      )}
+
+      {configured === false && (
+        <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/30 text-amber-200 text-xs leading-relaxed flex items-start gap-2">
+          <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+          <p>
+            ម៉ាស៊ីនមេមិនទាន់មាន Gemini key ទេ — ការសម្អាតសំឡេងមិនអាចដំណើរការបានរហូតដល់មាន key។
+          </p>
         </div>
       )}
 

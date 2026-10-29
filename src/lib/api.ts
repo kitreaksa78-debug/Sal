@@ -302,16 +302,6 @@ export interface GeminiSettingsView {
   maxKeys: number;
 }
 
-export interface GeminiTestResult {
-  ok: boolean;
-  model: string;
-  keyLabel: string;
-  attempts: number;
-  latencyMs: number;
-  detail: string;
-  settings?: GeminiSettingsView;
-}
-
 async function geminiError(res: Response, fallback: string): Promise<ApiError> {
   const data = (await res.json().catch(() => ({}))) as { error?: string };
   return new ApiError(data.error || fallback, res.status);
@@ -323,35 +313,6 @@ export async function getGeminiSettings(): Promise<GeminiSettingsView> {
   return (await res.json()) as GeminiSettingsView;
 }
 
-/** Omit `keys` to keep the stored ones; send a list to replace them. */
-export async function saveGeminiSettings(input: {
-  keys?: string | string[];
-  models?: string | string[];
-}): Promise<GeminiSettingsView> {
-  const res = await fetch(`${API_BASE}/config/gemini`, {
-    method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(input),
-  });
-  if (!res.ok) throw await geminiError(res, 'មិនអាចរក្សាទុកការកំណត់ Gemini បានទេ។');
-  return (await res.json()) as GeminiSettingsView;
-}
-
-export async function clearGeminiKeys(): Promise<GeminiSettingsView> {
-  const res = await fetch(`${API_BASE}/config/gemini`, { method: 'DELETE' });
-  if (!res.ok) throw await geminiError(res, 'មិនអាចលុបការកំណត់ Gemini បានទេ។');
-  return (await res.json()) as GeminiSettingsView;
-}
-
-/** One tiny request through the rotation: proves a key works before an upload. */
-export async function testGeminiKeys(): Promise<GeminiTestResult> {
-  const res = await fetch(`${API_BASE}/config/gemini/test`, { method: 'POST' });
-  const data = (await res.json().catch(() => ({}))) as any;
-  if (!res.ok) {
-    throw new ApiError(data?.error || 'ការសាកល្បងបរាជ័យ។', res.status);
-  }
-  return data as GeminiTestResult;
-}
 
 /** The cleaned voice: MP3, or the MP4 twin when the upload had a picture. */
 export function getCleanDownloadUrl(
