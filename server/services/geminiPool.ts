@@ -31,6 +31,17 @@ const API_BASE = (
 /** How long a refused pair stays red when the API gives no hint. */
 const DEFAULT_COOLDOWN_MS = Number(process.env.GEMINI_COOLDOWN_MS || 60_000);
 const SERVER_COOLDOWN_MS = Number(process.env.GEMINI_SERVER_COOLDOWN_MS || 20_000);
+/**
+ * How long a pair is parked after it stopped answering altogether.
+ *
+ * This is not a quota refusal: the request was sent and nothing came back, so
+ * every later request would pay the same timeout again. A deployment can have
+ * one model name that hangs while the next name on the list answers in seconds,
+ * and paying the timeout once per part of every job is exactly what made a
+ * cleanup look frozen. It is parked long enough that a later job starts on a
+ * model that works, and it comes back on its own if that was a one-off.
+ */
+const TIMEOUT_COOLDOWN_MS = Number(process.env.GEMINI_TIMEOUT_COOLDOWN_MS || 10 * 60_000);
 const MAX_COOLDOWN_MS = 30 * 60_000;
 /** How many usable model names `ListModels` may contribute. */
 const MAX_DISCOVERED = 4;
@@ -81,6 +92,9 @@ const pairStates = new Map<string, PairState>();
 
 /** Model names learned from `ListModels`, best first. */
 let discoveredModels: string[] = [];
+
+/** The model that answered most recently; tried first on the next request. */
+let lastGoodModel = '';
 
 /** Rotation identity for a key: a hash, never the secret itself. */
 function keyId(key: string): string {
@@ -372,9 +386,17 @@ async function runGrid<T>(
   let attempts = 0;
   let modelProblem = false;
 
-  const total = keys.length * models.length;
+  // The model that answered last time goes first: a deployment whose first
+  // configured name never answers would otherwise make every cleanup begin by
+  // waiting out that timeout.
+  const ordered =
+    lastGoodModel && models.includes(lastGoodModel)
+      ? [lastGoodModel, ...models.filter((name) => name !== lastGoodModel)]
+      : models;
+
+  const total = keys.length * ordered.length;
   for (let step = 0; step < total; step++) {
-    const pair = pickGeminiPair(keys, models);
+    const pair = pickGeminiPair(keys, ordered);
     if (!pair) break;
 
     attempts++;
@@ -414,7 +436,12 @@ async function runGrid<T>(
       });
     } catch (err: any) {
       const reason = err?.name === 'TimeoutError' ? 'request timed out' : err?.message || String(err);
-      markCooling(pair.key, pair.model, SERVER_COOLDOWN_MS, reason);
+      markCooling(
+        pair.key,
+        pair.model,
+        err?.name === 'TimeoutError' ? TIMEOUT_COOLDOWN_MS : SERVER_COOLDOWN_MS,
+        reason
+      );
       failures.push(`${label}/${pair.model}: ${reason}`);
       logger.warn(`Gemini ${label}/${pair.model} failed to answer: ${reason}`);
       continue;
@@ -468,8 +495,10 @@ async function runGrid<T>(
       );
     }
 
-    // Success: this pair is healthy again.
+    // Success: this pair is healthy again, and it earns the first attempt of the
+    // next request too.
     markReady(pair.key, pair.model);
+    lastGoodModel = pair.model;
 
     let parsedBody: any;
     try {
@@ -575,6 +604,32 @@ function summarise(body: string): string {
  * model occasionally wraps it in a fence or adds a sentence, and losing a whole
  * chunk's analysis to that would be silly.
  */
+/**
+ * Recover the finished spans from an answer that was cut off mid-list.
+ *
+ * `maxOutputTokens` is a hard stop, so a long list of spans ends mid-object —
+ * `[{...},{...},{"start":12.` — and the whole answer stops being parseable,
+ * which used to throw away every span in that part. Each **complete** `{…}`
+ * entry is kept instead (a truncated tail simply does not match), so the model's
+ * finished work is worth a partial cleanup rather than a failed job.
+ */
+function salvageSpans(text: string): unknown | null {
+  const objects = text.match(/\{[^{}]*\}/g);
+  if (!objects) return null;
+  const spans = objects.filter((item) => /"start"/.test(item) && /"end"/.test(item));
+  if (!spans.length) return null;
+
+  try {
+    return {
+      voice: !/"voice"\s*:\s*false/.test(text),
+      speechFraction: 1,
+      noise: JSON.parse(`[${spans.join(',')}]`),
+    };
+  } catch {
+    return null;
+  }
+}
+
 export function extractJson(answer: string): unknown {
   const trimmed = answer.trim().replace(/^```(?:json)?/i, '').replace(/```$/, '').trim();
   try {
@@ -583,7 +638,16 @@ export function extractJson(answer: string): unknown {
     const start = trimmed.indexOf('{');
     const end = trimmed.lastIndexOf('}');
     if (start >= 0 && end > start) {
-      return JSON.parse(trimmed.slice(start, end + 1));
+      const candidate = trimmed.slice(start, end + 1);
+      try {
+        return JSON.parse(candidate);
+      } catch {
+        const salvaged = salvageSpans(candidate);
+        if (salvaged) {
+          logger.warn('Gemini answer was cut off; keeping the spans it did finish.');
+          return salvaged;
+        }
+      }
     }
     throw new Error('Gemini ឆ្លើយតបមិនមែនជា JSON ទេ។ (Gemini did not return JSON.)');
   }
@@ -593,4 +657,5 @@ export function extractJson(answer: string): unknown {
 export function resetGeminiPoolState(): void {
   pairStates.clear();
   discoveredModels = [];
+  lastGoodModel = '';
 }

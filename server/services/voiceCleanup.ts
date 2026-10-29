@@ -57,6 +57,20 @@ const MAX_CUT_SPANS = 64;
  */
 const CONCURRENCY = Math.max(1, Number(process.env.GEMINI_CLEANUP_CONCURRENCY || 3));
 
+/**
+ * How long one part may take to be heard.
+ *
+ * A model that answers takes seconds — a two-minute part comes back in about
+ * four — while a model that will never answer used to hold the request for the
+ * full two-minute default, on every part of every job. Waiting one minute is
+ * already far past a real answer, and the timeout now parks that model instead
+ * of paying for it again.
+ */
+const ANALYSIS_TIMEOUT_MS = Math.max(
+  5_000,
+  Number(process.env.GEMINI_CLEANUP_TIMEOUT_MS || 45_000)
+);
+
 /** The jobs this process is cleaning right now. */
 const activeJobs = new Set<string>();
 
@@ -99,8 +113,8 @@ Rules — follow them exactly:
 - Pauses, breaths and tails inside the performance are part of it: leave them in.
 - Spans are in seconds from the START OF THIS PART (0 = the first sample you hear), boundaries accurate to about 0.1 s, each span at least 0.2 s long.
 
-Answer with JSON only, in this exact shape:
-{"voice": true|false, "speechFraction": 0.0-1.0, "noise": [{"start": 0.0, "end": 0.0, "kind": "hiss|hum|click|wind|rumble|fan|chatter|other-voices|crowd|music|other", "confidence": 0.0-1.0, "why": "short reason"}]}`;
+Answer with JSON only, in this exact shape, with no explanation before or after it:
+{"voice": true|false, "speechFraction": 0.0-1.0, "noise": [{"start": 0.0, "end": 0.0, "kind": "hiss|hum|click|wind|rumble|fan|chatter|other-voices|crowd|music|other", "confidence": 0.0-1.0}]}`;
 
 /** Accept seconds, milliseconds or a mm:ss string; return seconds. */
 function toSeconds(value: unknown): number | null {
@@ -358,7 +372,10 @@ export class CleanupProcessor {
           const result = await generateGeminiJson<ChunkVerdict>({
             prompt: ANALYSIS_PROMPT(index + 1, chunkCount, length),
             audio: { base64: fs.readFileSync(chunkPath).toString('base64'), mimeType: 'audio/mp3' },
-            maxOutputTokens: 2048,
+            // Room for a long list of spans: the old cap cut the JSON off in the
+            // middle of a crowded part, and an unparseable answer lost the part.
+            maxOutputTokens: 4096,
+            timeoutMs: ANALYSIS_TIMEOUT_MS,
             label: `cleanup chunk ${index + 1}/${chunkCount}`,
             parse: (value) => readVerdict(value, length),
           });
