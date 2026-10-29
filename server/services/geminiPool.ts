@@ -204,10 +204,17 @@ export function pickGeminiPair(
   return null;
 }
 
-/** Roughly how good a model is for this job, lower being better. */
+/**
+ * Roughly how good a model is for this job, lower being better.
+ *
+ * The light Flash model ranks first: this job asks a model to listen to a take
+ * and point at stretches of noise, which the light model does in seconds, while
+ * the heavier names can take long enough to hit the request timeout before the
+ * cleanup has even started.
+ */
 function modelRank(name: string): number {
-  if (/flash/.test(name) && !/lite|image|tts|live|audio|transcribe/.test(name)) return 0;
-  if (/flash-lite/.test(name)) return 1;
+  if (/flash-lite/.test(name)) return 0;
+  if (/flash/.test(name) && !/image|tts|live|audio|transcribe/.test(name)) return 1;
   if (/pro/.test(name)) return 2;
   return 3;
 }

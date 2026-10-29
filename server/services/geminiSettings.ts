@@ -31,16 +31,18 @@ export interface GeminiSettings {
 /**
  * The models tried in this order.
  *
- * `3.8 Flash` first (the current general model and the one Google points new
- * projects at), then `3.5 Flash-Lite` because it has its own, larger free daily
- * allowance. The retired 2.5 names stay at the end only for a project that was
- * grandfathered onto them — and if every name here turns out to be stale, the
- * pool asks `ListModels` what the key can actually call and retries with that,
- * so this constant never becomes a single point of failure again.
+ * `3.5 Flash-Lite` is first because it is the one that answers: the deployment's
+ * own log shows the general `3.8 Flash` name accept the request and then never
+ * reply, so every cleanup spent its whole timeout there before falling back here.
+ * The faster listener is the right default for this job anyway — it is asked to
+ * point at stretches of noise, not to write prose — and the heavier names stay
+ * behind it for a project where they do answer. If every name here turns out to
+ * be stale, the pool asks `ListModels` what the key can actually call and retries
+ * with that, so this constant never becomes a single point of failure again.
  */
 export const DEFAULT_GEMINI_MODELS = [
-  'gemini-3.8-flash',
   'gemini-3.5-flash-lite',
+  'gemini-3.8-flash',
   'gemini-2.5-flash',
 ];
 
