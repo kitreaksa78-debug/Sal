@@ -6,19 +6,21 @@ import { getGeminiKeys, getGeminiModels } from './geminiSettings.js';
  * Key + model rotation for the Gemini cleanup.
  *
  * A free AI Studio key runs out of quota long before a day is over, and a model
- * can be refused on its own (a retired preview name, a project without access).
- * Trying one fixed key/model pair therefore means the feature dies the first
- * time a limit is hit, with no path back until the next day.
+ * name can stop being served to a project at any time (Google retired the 2.5
+ * family for new projects and points new code at the 3.x names). Trying one
+ * fixed key/model pair therefore means the feature dies the first time either
+ * happens, with no path back.
  *
  * So every request walks a small grid — key 1/model 1, key 1/model 2, key 2/model
  * 1, … — and a pair that answers 429/403 is marked **red** and skipped until its
- * cooldown expires. The first pair that is still green runs the request. The
- * panel shows exactly that grid, so "model 1 is red, it moved to model 2" is
- * visible rather than guessed at.
+ * cooldown expires. When the whole grid is red because the *names* are stale,
+ * `ListModels` is asked for what this key can actually call, and the request is
+ * retried against those. That is what keeps the studio working a year from now
+ * without anyone editing a constant.
  *
- * State lives in this process only: the limits are per key and per day, but a
- * restart is rare, and pretending a stale red mark (or a stale green one) is
- * fresher than it is would be worse than starting clean.
+ * State lives in this process only: a restart is rare, and pretending a stale
+ * red mark (or a stale green one) is fresher than it is would be worse than
+ * starting clean.
  */
 
 /** The REST endpoint is overridable so tests can point at a local stub. */
@@ -30,6 +32,8 @@ const API_BASE = (
 const DEFAULT_COOLDOWN_MS = Number(process.env.GEMINI_COOLDOWN_MS || 60_000);
 const SERVER_COOLDOWN_MS = Number(process.env.GEMINI_SERVER_COOLDOWN_MS || 20_000);
 const MAX_COOLDOWN_MS = 30 * 60_000;
+/** How many usable model names `ListModels` may contribute. */
+const MAX_DISCOVERED = 4;
 
 export type GeminiSlotState = 'ready' | 'cooling' | 'invalid';
 
@@ -51,6 +55,8 @@ export interface GeminiModelView {
   totalKeys: number;
   retryAt: string | null;
   note: string | null;
+  /** Names that came from `ListModels`, not from the configured list. */
+  discovered?: boolean;
 }
 
 export interface GeminiPoolView {
@@ -72,6 +78,9 @@ interface PairState {
 }
 
 const pairStates = new Map<string, PairState>();
+
+/** Model names learned from `ListModels`, best first. */
+let discoveredModels: string[] = [];
 
 /** Rotation identity for a key: a hash, never the secret itself. */
 function keyId(key: string): string {
@@ -139,14 +148,29 @@ function markModelInvalid(model: string, keys: string[], note: string): void {
   for (const key of keys) markInvalid(key, model, note);
 }
 
+/** Configured names first, then whatever `ListModels` taught us. */
+export function allGeminiModels(): string[] {
+  const seen = new Set<string>();
+  const names: string[] = [];
+  for (const name of [...getGeminiModels(), ...discoveredModels]) {
+    if (!name || seen.has(name)) continue;
+    seen.add(name);
+    names.push(name);
+  }
+  return names;
+}
+
 /**
  * The grid in the order requests try it: every model of key 1, then of key 2.
  *
  * Key-major is what the studio asked for — "when one key runs out, move to the
- * other key" — and it also keeps the account's quota spread evenly instead of
- * burning key 1's model 2 while model 1 still has room elsewhere.
+ * other key" — and it also spreads one account's quota instead of burning key
+ * 1's second model while key 2 still has room.
  */
-function rotation(keys: string[], models: string[]): { key: string; keyIndex: number; model: string }[] {
+function rotation(
+  keys: string[],
+  models: string[]
+): { key: string; keyIndex: number; model: string }[] {
   const order: { key: string; keyIndex: number; model: string }[] = [];
   keys.forEach((key, keyIndex) => {
     for (const model of models) order.push({ key, keyIndex, model });
@@ -166,11 +190,69 @@ export function pickGeminiPair(
   return null;
 }
 
+/** Roughly how good a model is for this job, lower being better. */
+function modelRank(name: string): number {
+  if (/flash/.test(name) && !/lite|image|tts|live|audio|transcribe/.test(name)) return 0;
+  if (/flash-lite/.test(name)) return 1;
+  if (/pro/.test(name)) return 2;
+  return 3;
+}
+
+/**
+ * Ask the service which models this key may call.
+ *
+ * Model names are retired; a hardcoded list rots. This is the recovery path: it
+ * keeps only names that support `generateContent` and are not image/TTS/Live
+ * models, puts Flash first, and remembers them for the rest of the process so
+ * the panel can show what actually runs.
+ */
+export async function discoverGeminiModels(
+  keys: string[],
+  exclude: string[] = []
+): Promise<string[]> {
+  const skip = new Set(exclude);
+
+  for (const key of keys) {
+    try {
+      const response = await fetch(
+        `${API_BASE}/models?pageSize=200&key=${encodeURIComponent(key)}`,
+        { signal: AbortSignal.timeout(20_000) }
+      );
+      if (!response.ok) continue;
+
+      const data: any = await response.json();
+      const names: string[] = (Array.isArray(data?.models) ? data.models : [])
+        .filter((model: any) =>
+          Array.isArray(model?.supportedGenerationMethods)
+            ? model.supportedGenerationMethods.includes('generateContent')
+            : false
+        )
+        .map((model: any) => String(model?.name || '').replace(/^models\//, ''))
+        .filter((name: string) => Boolean(name) && !skip.has(name))
+        .filter(
+          (name: string) =>
+            !/image|tts|live|transcribe|embedding|aqa|veo|imagen|nano-banana|omni/i.test(name)
+        );
+
+      const ranked = names.sort((a, b) => modelRank(a) - modelRank(b)).slice(0, MAX_DISCOVERED);
+      if (ranked.length) {
+        discoveredModels = ranked;
+        logger.info(`Gemini models available to this key: ${ranked.join(', ')}`);
+        return ranked;
+      }
+    } catch (err: any) {
+      logger.warn(`Could not list Gemini models: ${err?.message || err}`);
+    }
+  }
+
+  return [];
+}
+
 /** What the panel shows: one row per key and one per model, green or red. */
 export function describeGeminiPool(): GeminiPoolView {
   prune();
   const { keys, source } = getGeminiKeys();
-  const models = getGeminiModels();
+  const models = allGeminiModels();
 
   const modelRows: GeminiModelView[] = models.map((model) => {
     const states = keys.map((key) => stateOf(key, model));
@@ -187,11 +269,13 @@ export function describeGeminiPool(): GeminiPoolView {
 
     return {
       name: model,
-      state: keys.length === 0 ? 'invalid' : ready > 0 ? 'ready' : cooling.length > 0 ? 'cooling' : 'invalid',
+      state:
+        keys.length === 0 ? 'invalid' : ready > 0 ? 'ready' : cooling.length > 0 ? 'cooling' : 'invalid',
       readyKeys: ready,
       totalKeys: keys.length,
       retryAt: nextRetry ? new Date(nextRetry).toISOString() : null,
       note,
+      ...(discoveredModels.includes(model) ? { discovered: true } : {}),
     };
   });
 
@@ -266,30 +350,29 @@ interface GenerateOptions<T> {
   label?: string;
 }
 
+interface GridResult<T> {
+  result?: GeminiJsonResult<T>;
+  failures: string[];
+  /** True when at least one pair was refused because of its model name. */
+  modelProblem: boolean;
+}
+
 /**
- * Ask Gemini for strict JSON, rotating through the grid on a refused pair.
+ * One pass over the grid, in rotation order.
  *
- * The loop is bounded by the number of pairs, so a fully red grid fails in one
- * pass instead of spinning. A pair that answers well is left green; the caller
- * gets back which model and which key slot actually served the request, which is
- * what the cleanup report shows the owner.
+ * Every failure is recorded so an exhausted run can explain itself, and every
+ * 429/403 paints the pair red so the *next* request starts further along.
  */
-export async function generateGeminiJson<T>(
-  options: GenerateOptions<T>
-): Promise<GeminiJsonResult<T>> {
-  const { keys, source } = getGeminiKeys();
-  const models = getGeminiModels();
-
-  if (!keys.length) {
-    throw new GeminiUnavailableError(
-      'មិនទាន់មាន Gemini key ទេ។ សូមបញ្ចូល key ក្នុងផ្ទាំង «សម្អាតសំឡេង · Gemini» ឬកំណត់ GEMINI_API_KEYS។'
-    );
-  }
-
-  const total = keys.length * models.length;
+async function runGrid<T>(
+  options: GenerateOptions<T>,
+  keys: string[],
+  models: string[]
+): Promise<GridResult<T>> {
   const failures: string[] = [];
   let attempts = 0;
+  let modelProblem = false;
 
+  const total = keys.length * models.length;
   for (let step = 0; step < total; step++) {
     const pair = pickGeminiPair(keys, models);
     if (!pair) break;
@@ -297,9 +380,8 @@ export async function generateGeminiJson<T>(
     attempts++;
     const label = keyLabel(pair.keyIndex);
     // The key travels both ways the REST API documents: as `x-goog-api-key` and
-    // as the `key` query parameter. Newer AI Studio keys are accepted through
-    // either form, and a proxy that strips unknown headers cannot break the call
-    // when the query parameter is also present.
+    // as the `key` query parameter, so a proxy that strips unknown headers
+    // cannot break the call.
     const url = `${API_BASE}/models/${encodeURIComponent(
       pair.model
     )}:generateContent?key=${encodeURIComponent(pair.key)}`;
@@ -319,9 +401,6 @@ export async function generateGeminiJson<T>(
         temperature: 0,
         maxOutputTokens: options.maxOutputTokens ?? 4096,
         responseMimeType: 'application/json',
-        // 2.5 models think by default; this is a listening/JSON task and the
-        // thinking budget only adds seconds to every chunk.
-        ...(pair.model.startsWith('gemini-2.5') ? { thinkingConfig: { thinkingBudget: 0 } } : {}),
       },
     };
 
@@ -360,24 +439,20 @@ export async function generateGeminiJson<T>(
         continue;
       }
 
-      if (response.status === 404) {
-        // A 404 can mean "this model name is not available to this project" — or
-        // "this key cannot use the Generative Language API at all", which Google
-        // also reports as 404 on the model path. Rotating past the second case
-        // hides the real reason behind three identical failures, so the answer's
-        // own wording decides: a model complaint reds out that model, anything
-        // else is surfaced as-is for the owner to act on.
-        const modelComplaint =
-          /model/i.test(text) && /not found|not supported|unsupported|does not support/i.test(text);
-        if (!modelComplaint) {
-          throw new Error(
-            `Gemini បដិសេធការហៅ (404)${detail ? `: ${detail}` : ''}`
-          );
+      if (response.status === 404 || isRetiredModel(text)) {
+        // A 404 on a model path means either "this name is retired/not for this
+        // project" (Google's wording: "no longer available to new users") or
+        // "this key cannot use the API at all", which Google also reports as
+        // 404. The answer's own wording decides: a model complaint reds out that
+        // model and lets the grid move on; anything else is surfaced as-is.
+        if (isRetiredModel(text) || /model/i.test(text)) {
+          markModelInvalid(pair.model, keys, `unavailable: ${detail.slice(0, 120)}`);
+          failures.push(`${pair.model}: unavailable (${response.status})`);
+          modelProblem = true;
+          logger.warn(`Gemini model ${pair.model} is not available (${response.status}); that model is now red.`);
+          continue;
         }
-        markModelInvalid(pair.model, keys, `model unavailable (404)`);
-        failures.push(`${pair.model}: unavailable (404)`);
-        logger.warn(`Gemini model ${pair.model} is not available; that model is now red.`);
-        continue;
+        throw new Error(`Gemini បដិសេធការហៅ (${response.status})${detail ? `: ${detail}` : ''}`);
       }
 
       if (response.status >= 500) {
@@ -386,15 +461,8 @@ export async function generateGeminiJson<T>(
         continue;
       }
 
-      // A 400 here is about the request itself (a bad model name, audio the
-      // model refuses). Retrying it on every other pair would just produce the
-      // same answer, so it is reported straight away.
-      if (/model/i.test(text) && /not found|not supported|invalid/i.test(text)) {
-        markModelInvalid(pair.model, keys, `model rejected (400)`);
-        failures.push(`${pair.model}: rejected (400)`);
-        continue;
-      }
-
+      // Any other 400 is about the request itself (audio the model refuses, a
+      // malformed body). Retrying it elsewhere would repeat the same answer.
       throw new Error(
         `Gemini បដិសេធសំណើនេះ (${response.status})${detail ? `: ${detail}` : ''}`
       );
@@ -426,22 +494,70 @@ export async function generateGeminiJson<T>(
     }
 
     if (options.label) {
-      logger.info(`Gemini served ${options.label} with ${label}/${pair.model} (${source})`);
+      logger.info(`Gemini served ${options.label} with ${label}/${pair.model}`);
     }
 
     return {
-      data: options.parse(extractJson(answer)),
-      model: pair.model,
-      keyLabel: label,
-      attempts,
+      result: {
+        data: options.parse(extractJson(answer)),
+        model: pair.model,
+        keyLabel: label,
+        attempts,
+      },
+      failures,
+      modelProblem,
     };
   }
 
+  return { failures, modelProblem };
+}
+
+/**
+ * Ask Gemini for strict JSON, rotating through the grid on a refused pair.
+ *
+ * Two rounds at most: the configured names, then — only if the failures were
+ * about the names themselves — whatever `ListModels` says this key can call. A
+ * grid that is red purely on quota does not pay for a discovery call.
+ */
+export async function generateGeminiJson<T>(
+  options: GenerateOptions<T>
+): Promise<GeminiJsonResult<T>> {
+  const { keys } = getGeminiKeys();
+
+  if (!keys.length) {
+    throw new GeminiUnavailableError(
+      'មិនទាន់មាន Gemini key ទេ។ សូមបញ្ចូល key ក្នុងផ្ទាំង «សម្អាតសំឡេង · Gemini» ឬកំណត់ GEMINI_API_KEYS។'
+    );
+  }
+
+  const configured = getGeminiModels();
+  const first = await runGrid(options, keys, allGeminiModels());
+  if (first.result) return first.result;
+
+  if (first.modelProblem) {
+    const before = allGeminiModels();
+    const discovered = await discoverGeminiModels(keys, before);
+    if (discovered.length) {
+      const retry = await runGrid(options, keys, allGeminiModels());
+      if (retry.result) return retry.result;
+      throw new GeminiExhaustedError(exhaustedMessage([...first.failures, ...retry.failures]));
+    }
+  }
+
+  throw new GeminiExhaustedError(exhaustedMessage(first.failures, configured));
+}
+
+function exhaustedMessage(failures: string[], models: string[] = []): string {
   const detail = failures.slice(-4).join(' · ');
-  throw new GeminiExhaustedError(
-    `Gemini key/model ទាំងអស់កំពុងស្ថិតក្នុងស្ថានភាពក្រហម (អស់កំណត់ ឬត្រូវបានបដិសេធ)។ សូមរង់ចាំបន្តិច ឬបន្ថែម key ថ្មី។ ${
-      detail ? `(${detail})` : ''
-    }`
+  return `Gemini key/model ទាំងអស់កំពុងស្ថិតក្នុងស្ថានភាពក្រហម (អស់កំណត់ ឬត្រូវបានបដិសេធ)។ សូមរង់ចាំបន្តិច ឬបន្ថែម key ថ្មី។ ${
+    models.length ? `[models: ${models.join(', ')}] ` : ''
+  }${detail ? `(${detail})` : ''}`;
+}
+
+/** Google's own wording for a model that a new project may not call. */
+function isRetiredModel(body: string): boolean {
+  return /no longer available|not available to new users|update your code to use|not found for api version|is not supported for generatecontent/i.test(
+    body
   );
 }
 
@@ -455,8 +571,8 @@ function summarise(body: string): string {
 /**
  * Pull the JSON object out of a model answer.
  *
- * With `responseMimeType: application/json` the text is already bare JSON, but
- * a model occasionally wraps it in a fence or adds a sentence, and losing a
+ * With `responseMimeType: application/json` the text is already bare JSON, but a
+ * model occasionally wraps it in a fence or adds a sentence, and losing a whole
  * chunk's analysis to that would be silly.
  */
 export function extractJson(answer: string): unknown {
@@ -473,7 +589,8 @@ export function extractJson(answer: string): unknown {
   }
 }
 
-/** Test hook / admin: forget every red mark. */
+/** Test hook / admin: forget every red mark and learned model name. */
 export function resetGeminiPoolState(): void {
   pairStates.clear();
+  discoveredModels = [];
 }

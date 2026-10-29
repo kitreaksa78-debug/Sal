@@ -31,14 +31,17 @@ export interface GeminiSettings {
 /**
  * The models tried in this order.
  *
- * `flash` first (best audio understanding), `flash-lite` next because it has a
- * separate, larger free daily allowance, and 2.0 flash last as a third quota.
- * All three accept audio input, which is what the cleanup needs.
+ * `3.8 Flash` first (the current general model and the one Google points new
+ * projects at), then `3.5 Flash-Lite` because it has its own, larger free daily
+ * allowance. The retired 2.5 names stay at the end only for a project that was
+ * grandfathered onto them — and if every name here turns out to be stale, the
+ * pool asks `ListModels` what the key can actually call and retries with that,
+ * so this constant never becomes a single point of failure again.
  */
 export const DEFAULT_GEMINI_MODELS = [
+  'gemini-3.8-flash',
+  'gemini-3.5-flash-lite',
   'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
-  'gemini-2.0-flash',
 ];
 
 const SETTINGS_FILE = path.join(process.cwd(), 'data', 'gemini.json');
