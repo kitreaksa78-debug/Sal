@@ -10,6 +10,8 @@ export type JobStatus =
   | 'uploading'
   | 'extracting_audio'
   | 'separating_audio'
+  | 'analyzing_audio'
+  | 'cleaning_audio'
   | 'transcribing'
   | 'detecting_speakers'
   | 'translating'
@@ -130,9 +132,33 @@ export interface VideoMetadata {
   audioCodec?: string;
 }
 
+/** One stretch of the recording that is nothing but disturbance. */
+export interface NoiseSpan {
+  start: number;
+  end: number;
+  kind?: string;
+  /** The model's own confidence, 0 to 1. */
+  confidence?: number;
+}
+
+/** What the cleanup pass did, shown under the finished audio. */
+export interface CleanupReport {
+  model: string;
+  keyLabel: string;
+  chunks: number;
+  chunksAnalysed: number;
+  chunksFailed: number;
+  spansFound: number;
+  spansRemoved: number;
+  removedSeconds: number;
+  originalSeconds: number;
+}
+
 export interface JobRecord {
   id: string;
   status: JobStatus;
+  /** Which pipeline ran: stem separation, or the Gemini voice cleanup. */
+  mode?: 'separate' | 'clean';
   progress: number; // 0 to 100
   message: string; // User-facing status message (Khmer or English)
   khmerMessage?: string;
@@ -155,6 +181,12 @@ export interface JobRecord {
   /** The same two stems muxed back over the original picture, when a video was uploaded. */
   vocalsVideoFile?: string;
   musicVideoFile?: string;
+  /** The cleaned voice from the Gemini cleanup, with the noise removed. */
+  cleanFile?: string;
+  /** The cleaned audio muxed over the original picture, for a video upload. */
+  cleanVideoFile?: string;
+  /** What the cleanup found and removed. */
+  cleanup?: CleanupReport;
   segments?: DialogueSegment[];
   speakers?: SpeakerInfo[];
   outputFile?: string;

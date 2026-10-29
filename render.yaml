@@ -35,6 +35,13 @@ services:
       - key: AUDIO_SEPARATOR_API_KEY
         sync: false
 
+      # Gemini keys for the voice cleanup (សម្អាតសំឡេង). Several keys can be
+      # pasted in one value, separated by commas; the app rotates through them and
+      # through its model list when a quota runs out. They can also be saved from
+      # the site's cleanup panel, which wins over this value.
+      - key: GEMINI_API_KEYS
+        sync: false
+
       # Optional: persist uploads and results in Cloudflare R2. A free Render
       # instance has an ephemeral disk, so files are lost whenever it restarts.
       - key: S3_ENDPOINT

@@ -16,6 +16,11 @@ dialogue *and* the singing — and the music it was mixed with. The separation
 runs on **Demucs**, the model that actually lifts a voice out of a mix; nothing
 in this repository substitutes a lesser trick for it.
 
+A second studio cleans a voice you already have: upload a singing take or a
+voice recording and **Gemini** listens for the noise (hiss, hum, wind, fans,
+traffic, chair squeaks) while **FFmpeg** cuts exactly those stretches out and
+denoises what remains. The two studios are separate tabs and separate pipelines.
+
 There is no account to create and no history to keep: every visit opens the
 studio, uploads straight away, and hands back the finished tracks. This Space
 runs the **whole app** (frontend + API) from one container.
@@ -44,11 +49,50 @@ runs. `queued → extracting_audio → separating_audio → mixing → completed
 | The music over the original picture | `music-<id>.mp4` (video uploads only) |
 
 All four come from one route, `GET /api/jobs/:id/download?stem=vocals|music&format=mp3|mp4`,
-which honours byte ranges so the previews seek instead of downloading first.
+which honours byte ranges so the previews seek instead of downloading first. The
+cleanup studio uses the same route with `stem=clean` (the cleaned voice) and
+`stem=original` (the untouched upload, for its before/after players).
 
 The MP4 twins mux each stem over the original picture with a stream copy, so the
 video is never re-encoded — a container FFmpeg cannot write simply yields no
 twin while the MP3 downloads keep working.
+
+## Voice cleanup (Gemini)
+
+A separate studio for a voice you already recorded: upload the take — audio, or a
+video whose sound you want cleaned — and get the same performance back with the
+disturbance removed.
+
+Gemini cannot return audio, so it is used for what it is good at: **listening**.
+Each `GEMINI_CLEANUP_CHUNK_SECONDS` slice (default 120 s, mono 16 kHz MP3) is sent
+inline, and the model answers with strict JSON: where the voice is, and which
+spans contain *only* noise. FFmpeg then makes the edit — `aselect` drops exactly
+those spans, `asetpts` closes the gaps, `afftdn` pulls down the remaining noise
+floor, a 70 Hz–14 kHz band-limit removes rumble and top-end hiss, and `loudnorm`
+keeps the result at broadcast level (`GEMINI_CLEANUP_NR` sets the denoise
+strength).
+
+Model answers are suggestions, not commands: spans under 0.25 s or under 45%
+confidence are dropped, touching spans are merged, and **no more than 40%** of a
+recording can ever be removed — a bad opinion must not delete the performance.
+
+The pipeline shows on screen as `extracting_audio → analyzing_audio →
+cleaning_audio → mixing → completed`, and the finished job reports which model and
+which key served it, how many spans were cut and how many seconds went.
+
+### Keys and models rotate themselves (red → green)
+
+A free AI Studio key runs out of quota during the day, so the cleanup holds a
+**grid**: every key × every model, tried key-major (`Key 1`/model 1, `Key 1`/model
+2, …, `Key 2`/model 1, …). A pair that answers `429` turns **red** until its
+`retryDelay` (or a minute) expires and the request moves on; a refused key
+(401/403) reds out that whole key, and a retired model (404) reds out that model
+for every key. The panel in the studio shows the grid live, so a rotation is
+visible instead of guessed at — green is usable, red is not.
+
+Keys are saved from that panel (mirrored to object storage so a restart keeps
+them) or supplied as `GEMINI_API_KEYS`. The browser only ever receives a mask
+(`AQ.Ab8…lq1g`), never a key.
 
 ## Stem separation (Demucs required)
 
@@ -103,6 +147,7 @@ Add these in **Settings → Variables and secrets** as **Secrets** (not variable
 | --- | --- | --- |
 | `AUDIO_SEPARATOR_URL` | yes | Base URL of the Demucs stem service (or paste it in the studio panel) |
 | `AUDIO_SEPARATOR_API_KEY` | optional | Bearer token, when the service has one |
+| `GEMINI_API_KEYS` | for the cleanup | One Gemini API key, or several separated by commas/spaces/new lines — the rotation uses them in order (they can also be saved from the cleanup panel) |
 
 Translation, speech-to-text and text-to-speech were removed with the dubbing
 flow: the site no longer transcribes, translates or re-voices anything, so no
@@ -142,7 +187,9 @@ bun run dev      # http://localhost:3000
 bun run build && npm start
 ```
 
-Set `AUDIO_SEPARATOR_URL` (or paste it into the stem panel) before uploading,
-or the studio will refuse the file and say why.
+Set `AUDIO_SEPARATOR_URL` (or paste it into the stem panel) before separating,
+or the studio will refuse the file and say why. For «សម្អាតសំឡេង», add
+`GEMINI_API_KEYS` (or paste the keys into that studio's panel) — with no key the
+cleanup upload is refused with a message rather than failing mid-job.
 
 Deploy this folder to a Space with `HF_TOKEN=... sh scripts/deploy-hf.sh`.

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { AlertCircle } from 'lucide-react';
+import { AlertCircle, AudioLines, Sparkles } from 'lucide-react';
 import { Header } from './components/Header';
+import { CleanStudio } from './components/CleanStudio';
 import { UploadPanel } from './components/UploadPanel';
 import { ProcessingProgress } from './components/ProcessingProgress';
 import { ResultPanel } from './components/ResultPanel';
@@ -25,7 +26,55 @@ const AUDIO_RE = /\.(mp3|wav|m4a|aac|ogg|opus|flac)$/i;
 const isAudioFile = (file: File) =>
   file.type.startsWith('audio/') || (!file.type.startsWith('video/') && AUDIO_RE.test(file.name));
 
+/**
+ * Two products on one site, deliberately separate: pull a voice out of a mix, or
+ * clean the noise off a voice you already recorded. The tabs sit above both
+ * studios so a visitor knows which one they are in.
+ */
+type StudioMode = 'separate' | 'clean';
+
+const ModeTabs: React.FC<{ mode: StudioMode; onChange: (mode: StudioMode) => void }> = ({
+  mode,
+  onChange,
+}) => (
+  <div
+    role="tablist"
+    aria-label="ជ្រើសរើសការងារ"
+    className="grid grid-cols-2 gap-1.5 p-1.5 rounded-2xl bg-slate-900/70 border border-slate-800"
+  >
+    <button
+      type="button"
+      role="tab"
+      aria-selected={mode === 'separate'}
+      onClick={() => onChange('separate')}
+      className={`min-h-[46px] px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors ${
+        mode === 'separate'
+          ? 'bg-emerald-500/20 text-emerald-200 border border-emerald-500/40'
+          : 'text-slate-400 hover:text-slate-200 border border-transparent'
+      }`}
+    >
+      <AudioLines className="w-4 h-4" />
+      ញែកសំឡេងពីភ្លេង
+    </button>
+    <button
+      type="button"
+      role="tab"
+      aria-selected={mode === 'clean'}
+      onClick={() => onChange('clean')}
+      className={`min-h-[46px] px-3 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors ${
+        mode === 'clean'
+          ? 'bg-violet-500/20 text-violet-200 border border-violet-500/40'
+          : 'text-slate-400 hover:text-slate-200 border border-transparent'
+      }`}
+    >
+      <Sparkles className="w-4 h-4" />
+      សម្អាតសំឡេង (Gemini)
+    </button>
+  </div>
+);
+
 export function App() {
+  const [mode, setMode] = useState<StudioMode>('separate');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [videoDuration, setVideoDuration] = useState<number | null>(null);
@@ -54,8 +103,11 @@ export function App() {
    * their heading from here.
    */
   useEffect(() => {
-    document.title = 'ញែកសំឡេងចេញពីភ្លេង · Separate voice from music';
-  }, []);
+    document.title =
+      mode === 'clean'
+        ? 'សម្អាតសំឡេង · Clean the noise off a recording'
+        : 'ញែកសំឡេងចេញពីភ្លេង · Separate voice from music';
+  }, [mode]);
 
   // Subscribe to SSE updates when a job is active
   useEffect(() => {
@@ -216,6 +268,12 @@ export function App() {
 
       {/* Main Content Area */}
       <main className="flex-1 w-full max-w-7xl mx-auto px-3 sm:px-6 lg:px-8 py-5 sm:py-7 space-y-6 sm:space-y-8">
+        <ModeTabs mode={mode} onChange={setMode} />
+
+        {/* The Gemini cleanup keeps its own screen, state and result view. */}
+        {mode === 'clean' && <CleanStudio />}
+
+        {mode === 'separate' && (
         <>
           {/* If no job in progress or finished, show Upload & Settings */}
           {!currentJob && (
@@ -266,15 +324,16 @@ export function App() {
             </div>
           )}
         </>
+        )}
       </main>
 
       {/* Modern Minimal Footer */}
       <footer className="border-t border-slate-900 py-6 px-4 pb-8 text-center text-[11px] sm:text-xs text-slate-400 leading-relaxed">
         <p className="mx-auto max-w-md">
-          ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេង — ឥតគិតថ្លៃ
+          ញែកសំឡេងនិយាយ និងសំឡេងច្រៀងចេញពីភ្លេង · សម្អាតសំឡេងឲ្យស្អាត — ឥតគិតថ្លៃ
         </p>
         <p className="mt-1 text-[10px] text-slate-500 sm:text-[11px]">
-          Separate voice &amp; singing from music · Free
+          Separate voice &amp; singing from music · Clean the noise off a recording · Free
         </p>
       </footer>
     </div>

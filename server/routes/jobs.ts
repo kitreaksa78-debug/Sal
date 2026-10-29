@@ -13,6 +13,8 @@ import {
   getAudioSeparationProvider,
   DEMUCS_REQUIRED_MESSAGE,
 } from '../services/audioSeparation.js';
+import { CleanupProcessor } from '../services/voiceCleanup.js';
+import { getGeminiKeys } from '../services/geminiSettings.js';
 import { JobRecord } from '../types.js';
 import { logger } from '../utils/logger.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
@@ -21,6 +23,10 @@ const router = express.Router();
 
 /** The queued line, kept next to the record that carries it. */
 const KHMER_QUEUED_MESSAGE = 'កំពុងស្ថិតក្នុងជួររង់ចាំ...';
+
+/** Refused before the upload when the cleanup has no Gemini key to think with. */
+const GEMINI_REQUIRED_MESSAGE =
+  'សម្អាតសំឡេងត្រូវការ Gemini key។ សូមបញ្ចូល key ក្នុងផ្ទាំង «សម្អាតសំឡេង · Gemini» សិន។ (Add a Gemini key in the cleanup panel.)';
 
 const maxVideoSizeMb = parseInt(process.env.MAX_VIDEO_SIZE_MB || '500', 10);
 const maxBytes = maxVideoSizeMb * 1024 * 1024;
@@ -90,17 +96,30 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
         .json({ error: 'សូមជ្រើសរើសវីដេអូ ឬឯកសារសំឡេងដើម្បីបញ្ចូល។ (No file provided)' });
     }
 
-    // Separation *is* the product: with no Demucs service connected there is
-    // nothing to sell, so the upload is refused before the file is stored
-    // instead of failing minutes later with an empty result.
-    if (!getAudioSeparationProvider().isConfigured()) {
+    // Two pipelines share this endpoint: the stem separator and the Gemini
+    // voice cleanup. `mode` picks one; anything else is a separation.
+    const mode: 'separate' | 'clean' = req.body?.mode === 'clean' ? 'clean' : 'separate';
+
+    // Each pipeline is only as good as the service behind it, so a missing
+    // service is refused before the file is stored instead of failing minutes
+    // later with an empty result.
+    if (mode === 'clean') {
+      if (!getGeminiKeys().keys.length) {
+        try {
+          fs.unlinkSync(req.file.path);
+        } catch {}
+        return res.status(400).json({ error: GEMINI_REQUIRED_MESSAGE });
+      }
+    } else if (!getAudioSeparationProvider().isConfigured()) {
       try {
         fs.unlinkSync(req.file.path);
       } catch {}
       return res.status(400).json({ error: DEMUCS_REQUIRED_MESSAGE });
     }
 
-    const jobId = `sep_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+    const jobId = `${mode === 'clean' ? 'cln' : 'sep'}_${Date.now().toString(36)}_${Math.random()
+      .toString(36)
+      .substring(2, 6)}`;
     const storage = getStorage();
     const db = getDatabase();
 
@@ -129,15 +148,20 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
       originalFilename: req.file.originalname,
       inputMimeType: req.file.mimetype,
       inputKind: isAudioUpload(req.file) ? 'audio' : 'video',
+      mode,
       metadata: meta,
       createdAt: new Date().toISOString(),
     };
 
     await db.createJob(newJob);
 
-    // Trigger asynchronous processing pipeline
+    // Trigger the asynchronous pipeline for this mode.
     setImmediate(() => {
-      SeparationProcessor.processJob(jobId).catch((err) => {
+      const run =
+        mode === 'clean'
+          ? CleanupProcessor.processJob(jobId)
+          : SeparationProcessor.processJob(jobId);
+      run.catch((err) => {
         logger.error(`Error processing job ${jobId}:`, err);
       });
     });
@@ -145,7 +169,10 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
     return res.status(201).json({
       jobId,
       status: 'queued',
-      message: 'ឯកសារបានបញ្ចូលដោយជោគជ័យ និងកំពុងចាប់ផ្តើមការញែកសំឡេង...',
+      message:
+        mode === 'clean'
+          ? 'ឯកសារបានបញ្ចូលដោយជោគជ័យ ហើយ Gemini កំពុងចាប់ផ្តើមស្តាប់...'
+          : 'ឯកសារបានបញ្ចូលដោយជោគជ័យ និងកំពុងចាប់ផ្តើមការញែកសំឡេង...',
       job: newJob,
     });
   } catch (err: any) {
@@ -235,24 +262,41 @@ router.get('/:id/download', async (req: Request, res: Response) => {
         .send('ការញែកសំឡេងមិនទាន់រួចរាល់ទេ។ (Separation not finished)');
     }
 
-    const stem = req.query.stem === 'music' ? 'music' : 'vocals';
+    const requested = String(req.query.stem || '').toLowerCase();
+    const stem: 'vocals' | 'music' | 'clean' | 'original' =
+      requested === 'music'
+        ? 'music'
+        : requested === 'clean'
+        ? 'clean'
+        : requested === 'original'
+        ? 'original'
+        : 'vocals';
     const wantVideo = String(req.query.format || '').toLowerCase() === 'mp4';
 
-    const stored = wantVideo
-      ? stem === 'music'
-        ? job.musicVideoFile
-        : job.vocalsVideoFile
-      : stem === 'music'
-      ? job.musicFile
-      : job.vocalsFile;
+    // `clean`/`original` belong to the Gemini cleanup: the finished voice and the
+    // untouched upload, played side by side. The separations keep their stems.
+    const stored =
+      stem === 'clean'
+        ? wantVideo
+          ? job.cleanVideoFile
+          : job.cleanFile
+        : stem === 'original'
+        ? job.inputFile
+        : wantVideo
+        ? stem === 'music'
+          ? job.musicVideoFile
+          : job.vocalsVideoFile
+        : stem === 'music'
+        ? job.musicFile
+        : job.vocalsFile;
 
     // A restart wipes the local disk, so the file usually has to come back from
     // object storage before it can be streamed.
-    const file = await resolveStoredArtifact(stored);
+    const file = await resolveStoredArtifact(stored, stem === 'original' ? 'uploads' : 'outputs');
     if (!file) {
       return res
         .status(404)
-        .send('ឯកសារនេះមិនអាចរកឃើញទេ។ (That stem is not available for this job.)');
+        .send('ឯកសារនេះមិនអាចរកឃើញទេ។ (That file is not available for this job.)');
     }
 
     const size = fs.statSync(file).size;
@@ -336,7 +380,7 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
 
     // Nothing is running this job in any process: mark it cancelled now instead
     // of leaving a forever-spinning entry.
-    if (!SeparationProcessor.isActive(job.id)) {
+    if (!SeparationProcessor.isActive(job.id) && !CleanupProcessor.isActive(job.id)) {
       const cancelled = await db.updateJob(job.id, {
         status: 'failed',
         progress: 100,

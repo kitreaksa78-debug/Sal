@@ -7,10 +7,12 @@ import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
 import separatorRouter from './server/routes/separator.js';
+import geminiRouter from './server/routes/gemini.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
 import { getDatabase } from './server/services/db.js';
 import { hydrateSeparatorSettings } from './server/services/separatorSettings.js';
+import { hydrateGeminiSettings } from './server/services/geminiSettings.js';
 
 const app = express();
 // Honour the port injected by the host, falling back to 3000 for local runs.
@@ -35,6 +37,9 @@ app.use('/api/config', configRouter);
 // Where the stem separation runs (the phone's Demucs API, a home server, the
 // audio-separator sidecar); changeable from the studio's stem panel.
 app.use('/api/config/separator', separatorRouter);
+// The Gemini keys and models behind the voice cleanup, changeable from the
+// clean studio's panel so a new key needs no redeploy.
+app.use('/api/config/gemini', geminiRouter);
 
 // Anything still unmatched under /api has to answer like an API. Without this
 // the static fallback below would serve index.html with a 200 for a removed or
@@ -53,6 +58,9 @@ async function startServer() {
   // for a job — with no stem service connected the upload endpoint refuses the
   // video — so this hydration is what makes the pipeline ready at boot.
   await hydrateSeparatorSettings();
+  // The Gemini keys for «សម្អាតសំឡេង» are mirrored to object storage for the same
+  // reason: a free host forgets its disk, but not the bucket.
+  await hydrateGeminiSettings();
   // Translation needs no service to hydrate: Google Translate is reached over
   // HTTPS from the request itself, with no key and nothing to reconnect.
 

@@ -237,7 +237,7 @@ export class SeparationProcessor {
  * FFmpeg cannot attach): the audio downloads still work, and a failed twin must
  * never fail the separation that already succeeded.
  */
-async function muxStemOverVideo(
+export async function muxStemOverVideo(
   videoPath: string,
   stemWavPath: string,
   target: string

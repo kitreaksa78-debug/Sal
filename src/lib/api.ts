@@ -35,8 +35,30 @@ export async function uploadSeparationJob(
   file: File,
   onUploadProgress?: (pct: number) => void
 ): Promise<{ jobId: string; job: JobRecord }> {
+  return uploadJob(file, 'separate', onUploadProgress);
+}
+
+/**
+ * Upload a recording and let Gemini listen to it so the noise can be cut out.
+ *
+ * Same endpoint and same multipart field as a separation; the extra `mode`
+ * field picks the cleanup pipeline on the server.
+ */
+export async function uploadCleanupJob(
+  file: File,
+  onUploadProgress?: (pct: number) => void
+): Promise<{ jobId: string; job: JobRecord }> {
+  return uploadJob(file, 'clean', onUploadProgress);
+}
+
+async function uploadJob(
+  file: File,
+  mode: 'separate' | 'clean',
+  onUploadProgress?: (pct: number) => void
+): Promise<{ jobId: string; job: JobRecord }> {
   const formData = new FormData();
   formData.append('video', file);
+  formData.append('mode', mode);
 
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -240,4 +262,111 @@ export async function testSeparatorConnection(full = false): Promise<SeparatorTe
   });
   if (!res.ok) throw await separatorError(res, 'ការសាកល្បងបរាជ័យ (The test could not run)');
   return (await res.json()) as SeparatorTestResult;
+}
+
+// ------------------------------------------------ Gemini voice cleanup
+
+/** One key slot: green when it can serve a request, red when it cannot. */
+export interface GeminiKeyView {
+  label: string;
+  masked: string;
+  state: 'ready' | 'cooling' | 'invalid';
+  readyModels: number;
+  totalModels: number;
+  retryAt: string | null;
+  note: string | null;
+}
+
+/** One model in the rotation, with the same green/red meaning. */
+export interface GeminiModelView {
+  name: string;
+  state: 'ready' | 'cooling' | 'invalid';
+  readyKeys: number;
+  totalKeys: number;
+  retryAt: string | null;
+  note: string | null;
+}
+
+export interface GeminiSettingsView {
+  configured: boolean;
+  source: 'app' | 'env' | 'none';
+  keyCount: number;
+  models: GeminiModelView[];
+  keys: GeminiKeyView[];
+  /** The pair the next request would use, or null when every pair is red. */
+  active: { keyLabel: string; model: string } | null;
+  defaultModels: string[];
+  savedModels: string[];
+  hasSavedKeys: boolean;
+  envKeyCount: number;
+  maxKeys: number;
+}
+
+export interface GeminiTestResult {
+  ok: boolean;
+  model: string;
+  keyLabel: string;
+  attempts: number;
+  latencyMs: number;
+  detail: string;
+  settings?: GeminiSettingsView;
+}
+
+async function geminiError(res: Response, fallback: string): Promise<ApiError> {
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  return new ApiError(data.error || fallback, res.status);
+}
+
+export async function getGeminiSettings(): Promise<GeminiSettingsView> {
+  const res = await fetch(`${API_BASE}/config/gemini`);
+  if (!res.ok) throw await geminiError(res, 'មិនអាចអានការកំណត់ Gemini បានទេ។');
+  return (await res.json()) as GeminiSettingsView;
+}
+
+/** Omit `keys` to keep the stored ones; send a list to replace them. */
+export async function saveGeminiSettings(input: {
+  keys?: string | string[];
+  models?: string | string[];
+}): Promise<GeminiSettingsView> {
+  const res = await fetch(`${API_BASE}/config/gemini`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await geminiError(res, 'មិនអាចរក្សាទុកការកំណត់ Gemini បានទេ។');
+  return (await res.json()) as GeminiSettingsView;
+}
+
+export async function clearGeminiKeys(): Promise<GeminiSettingsView> {
+  const res = await fetch(`${API_BASE}/config/gemini`, { method: 'DELETE' });
+  if (!res.ok) throw await geminiError(res, 'មិនអាចលុបការកំណត់ Gemini បានទេ។');
+  return (await res.json()) as GeminiSettingsView;
+}
+
+/** One tiny request through the rotation: proves a key works before an upload. */
+export async function testGeminiKeys(): Promise<GeminiTestResult> {
+  const res = await fetch(`${API_BASE}/config/gemini/test`, { method: 'POST' });
+  const data = (await res.json().catch(() => ({}))) as any;
+  if (!res.ok) {
+    throw new ApiError(data?.error || 'ការសាកល្បងបរាជ័យ។', res.status);
+  }
+  return data as GeminiTestResult;
+}
+
+/** The cleaned voice: MP3, or the MP4 twin when the upload had a picture. */
+export function getCleanDownloadUrl(
+  jobId: string,
+  format: 'mp3' | 'mp4' = 'mp3',
+  inline = false
+): string {
+  const params = new URLSearchParams({ stem: 'clean', format });
+  if (inline) params.set('inline', '1');
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
+}
+
+/** The untouched upload, for the before/after comparison player. */
+export function getOriginalDownloadUrl(jobId: string, inline = false): string {
+  const params = new URLSearchParams({ stem: 'original' });
+  if (inline) params.set('inline', '1');
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
 }
