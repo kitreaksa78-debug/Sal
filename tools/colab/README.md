@@ -9,7 +9,32 @@ Notebook មួយសម្រាប់ការងារពីរ៖
 | `GET /health` | ស្ថានភាព + ឧបករណ៍ (cuda/cpu) | សាយ / អ្នក |
 | `GET /files/<job>/<name>` | ឯកសារដែលបានបង្កើត | សាយ |
 
-## ដំណើរការ
+## វិធីលឿនបំផុត — បន្ទាត់តែមួយ (ណែនាំ)
+
+រត់ក្នុង cell មួយក្នុង Colab (Runtime → T4 GPU)៖
+
+```bash
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-colab/colab-start.sh | sh
+```
+
+វាតំឡើង Demucs + UVR, បើក service, បើក tunnel, រង់ចាំរហូត tunnel ឆ្លើយពិត,
+រួចបោះពុម្ពប្លុកតែមួយដែលចម្លងដាក់ក្នុងសាយបានតែម្តង៖
+
+```
+URL : https://xxxx.trycloudflare.com
+API Key : 3f9c…
+```
+
+រត់បន្ទាត់នេះម្តងទៀតពេល session ដាច់ — **Key ដដែល** (រក្សាក្នុង `/content/.demucs-service-key`)
+ដូច្នេះក្នុងសាយប្តូរតែ URL។
+
+បើ log បង្ហាញ `Failed to dial a quic connection` (network បិទ UDP 7844)៖
+
+```bash
+PROTOCOL=http2 sh colab-start.sh
+```
+
+## ដំណើរការ (notebook)
 
 1. បើក [`studio_t4.ipynb`](studio_t4.ipynb) ក្នុង [Google Colab](https://colab.research.google.com/) (File → Upload notebook)
 2. Runtime → Change runtime type → **T4 GPU**

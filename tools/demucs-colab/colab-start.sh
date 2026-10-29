@@ -1,276 +1,217 @@
-#!/usr/bin/env sh
-# បើក Demucs API នៅលើ Google Colab (GPU) + tunnel — បញ្ជាតែមួយ។
+#!/bin/sh
+# colab-start.sh — open the stem service with one pasted line.
 #
-# ក្នុង Colab cell មួយ គ្រាន់តែ paste បន្ទាត់នេះ (runtime គួរជា GPU)៖
+# In a Google Colab cell (Runtime → Change runtime type → T4 GPU):
 #
 #   !curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-colab/colab-start.sh | sh
 #
-# វាធ្វើអ្វីខ្លះ៖
-#   ១. ពិនិត្យ GPU (គ្មាន GPU ក៏ដើរបាន តែយឺតដូច CPU)
-#   ២. ដំឡើង demucs + fastapi/uvicorn (ធ្វើតែម្ដងក្នុងមួយ session)
-#   ៣. ទាញ `demucs_api.py` ពី repo — ឯកសារដូចគ្នាបេះបិទនឹងកំណែ Termux
-#   ៤. បើក API នៅ port 8001 ដោយប្រើ GPU (DEMUCS_DEVICE=auto) — port ដោយឡែកពី NLLB (8000)
-#      ដើម្បីឲ្យទាំងពីរសេវារត់ជាមួយគ្នាបានក្នុង Colab តែមួយ (បើមិនដូច្នេះ សេវាទី ២ បើកលើ port
-#      ដដែលមិនបាន ហើយ tunnel នឹងបញ្ជូនទៅសេវាចាស់ខុស)។
-#   ៥. បើក cloudflared quick tunnel រួចពិនិត្យពីខាងក្រៅថាដើរពិតៗ
-#   ៦. បង្ហាញ **URL + API key** ដែលត្រូវ paste ក្នុងកាត «ញែកភ្លេង · Demucs API» លើគេហទំព័រ
+# What it does, in order: installs Demucs and the UVR cleanup models, fetches the
+# service from the same repository, starts it on this runtime, opens a Cloudflare
+# quick tunnel, waits until the tunnel really answers, and prints the pair the
+# website's «ញែកភ្លេង · Demucs API» card wants:
 #
-# កំណត់តាម env បាន (ស្រេចចិត្ត)៖
-#   DEMUCS_API_KEY=<key ផ្ទាល់ខ្លួន>  បើទទេ = បង្កើត key ថ្មីឲ្យស្វ័យប្រវត្តិ
-#   DEMUCS_MODEL=htdemucs            ម៉ូឌែល (htdemucs លឿន · htdemucs_ft ល្អជាង តែយឺត)
-#   DEMUCS_HOME=/content/demucs-api  កន្លែងទុកឯកសារ
-#   PORT=8001                        port (tunnel បញ្ជូនមក port នេះ; NLLB ប្រើ 8000)
+#   URL : https://xxxx.trycloudflare.com
+#   API Key : 3f9c…
 #
-# ⚠️ Colab គឺជាម៉ាស៊ីនបណ្តោះអាសន្ន៖ បិទ tab ឬទុកចោល (idle) ប្រហែល ៩០ នាទី = session ដាច់
-#    ហើយ URL នោះស្លាប់។ បើយ៉ាងនោះ បើក cell នេះម្ដងទៀត រួច paste URL ថ្មីក្នុងកាត។
+# Everything here is POSIX sh and reads nothing from stdin, because the script
+# itself arrives on stdin through the pipe. Its children get /dev/null as stdin
+# for the same reason.
+#
+# Re-running it is normal — it stops what the previous run started, keeps the
+# same API key (so the site does not need re-editing), and prints the new URL.
+#
+# Optional environment:
+#   SERVICE_KEY   a key you choose; otherwise one is generated and remembered
+#   DEMUCS_MODEL  default htdemucs (htdemucs_ft is slower but cleaner)
+#   PORT          default 8920
+#   SKIP_INSTALL=1  skip pip when the packages are already there
+#   SKIP_TUNNEL=1   start the service only; no public tunnel
+#   PROTOCOL=http2  tunnel over TCP instead of QUIC, for a network that blocks
+#                   UDP to Cloudflare's edge (the log then says
+#                   "Failed to dial a quic connection")
+
 set -u
 
-PORT="${PORT:-8001}"
-RAW="${DEMUCS_RAW:-https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/demucs-termux}"
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main}"
+SERVICE_PY="${REPO_RAW}/tools/colab/service.py"
+PORT="${PORT:-8920}"
+DEMUCS_MODEL="${DEMUCS_MODEL:-htdemucs}"
 
-# កន្លែងទុកឯកសារ៖ Colab មាន `/content` ដែលសរសេរបាន — បើគ្មាន ប្រើផ្ទះរបស់អ្នក។
-DIR="${DEMUCS_HOME:-}"
-if [ -z "$DIR" ]; then
-  if [ -d /content ] && [ -w /content ]; then
-    DIR=/content/demucs-api
-  else
-    DIR="$HOME/demucs-api"
-  fi
+# /content is Colab's session disk; anywhere else keep the files beside the
+# caller so the script can be tried outside Colab too.
+if [ -d /content ] && [ -w /content ]; then
+  WORK="${WORK:-/content}"
+else
+  WORK="${WORK:-$PWD/colab-stem-service}"
 fi
+mkdir -p "$WORK" || exit 1
 
-say() { printf '\n===== %s =====\n' "$1"; }
-# ពិនិត្យថាអ្វីដែលនៅលើ port នេះជា Demucs ពិត — មិនមែនគ្រាន់តែ «មានអ្វីមួយឆ្លើយតប»។
-# NLLB API ក៏ឆ្លើយ {"status":"ok"} ដូចគ្នា ដូច្នេះបើសាកត្រឹម status យើងអាចចាប់ tunnel ទៅ
-# សេវាខុស (ឧ. NLLB ដែលកំពុងរត់) ហើយគេហទំព័រនឹងទទួល URL ខុស។
-api_up() { curl -s --max-time 3 "http://127.0.0.1:$PORT/" 2>/dev/null | grep -qi 'demucs'; }
-# តើមានអ្វីកំពុងស្តាប់អ្វីមួយនៅ port $1 ឬអត់ (គ្មានអ្វី = ទំនេរ)។
-port_listening() { curl -s --max-time 2 "http://127.0.0.1:$1/" >/dev/null 2>&1; }
-
-mkdir -p "$DIR" || { echo "❌ បង្កើតថត $DIR មិនបានទេ"; exit 1; }
-cd "$DIR" || { echo "❌ ចូលថត $DIR មិនបានទេ"; exit 1; }
-
-say "១/៦  ពិនិត្យ GPU"
-python3 - <<'PY' || echo "  (រកមិនឃើញ torch — នឹងដំឡើងនៅជំហានបន្ទាប់)"
-try:
-    import torch
-    if torch.cuda.is_available():
-        print("  GPU:", torch.cuda.get_device_name(0), "· CUDA", torch.version.cuda)
-    else:
-        print("  គ្មាន GPU ក្នុង runtime នេះ — API នឹងដើរលើ CPU (យឺតជាងច្រើន)")
-        print("  ➜ ក្នុង Colab: Runtime → Change runtime type → T4 GPU")
-except Exception as err:  # noqa: BLE001
-    print("  torch មិនទាន់មាន៖", err)
-PY
-
-say "២/៦  ដំឡើង Demucs"
-need_demucs() { ! python3 -c "import demucs" >/dev/null 2>&1; }
-
-if need_demucs; then
-  echo "ចំណាយពេល ១–៣ នាទី (ធ្វើតែម្ដងក្នុងមួយ session)..."
-  # វិធីទី ១ — ដំឡើងតែ `demucs` និងបណ្ណាល័យដែលវាត្រូវការ ដោយ **រក្សា torch/torchaudio
-  # របស់ Colab ដដែល**។ វាជាសំណុំដែលភ្ជាប់មកជាមួយ CUDA ស្រាប់ ដូច្នេះការទាញវាថ្មី
-  # គ្រាន់តែធ្វើឲ្យ GPU ឈប់ដំណើរការ (និងចំណាយពេលច្រើន)។
-  pip install -q --disable-pip-version-check --no-input demucs --no-deps || true
-  pip install -q --disable-pip-version-check --no-input \
-    einops julius lameenc openunmix pyyaml dora-search || true
-  pip install -q --disable-pip-version-check --no-input \
-    fastapi 'uvicorn[standard]' python-multipart || true
-
-  if need_demucs; then
-    # វិធីទី ២ — ឲ្យ pip ដោះស្រាយតម្រូវការទាំងអស់ដោយខ្លួនឯង (អាចធ្វើឲ្យ torch ប្តូរ)។
-    echo "  សាកវិធីទី ២ (pip ដោះស្រាយតម្រូវការទាំងអស់)..."
-    pip install -q --disable-pip-version-check --no-input \
-      demucs fastapi 'uvicorn[standard]' python-multipart || true
-  fi
-fi
-
-python3 -c "import demucs" >/dev/null 2>&1 || {
-  echo "❌ ដំឡើង demucs មិនចេញទេ។ សារកំហុសចុងក្រោយ៖"
-  pip install demucs 2>&1 | tail -15
+say() { printf '%s\n' "$*"; }
+step() { printf '\n==> %s\n' "$*"; }
+die() {
+  printf '\n!! %s\n' "$*" >&2
   exit 1
 }
-python3 -c "import fastapi, uvicorn" >/dev/null 2>&1 || {
-  echo "❌ ដំឡើង fastapi/uvicorn មិនចេញទេ — សាកម្ដងទៀតដោយ៖ pip install fastapi uvicorn"
-  exit 1
-}
-echo "demucs រួចរាល់ ✅"
 
-say "៣/៦  ទាញឯកសារ API (demucs_api.py)"
-if ! curl -fsSL -o demucs_api.py.new "$RAW/demucs_api.py"; then
-  echo "❌ ទាញឯកសារមិនបាន — ពិនិត្យ internet រួចសាកម្ដងទៀត"
-  exit 1
+command -v python3 >/dev/null 2>&1 || die "python3 រកមិនឃើញ — សូមប្រើ Colab (Runtime → T4 GPU) ឬ Termux។"
+
+# ---------------------------------------------------------------- 1. the machine
+step "1/5 ពិនិត្យម៉ាស៊ីន"
+if command -v nvidia-smi >/dev/null 2>&1; then
+  nvidia-smi -L 2>/dev/null | head -2 || true
+else
+  say "គ្មាន GPU — វានឹងដើរលើ CPU (យឺតជាង ~៣–៨ ដង)។ ក្នុង Colab: Runtime → Change runtime type → T4 GPU ។"
 fi
-mv demucs_api.py.new demucs_api.py
-ls -l demucs_api.py
 
-# key៖ បើអ្នកមិនបានកំណត់ DEMUCS_API_KEY យើងបង្កើតមួយឲ្យ រួចបង្ហាញវា ដើម្បី paste ក្នុងកាត។
-KEY="${DEMUCS_API_KEY:-}"
-if [ -z "$KEY" ]; then
-  KEY="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+# ------------------------------------------------------------------ 2. packages
+step "2/5 តំឡើងម៉ូឌែល (លើកដំបូង ~៣–៦ នាទី)"
+if [ "${SKIP_INSTALL:-0}" = "1" ]; then
+  say "រំលងការតំឡើង (SKIP_INSTALL=1)"
+elif python3 -c 'import demucs, fastapi, uvicorn, multipart' >/dev/null 2>&1 &&
+  command -v audio-separator >/dev/null 2>&1; then
+  say "ទាំងអស់មានរួចហើយ — រំលងការតំឡើង"
+else
+  say "កំពុងតំឡើង Demucs + audio-separator (UVR) ..."
+  python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+  python3 -m pip install -q demucs "audio-separator[gpu]" fastapi "uvicorn[standard]" python-multipart ||
+    die "pip install បរាជ័យ។ សូមរត់បន្ទាត់នេះម្តងទៀត (ការតំឡើងដែលរួចហើយមិនត្រូវធ្វើម្តងទៀតទេ)។"
+  say "តំឡើងរួចរាល់"
 fi
-MODEL="${DEMUCS_MODEL:-htdemucs}"
 
-# បិទជំនាន់ចាស់ (ឧ. ពេលរត់ cell នេះម្ដងទៀត) ដើម្បីកុំឲ្យមានពីរនៅលើ port តែមួយ។
-pkill -f demucs_api.py 2>/dev/null || true
+if ! command -v ffmpeg >/dev/null 2>&1; then
+  say "តំឡើង ffmpeg ..."
+  (apt-get -qq update && apt-get -qq install -y ffmpeg) >/dev/null 2>&1 || true
+fi
+
+# ----------------------------------------------------------------- 3. key + code
+KEY_FILE="$WORK/.demucs-service-key"
+if [ -n "${SERVICE_KEY:-}" ]; then
+  KEY="$SERVICE_KEY"
+elif [ -f "$KEY_FILE" ]; then
+  KEY=$(cat "$KEY_FILE")
+else
+  KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))') || die "បង្កើត key មិនបាន"
+  printf '%s' "$KEY" >"$KEY_FILE"
+  chmod 600 "$KEY_FILE" 2>/dev/null || true
+fi
+[ -n "$KEY" ] || die "SERVICE_KEY ទទេ — សូមទុកវាទទេ ដើម្បីឲ្យស្គ្រីបបង្កើតឲ្យ"
+
+step "3/5 ទាញ service"
+curl -fsSL "$SERVICE_PY" -o "$WORK/service.py" ||
+  die "ទាញ service.py បរាជ័យ — ពិនិត្យអ៊ីនធឺណិត ឬ REPO_RAW"
+say "សរសេររួច: $WORK/service.py"
+
+# ------------------------------------------------------------------ 4. the service
+step "4/5 បើក service នៅ port $PORT"
+pkill -f "uvicorn service:app" >/dev/null 2>&1 || true
+pkill -f "cloudflared tunnel --url http://localhost:$PORT" >/dev/null 2>&1 || true
 sleep 1
 
-# បើ port នេះមានសេវាផ្សេង (ឧ. NLLB) កាន់រួច សាក port បន្ទាប់ ដើម្បីកុំបើកលើសេវានោះ។
-_tries=0
-while [ "$_tries" -lt 12 ]; do
-  if ! port_listening "$PORT" || api_up; then break; fi
-  echo "  ⚠️ port $PORT មានសេវាផ្សេងកាន់រួច — សាក port $((PORT + 1))..."
-  PORT=$((PORT + 1))
-  _tries=$((_tries + 1))
+cd "$WORK" || die "ចូល $WORK មិនបាន"
+SERVICE_KEY="$KEY" \
+  DEMUCS_MODEL="$DEMUCS_MODEL" \
+  SERVICE_FILES="$WORK/stems" \
+  nohup python3 -m uvicorn service:app --host 0.0.0.0 --port "$PORT" \
+  </dev/null >"$WORK/service.log" 2>&1 &
+
+HEALTH=""
+i=0
+while [ "$i" -lt 60 ]; do
+  if HEALTH=$(curl -fsS -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/health" 2>/dev/null); then
+    break
+  fi
+  HEALTH=""
+  i=$((i + 1))
+  sleep 2
 done
+if [ -z "$HEALTH" ]; then
+  say "service មិនឆ្លើយ — ២០ បន្ទាត់ចុងក្រោយនៃ log:"
+  tail -20 "$WORK/service.log" 2>/dev/null || true
+  die "service បើកមិនបាន (មើល $WORK/service.log)"
+fi
+say "service ឆ្លើយ: $HEALTH"
 
-say "៤/៦  បើក API នៅ port $PORT (model: $MODEL)"
-# កត់ត្រា port ពិតដែលកំពុងប្រើ — notebook cell ទី ៣ និងមនុស្សអាចមើលវាបាន។
-printf '%s\n' "$PORT" > "$DIR/port.txt" 2>/dev/null || true
-: > api.log
+if [ "${SKIP_TUNNEL:-0}" = "1" ]; then
+  printf '\nURL : http://127.0.0.1:%s\nAPI Key : %s\n' "$PORT" "$KEY"
+  exit 0
+fi
 
-# setsid ដើម្បីឲ្យ API មិនត្រូវបិទ ពេល cell ចប់។ `< /dev/null` សំខាន់ពេលស្គ្រីបមកពី `curl | sh`៖
-# កូន process មិនត្រូវកាន់ stdin (ដែលជា pipe) ទេ បើមិនដូច្នេះវាទាញអក្សរស្គ្រីបខាងក្រោមបាត់។
-DEMUCS_API_KEY="$KEY" DEMUCS_MODEL="$MODEL" DEMUCS_DEVICE="${DEMUCS_DEVICE:-auto}" \
-  DEMUCS_DATA_DIR="$DIR/stems" DEMUCS_HOST=127.0.0.1 PORT="$PORT" \
-  setsid python3 demucs_api.py > api.log 2>&1 < /dev/null &
+# --------------------------------------------------------------------- 5. tunnel
+step "5/5 បើក tunnel (Cloudflare)"
+BIN="$WORK/bin"
+mkdir -p "$BIN"
+if command -v cloudflared >/dev/null 2>&1; then
+  CF=$(command -v cloudflared)
+elif [ -x "$BIN/cloudflared" ]; then
+  CF="$BIN/cloudflared"
+else
+  case "$(uname -m)" in
+    aarch64 | arm64) ARCH=arm64 ;;
+    *) ARCH=amd64 ;;
+  esac
+  say "ទាញ cloudflared ($ARCH) ..."
+  curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH" \
+    -o "$BIN/cloudflared" || die "ទាញ cloudflared បរាជ័យ — ពិនិត្យអ៊ីនធឺណិត"
+  chmod +x "$BIN/cloudflared"
+  CF="$BIN/cloudflared"
+fi
 
+: >"$WORK/tunnel.log"
+if [ -n "${PROTOCOL:-}" ]; then
+  say "ប្រើ protocol $PROTOCOL"
+  nohup "$CF" tunnel --no-autoupdate --protocol "$PROTOCOL" --url "http://localhost:$PORT" \
+    </dev/null >"$WORK/tunnel.log" 2>&1 &
+else
+  nohup "$CF" tunnel --no-autoupdate --url "http://localhost:$PORT" \
+    </dev/null >"$WORK/tunnel.log" 2>&1 &
+fi
+
+URL=""
 i=0
 while [ "$i" -lt 40 ]; do
-  api_up && break
+  URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$WORK/tunnel.log" 2>/dev/null | head -1)
+  [ -n "$URL" ] && break
   i=$((i + 1))
-  sleep 1
+  sleep 2
 done
-
-if ! api_up; then
-  echo "❌ API មិនឡើងទេ។ សារកំហុសចុងក្រោយ៖"
-  tail -25 api.log
-  exit 1
-fi
-INFO="$(curl -s "http://127.0.0.1:$PORT/")"
-echo "API ដំណើរការហើយ ✅  $INFO"
-
-say "៥/៦  បើក tunnel (Cloudflare)"
-
-LOG="$DIR/cloudflared.log"
-CF_BIN="$(command -v cloudflared 2>/dev/null || true)"
-if [ -z "$CF_BIN" ]; then
-  CF_BIN="$DIR/cloudflared"
-  if [ ! -x "$CF_BIN" ]; then
-    case "$(uname -m)" in
-      aarch64|arm64) A=arm64 ;;
-      armv7l|armv8l) A=arm ;;
-      *) A=amd64 ;;
-    esac
-    echo "ដំឡើង cloudflared ($A)..."
-    curl -fsSL -o "$CF_BIN" \
-      "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$A" \
-      || { echo "❌ ទាញ cloudflared មិនបាន"; exit 1; }
-    chmod +x "$CF_BIN" 2>/dev/null || true
-  fi
-fi
-
-# ---- បើ tunnel ចាស់ (ក្នុង session នេះ) នៅដើរ និង URL នៅឆ្លើយតប — ប្រើវាបន្ត ----
-REUSE=""
-PREV=""
-if [ -f "$DIR/tunnel-url.txt" ]; then
-  PREV=$(head -n 1 "$DIR/tunnel-url.txt" 2>/dev/null | tr -d ' \r\n')
-fi
-if [ -n "$PREV" ] && curl -s --max-time 10 "$PREV/" 2>/dev/null | grep -qi 'demucs'; then
-  REUSE="$PREV"
-fi
-
-if [ -z "$REUSE" ]; then
-  : > "$LOG"
-  # បិទតែ tunnel របស់សេវានេះ (តាម port) — មិនប៉ះ tunnel របស់សេវាផ្សេង (ឧ. NLLB
-  # និង Demucs រត់ក្នុង Colab តែមួយ)។ `pkill -f "cloudflared tunnel"` ធ្លាប់បិទ
-  # ទាំងអស់ ដូច្នេះការបើកសេវាមួយ ធ្វើឲ្យសេវាមួយទៀតដាច់ (Cloudflare error 1033)។
-  pkill -f "cloudflared.*:$PORT" 2>/dev/null || true
-  sleep 1
-  # `127.0.0.1` ដោយចំ (មិនមែន `localhost`) ព្រោះ API ស្តាប់តែ IPv4។
-  setsid "$CF_BIN" tunnel --protocol http2 --edge-ip-version 4 --no-autoupdate \
-    --url "http://127.0.0.1:$PORT" > "$LOG" 2>&1 < /dev/null &
-else
-  echo "Tunnel ចាស់នៅដើរទេ — ប្រើ URL ដដែល ✅"
-fi
-
-wait_url() { # $1=log  $2=គំរូ  $3=វិនាទី
-  n=0
-  found=""
-  while [ "$n" -lt "$3" ]; do
-    found=$(grep -o "$2" "$1" 2>/dev/null | tail -1 || true)
-    if [ -n "$found" ]; then
-      printf '%s' "$found"
-      return 0
-    fi
-    n=$((n + 1))
-    printf '.' >&2
-    sleep 1
-  done
-  return 1
-}
-
-if [ -n "$REUSE" ]; then
-  URL="$REUSE"
-else
-  echo "រង់ចាំ URL ពី Cloudflare (រហូត ៩០ វិនាទី, ចំណុច = កំពុងដំណើរការ)"
-  printf '  '
-  URL=$(wait_url "$LOG" 'https://[a-zA-Z0-9-]*\.trycloudflare\.com' 90 || true)
-  printf '\n'
-fi
-
 if [ -z "$URL" ]; then
-  echo "❌ Cloudflare មិនចេញ URL ទេ។ log ចុងក្រោយ៖"
-  tail -10 "$LOG"
-  exit 1
+  tail -20 "$WORK/tunnel.log" 2>/dev/null || true
+  die "tunnel មិនបាន URL — សូមរត់បន្ទាត់នេះម្តងទៀត"
 fi
 
-printf '%s\n' "$URL" > "$DIR/tunnel-url.txt" 2>/dev/null || true
-
-say "៦/៦  ពិនិត្យថា URL ដើរពិតពីខាងក្រៅ"
-ok=0
-k=0
-while [ "$k" -lt 8 ]; do
-  body=$(curl -s --max-time 15 "$URL/" 2>/dev/null || true)
-  if printf '%s' "$body" | grep -qi 'demucs'; then ok=1; break; fi
-  if printf '%s' "$body" | grep -qi 'nllb'; then
-    echo "❌ tunnel នេះបញ្ជូនទៅ NLLB API មិនមែន Demucs — port $PORT កំពុងត្រូវសេវាផ្សេងកាន់។"
-    echo "   បិទសេវានោះមុន (pkill -f nllb_api.py) រួចរត់ cell នេះម្តងទៀត។"
-    exit 1
+# The tunnel needs a few seconds before Cloudflare routes to it; the site's
+# «រក្សាទុក និងសាកល្បង» button must not be the first thing that reaches it.
+READY=0
+i=0
+while [ "$i" -lt 45 ]; do
+  if curl -fsS -H "Authorization: Bearer $KEY" "$URL/health" >/dev/null 2>&1; then
+    READY=1
+    break
   fi
-  k=$((k + 1))
-  echo "  នៅមិនទាន់ឆ្លើយ — សាកម្តងទៀត ($k/8)"
-  sleep 6
+  i=$((i + 1))
+  sleep 2
 done
 
-echo
-if [ "$ok" = "1" ]; then
-  cat <<EOF
+DEVICE=$(printf '%s' "$HEALTH" | grep -o '"device":"[a-z]*"' | head -1 | cut -d'"' -f4)
 
-✅ ✅ ✅  DEMUCS លើ COLAB ដំណើរការហើយ!
-
-  ចម្លងតម្លៃទាំង ២ នេះទៅក្នុងកាត «ញែកភ្លេង · Demucs API» លើគេហទំព័រ
-  (ជំហានទី ៤ ក្នុងកាត) រួចចុច «រក្សាទុក និងសាកល្បង»៖
-
-    URL      : $URL
-    API Key  : $KEY
-
-  បើសាកល្បងជោគជ័យ វាបង្ហាញឈ្មោះ service **និង device** — ត្រូវឃើញ «cuda» (= កំពុងប្រើ GPU)។
-  បើឃើញ «cpu» នោះ runtime គ្មាន GPU៖ Runtime → Change runtime type → T4 GPU រួចរត់ cell នេះម្តងទៀត។
-
-  ផ្ទៀងផ្ទាត់ក្នុង browser បានផង៖  $URL/   (គួរឃើញ {"status":"ok",...,"device":"cuda"})
-
-  ⚠️ ទុក tab នេះចោលបើកចុះ។ បិទ tab ឬទុក idle ~៩០ នាទី = session ដាច់ ហើយការញែកភ្លេងឈប់
-     (ការងារបកប្រែនៅតែដំណើរការ តែគ្មានការញែកភ្លេង)។ ពេលនោះ៖ បើក cell នេះម្ដងទៀត
-     រួច paste URL ថ្មីក្នុងកាត (API Key ដដែល បើអ្នកកំណត់ DEMUCS_API_KEY ខាងលើ)។
-
-  មើល log ផ្ទាល់៖   tail -f $DIR/api.log
-  បិទ API៖           pkill -f demucs_api.py
-  បិទ tunnel៖        pkill -f "cloudflared.*:$PORT"
-EOF
+printf '\n============================================================\n'
+printf '  ចម្លងប្លុកនេះទៅកាត «ញែកភ្លេង · Demucs API» ក្នុងសាយ\n'
+printf '============================================================\n'
+printf 'URL : %s\n' "$URL"
+printf 'API Key : %s\n' "$KEY"
+printf '============================================================\n'
+[ -n "$DEVICE" ] && printf 'ឧបករណ៍ : %s\n' "$DEVICE"
+if [ "$READY" = "1" ]; then
+  printf 'ស្ថានភាព : រួចរាល់ — tunnel ឆ្លើយតបរួចហើយ\n'
+elif grep -q 'Registered tunnel connection' "$WORK/tunnel.log" 2>/dev/null; then
+  printf 'ស្ថានភាព : tunnel ភ្ជាប់ហើយ តែមិនទាន់ឆ្លើយ — រង់ចាំ ~១៥ វិនាទីទៀត រួចសាកល្បងម្តងទៀត\n'
 else
-  echo "❌ TUNNEL នៅមិនដើរទេ (URL នោះទទេពីខាងក្រៅ)។ log ចុងក្រោយ៖"
-  tail -12 "$LOG"
-  echo
-  echo "សាកម្ដងទៀត៖ pkill -f \"cloudflared.*:$PORT\" រួចរត់ cell នេះម្តងទៀត"
-  exit 1
+  printf 'ស្ថានភាព : cloudflared មិនអាចភ្ជាប់ទៅ Cloudflare បានទេ — URL នេះនឹងបង្ហាញ Error 1033\n'
+  printf '            មូលហេតុធម្មតា: network បិទ UDP 7844។ សាករត់ម្តងទៀតដោយ:\n'
+  printf '            PROTOCOL=http2 sh colab-start.sh\n'
+  tail -2 "$WORK/tunnel.log" 2>/dev/null | sed 's/^/            /' || true
 fi
+printf '\n'
+say "• ទុក tab នេះបើកចុះ — បិទ tab ឬទុក idle ~៩០ នាទី = session ដាច់ ហើយ URL ស្លាប់។"
+say "• session ដាច់ → រត់បន្ទាត់នេះម្តងទៀត។ Key ដដែល (រក្សាក្នុង $KEY_FILE) ដូច្នេះក្នុងសាយប្តូរតែ URL។"
+say "• stem រក្សាក្នុង $WORK/stems រហូត session ដាច់។ log: $WORK/service.log · $WORK/tunnel.log"
