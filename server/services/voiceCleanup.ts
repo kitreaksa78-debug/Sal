@@ -39,9 +39,9 @@ const MAX_CHUNK_SECONDS = 240;
 /** A span shorter than this is a click, not a pause worth editing around. */
 const MIN_SPAN_SECONDS = 0.25;
 /** Segments the model is less sure than this about are ignored. */
-const MIN_CONFIDENCE = 0.45;
+const MIN_CONFIDENCE = 0.4;
 /** Never remove more than this share of the recording, whatever the model says. */
-const MAX_REMOVED_SHARE = 0.4;
+const MAX_REMOVED_SHARE = 0.6;
 /** The cut expression is one FFmpeg argument; keep it a sane length. */
 const MAX_CUT_SPANS = 64;
 
@@ -51,7 +51,7 @@ const activeJobs = new Set<string>();
 const KHMER_MESSAGES = {
   extracting: 'កំពុងអានបន្ទាត់សំឡេងពីឯកសារ...',
   analysing: 'Gemini កំពុងស្តាប់ និងរកកន្លែងដែលមានសំឡេងរំខាន...',
-  cleaning: 'កំពុងកាត់សំឡេងរំខានចេញ និងធ្វើឲ្យសំឡេងច្បាស់ (FFmpeg)...',
+  cleaning: 'កំពុងកាត់សំឡេងរំខានចេញ ដោយរក្សាសំឡេងដើមដដែល...',
   packaging: 'កំពុងបម្លែងសំឡេងស្អាតទៅជាឯកសារទាញយក...',
   done: 'សម្អាតសំឡេងរួចរាល់! អ្នកអាចស្តាប់ប្រៀបធៀប និងទាញយកបានហើយ។',
 };
@@ -71,21 +71,24 @@ interface ChunkVerdict {
 }
 
 const ANALYSIS_PROMPT = (index: number, count: number, lengthSeconds: number) =>
-  `You are an audio-restoration editor preparing a vocal recording (speech or singing) for release.
+  `You are an audio editor cutting a single performer's take (one singer, or one speaker) for release.
 
 You are hearing part ${index} of ${count} of the recording. This part is ${lengthSeconds.toFixed(
     1
   )} seconds long.
 
-Your job: mark the stretches that contain ONLY disturbance and no human voice, so an editor can delete them. Disturbance means: hiss, hum, electrical buzz, wind, fan/air-conditioning, room rumble, traffic, clicks/pops, chair squeaks, papers, crowd chatter, background music bleeding in, or any other non-voice sound.
+The performer is the voice this recording is about: the closest, most continuous one. Everything else in the room is disturbance and should be cut out: hiss, hum, electrical buzz, wind, fan or air-conditioning, room rumble, traffic, clicks and pops, chair squeaks, papers, crowd noise, music or TV/radio bleeding in, and other people talking around the performer.
+
+Mark the stretches that do NOT belong to the performer's voice.
 
 Rules — follow them exactly:
-- A span must contain NO audible voice. Never include pauses between words, breaths, phrasing gaps, instrumental/vocal tails, or any moment where a word, syllable or note can be heard. When in doubt, leave the span out.
-- Spans are in seconds from the START OF THIS PART (0 = the first sample you hear), with boundaries accurate to about 0.1 s, and each span at least 0.2 s long.
-- If the whole part is voice with nothing to remove, return an empty list. An empty list is a perfectly good answer.
+- Never include a stretch where the performer is audible, even a syllable or a note. When you cannot tell whether a voice is the performer or someone else, leave the stretch in.
+- Someone talking over the performer cannot be removed by cutting without losing the performance — only mark voices that sit in their own separate stretch.
+- Pauses, breaths and tails inside the performance are part of it: leave them in.
+- Spans are in seconds from the START OF THIS PART (0 = the first sample you hear), boundaries accurate to about 0.1 s, each span at least 0.2 s long.
 
 Answer with JSON only, in this exact shape:
-{"voice": true|false, "speechFraction": 0.0-1.0, "noise": [{"start": 0.0, "end": 0.0, "kind": "hiss|hum|click|wind|rumble|fan|chatter|crowd|music|other", "confidence": 0.0-1.0, "why": "short reason"}]}`;
+{"voice": true|false, "speechFraction": 0.0-1.0, "noise": [{"start": 0.0, "end": 0.0, "kind": "hiss|hum|click|wind|rumble|fan|chatter|other-voices|crowd|music|other", "confidence": 0.0-1.0, "why": "short reason"}]}`;
 
 /** Accept seconds, milliseconds or a mm:ss string; return seconds. */
 function toSeconds(value: unknown): number | null {
@@ -210,20 +213,24 @@ function cleanupFilters(cuts: NoiseSpan[]): string {
   const filters: string[] = [];
 
   if (cuts.length) {
-    // `between` returns 1 inside a span; the sum is 0 exactly where the voice
-    // is, and `not(...)` therefore keeps only the parts worth keeping.
+    // The expression is quoted: a filter argument is split on commas, so
+    // `between(t,a,b)` has to be quoted or escaped, and getting that wrong turns
+    // "4.00" into a filter name ("No such filter: '4.00'"). Single quotes make
+    // the commas literal, and the sum is 0 exactly where the performer is, so
+    // `not(...)` keeps every frame that belongs to the voice.
     const expr = `not(${cuts
-      .map((span) => `between(t\\,${span.start.toFixed(2)}\\,${span.end.toFixed(2)})`)
+      .map((span) => `between(t,${span.start.toFixed(2)},${span.end.toFixed(2)})`)
       .join('+')})`;
-    filters.push(`aselect=${expr}`, 'asetpts=N/SR/TB');
+    filters.push(`aselect='${expr}'`, 'asetpts=N/SR/TB');
   }
 
-  filters.push(
-    'highpass=f=70',
-    'lowpass=f=14000',
-    `afftdn=nr=${process.env.GEMINI_CLEANUP_NR || '18'}:nf=${process.env.GEMINI_CLEANUP_NF || '-32'}`,
-    'loudnorm=I=-16:TP=-1.5:LRA=11'
-  );
+  // Off by default: the owner wants the take to keep its own sound, and an
+  // EQ/denoise/loudnorm chain audibly re-tones a voice. `GEMINI_CLEANUP_NR`
+  // enables a gentle `afftdn` pass for a recording whose hiss must go too.
+  const nr = Number(process.env.GEMINI_CLEANUP_NR || '0');
+  if (Number.isFinite(nr) && nr > 0) {
+    filters.push(`afftdn=nr=${nr}:nf=${process.env.GEMINI_CLEANUP_NF || '-32'}`);
+  }
 
   return filters.join(',');
 }
@@ -379,16 +386,19 @@ export class CleanupProcessor {
         status: 'cleaning_audio',
         progress: 62,
         message: plan.cuts.length
-          ? `Removing ${plan.cuts.length} noise stretch(es) and denoising...`
-          : 'Denoising the voice...',
+          ? `Cutting ${plan.cuts.length} noise stretch(es) out...`
+          : 'No noise stretch worth cutting — keeping the take as recorded',
         khmerMessage: KHMER_MESSAGES.cleaning,
       });
 
       const cleanWav = path.join(workDir, 'clean.wav');
+      const filter = cleanupFilters(plan.cuts);
+      // With nothing to cut and no denoise, the audio passes through as it is:
+      // this studio removes what is *around* the voice, never re-tones the voice.
       await FFmpegHelper.execute([
         '-y', '-v', 'error',
         '-i', inputWav,
-        '-af', cleanupFilters(plan.cuts),
+        ...(filter ? ['-af', filter] : []),
         '-ac', '2',
         '-ar', '44100',
         cleanWav,

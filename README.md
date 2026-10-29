@@ -65,15 +65,18 @@ disturbance removed.
 
 Gemini cannot return audio, so it is used for what it is good at: **listening**.
 Each `GEMINI_CLEANUP_CHUNK_SECONDS` slice (default 120 s, mono 16 kHz MP3) is sent
-inline, and the model answers with strict JSON: where the voice is, and which
-spans contain *only* noise. FFmpeg then makes the edit — `aselect` drops exactly
-those spans, `asetpts` closes the gaps, `afftdn` pulls down the remaining noise
-floor, a 70 Hz–14 kHz band-limit removes rumble and top-end hiss, and `loudnorm`
-keeps the result at broadcast level (`GEMINI_CLEANUP_NR` sets the denoise
-strength).
+inline, and the model answers with strict JSON: where the performer's voice is,
+and which spans hold everything else — hiss, fans, traffic, music or TV bleeding
+in, and other people talking around the performer. FFmpeg then makes the edit:
+`aselect` drops exactly those spans and `asetpts` closes the gaps.
 
-Model answers are suggestions, not commands: spans under 0.25 s or under 45%
-confidence are dropped, touching spans are merged, and **no more than 40%** of a
+**Nothing else touches the sound.** The frames that survive are the original
+ones, so the voice keeps its own tone, dynamics and level — no EQ, no denoise, no
+loudness change. A recording whose hiss must also go can enable a gentle
+`afftdn` pass with `GEMINI_CLEANUP_NR` (off by default).
+
+Model answers are suggestions, not commands: spans under 0.25 s or under 40%
+confidence are dropped, touching spans are merged, and **no more than 60%** of a
 recording can ever be removed — a bad opinion must not delete the performance.
 
 The pipeline shows on screen as `extracting_audio → analyzing_audio →
