@@ -46,7 +46,9 @@ const ANALYSIS_TIMEOUT_MS = Math.max(
 /** How many lines one job may voice — a whole album is not one request. */
 const MAX_LINES = 240;
 /** A hurried voice is still a voice: past this it stops sounding human. */
-const MAX_TEMPO = 1.8;
+const MAX_TEMPO = 1.9;
+/** How far a model's estimate may be from the real onset and still be trusted. */
+const SNAP_TOLERANCE = 0.7;
 /** Shorter than this and there is nothing to say. */
 const MIN_LINE_SECONDS = 0.35;
 
@@ -87,9 +89,10 @@ Do two things, line by line:
 2. Translate each line into natural spoken Khmer — the way a Khmer singer would actually say that line, not a word-for-word rendering. Keep it short enough to be sung in the same breath.
 
 Rules — follow them exactly:
-- Times are in seconds from the START OF THIS PART (0 = the first sample you hear), accurate to about 0.1 s.
+- Times are in seconds from the START OF THIS PART (0 = the first sample you hear), accurate to about 0.1 s. "start" must be the moment the first word becomes audible and "end" the moment the last one stops: those two numbers place the Khmer line exactly where the original is sung.
 - One entry per sung phrase or sentence. If a phrase is a single held note, one entry is enough.
 - Each entry must last at least 0.4 s. Merge pauses and breaths into the neighbouring entry; skip stretches with no words at all.
+- Keep the Khmer as short as the original line: it has to be spoken inside the same few seconds, so choose the everyday short wording over a long literary one.
 - "khmer" must be Khmer script only. Names and brands that must stay as they are may stay in Latin letters, nothing else.
 - Never leave "khmer" empty: every entry you return must carry its Khmer line. If a word is unclear, translate the phrase as a whole from what surrounds it rather than dropping it.
 - Return every line in order; do not summarise or skip verses.
@@ -171,6 +174,90 @@ function readLines(
   });
 
   return lines;
+}
+
+/** One stretch of the recording that actually carries a voice. */
+export interface VoiceSpan {
+  start: number;
+  end: number;
+}
+
+/**
+ * Where the voice really is in the stem.
+ *
+ * The model estimates where a line starts from what it hears, and it is often a
+ * few tenths of a second out — enough for the Khmer line to begin before the
+ * singer does. FFmpeg's silence detector gives the exact onsets, so every model
+ * start is pulled onto the nearest real one. This is what puts the Khmer line on
+ * the original voice instead of beside it.
+ */
+export async function detectVoiceSpans(wavPath: string): Promise<VoiceSpan[]> {
+  let stderr = '';
+  try {
+    const { stderr: output } = await FFmpegHelper.execute([
+      '-hide_banner',
+      '-nostats',
+      '-i', wavPath,
+      '-af', 'silencedetect=noise=-32dB:d=0.28',
+      '-f', 'null', '-',
+    ]);
+    stderr = output;
+  } catch (err: any) {
+    // A detector that fails only costs precision, never the job.
+    stderr = String(err?.message || '');
+  }
+
+  const silences: VoiceSpan[] = [];
+  let pendingStart: number | null = null;
+  for (const line of stderr.split('\n')) {
+    const opened = /silence_start:\s*(-?[0-9.]+)/.exec(line);
+    const closed = /silence_end:\s*(-?[0-9.]+)/.exec(line);
+    if (opened) pendingStart = Math.max(0, Number(opened[1]));
+    if (closed && pendingStart !== null) {
+      silences.push({ start: pendingStart, end: Number(closed[1]) });
+      pendingStart = null;
+    }
+  }
+
+  if (!silences.length) return [{ start: 0, end: Number.MAX_SAFE_INTEGER }];
+
+  // The voice is everything the silences are not.
+  const spans: VoiceSpan[] = [];
+  let cursor = 0;
+  for (const silence of silences.sort((a, b) => a.start - b.start)) {
+    if (silence.start - cursor >= 0.25) spans.push({ start: cursor, end: silence.start });
+    cursor = Math.max(cursor, silence.end);
+  }
+  spans.push({ start: cursor, end: Number.MAX_SAFE_INTEGER });
+  return spans;
+}
+
+/** Put every line's start on the voice that is actually there. */
+function snapLinesToVoice(lines: DialogueSegment[], spans: VoiceSpan[]): void {
+  const onsets = spans.map((span) => span.start).sort((a, b) => a - b);
+  let previous = 0;
+
+  for (const line of lines) {
+    if (!onsets.length) break;
+
+    let best = line.start;
+    let bestDelta = SNAP_TOLERANCE + 1;
+    for (const onset of onsets) {
+      if (onset < previous - 0.05) continue;
+      const delta = Math.abs(onset - line.start);
+      if (delta < bestDelta) {
+        bestDelta = delta;
+        best = onset;
+      }
+    }
+
+    if (bestDelta <= SNAP_TOLERANCE) line.start = Number(best.toFixed(2));
+    if (line.start <= previous) line.start = Number((previous + 0.05).toFixed(2));
+    if (line.end < line.start + MIN_LINE_SECONDS) {
+      line.end = Number((line.start + MIN_LINE_SECONDS).toFixed(2));
+    }
+    previous = line.start;
+  }
 }
 
 interface VoicedLine {
@@ -490,6 +577,12 @@ export class KhmerDubProcessor {
       // be built in the order the song is sung.
       segments.sort((a, b) => a.start - b.start);
       const lines = segments.slice(0, MAX_LINES);
+
+      // The model's timings are close, not exact. Pull each line onto the real
+      // voice onset in the stem, so the Khmer line starts when the original
+      // singer does rather than a beat before or after.
+      const voiceSpans = await detectVoiceSpans(vocalsWav);
+      snapLinesToVoice(lines, voiceSpans);
       await db.saveSegments(jobId, lines);
 
       await update({
@@ -513,10 +606,10 @@ export class KhmerDubProcessor {
       const usedEngines = new Set<SpeechEngine>();
       let voicedCount = 0;
 
-      const voiceLine = async (segment: DialogueSegment) => {
+      const voiceLine = async (segment: DialogueSegment, allowedSlot: number) => {
         await checkpoint();
 
-        const slot = Math.max(MIN_LINE_SECONDS, segment.end - segment.start);
+        const slot = Math.max(MIN_LINE_SECONDS, allowedSlot);
         const lineDir = path.join(workDir, 'tts', segment.id);
         fs.mkdirSync(lineDir, { recursive: true });
 
@@ -533,7 +626,9 @@ export class KhmerDubProcessor {
         await FFmpegHelper.execute([
           '-y', '-v', 'error',
           '-i', speech.file,
-          '-af', tempo > 1.02 ? `atempo=${tempo.toFixed(3)}` : 'anull',
+          // Never past the moment the next line starts: a line that overruns is
+          // trimmed with a short fade instead of being allowed to talk over it.
+          '-af', `${tempo > 1.02 ? `atempo=${tempo.toFixed(3)}` : 'anull'},atrim=0:${slot.toFixed(3)},afade=t=out:st=${Math.max(0, slot - 0.08).toFixed(3)}:d=0.08`,
           '-ac', '2',
           '-ar', '44100',
           wavPath,
@@ -558,10 +653,16 @@ export class KhmerDubProcessor {
       await Promise.all(
         Array.from({ length: voiceWorkers }, async () => {
           for (;;) {
-            const line = lines[nextLine++];
+            const index = nextLine++;
+            const line = lines[index];
             if (!line) return;
+            const nextStart = lines[index + 1]?.start ?? duration;
+            const allowed = Math.max(
+              MIN_LINE_SECONDS,
+              Math.min(duration, nextStart) - line.start
+            );
             try {
-              await voiceLine(line);
+              await voiceLine(line, allowed);
             } catch (err: any) {
               logger.warn(`Khmer line "${line.id}" could not be voiced: ${err?.message || err}`);
             }
@@ -587,12 +688,10 @@ export class KhmerDubProcessor {
       // Order the lines the way the song runs, then keep them from overlapping:
       // a line that overruns its slot pushes the next one back instead of
       // speaking on top of it.
+      // Each line keeps its own start: the slot is enforced by speed and, at the
+      // very end, a fade — never by delaying the line, which is what made later
+      // lines drift away from the original.
       voiced.sort((a, b) => a.start - b.start);
-      let cursor = 0;
-      for (const line of voiced) {
-        line.start = Math.max(0, Math.min(duration - 0.2, Math.max(line.start, cursor)));
-        cursor = line.start + line.duration;
-      }
       const placed = voiced.filter((line) => line.start < duration - 0.2);
 
       const timelineWav = path.join(workDir, 'khmer_voice.wav');
