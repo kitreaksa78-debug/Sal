@@ -94,6 +94,14 @@ Keys are saved from that panel (mirrored to object storage so a restart keeps
 them) or supplied as `GEMINI_API_KEYS`. The browser only ever receives a mask
 (`AQ.Ab8…lq1g`), never a key.
 
+Model names are retired (Google stopped serving the 2.5 family to new projects),
+so the list in `GEMINI_MODELS` is a starting point, not a promise: when every
+configured name is refused because of the name itself, the pool asks the
+service's `ListModels` what this key can actually call, retries with the best of
+those (Flash before Flash-Lite), and keeps them for the rest of the process. That
+fallback is why a retirement does not take the studio down until someone edits a
+constant.
+
 ## Stem separation (Demucs required)
 
 Splitting the voices out of the mix runs on Demucs, reached over HTTP. Model
