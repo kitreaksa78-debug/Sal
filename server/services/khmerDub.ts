@@ -91,8 +91,9 @@ Rules — follow them exactly:
 - One entry per sung phrase or sentence. If a phrase is a single held note, one entry is enough.
 - Each entry must last at least 0.4 s. Merge pauses and breaths into the neighbouring entry; skip stretches with no words at all.
 - "khmer" must be Khmer script only. Names and brands that must stay as they are may stay in Latin letters, nothing else.
-- Never invent lyrics that are not in the audio. If a phrase cannot be understood, set "khmer" to an empty string and move on.
+- Never leave "khmer" empty: every entry you return must carry its Khmer line. If a word is unclear, translate the phrase as a whole from what surrounds it rather than dropping it.
 - Return every line in order; do not summarise or skip verses.
+- If this part holds no words at all (only breathing, humming or silence), answer {"lines": []}.
 
 Answer with JSON only, in this exact shape, with no explanation before or after it:
 {"lines":[{"start":0.0,"end":3.2,"text":"what is sung, original language","khmer":"អ្វីដែលច្រៀងជាភាសាខ្មែរ"}]}`;
@@ -418,8 +419,19 @@ export class KhmerDubProcessor {
             maxOutputTokens: 8192,
             timeoutMs: ANALYSIS_TIMEOUT_MS,
             label: `khmer dub part ${part.index + 1}/${parts.length}`,
-            parse: (value) =>
-              readLines(value, part.length, part.start, part.index),
+            parse: (value) => {
+              const lines = readLines(value, part.length, part.start, part.index);
+              // "Gemini heard nothing" is the one failure that looks like success,
+              // so the raw answer is kept in the log when a part yields no line.
+              if (!lines.length) {
+                logger.warn(
+                  `Khmer dub part ${part.index + 1} returned no usable line: ${JSON.stringify(
+                    value
+                  ).slice(0, 700)}`
+                );
+              }
+              return lines;
+            },
           });
           servedModel = result.model;
           servedKey = result.keyLabel;
