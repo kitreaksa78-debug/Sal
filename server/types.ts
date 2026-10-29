@@ -154,11 +154,35 @@ export interface CleanupReport {
   originalSeconds: number;
 }
 
+/**
+ * What the Khmer version did, shown under the finished song.
+ */
+export interface KhmerDubReport {
+  model: string;
+  keyLabel: string;
+  /** Which Khmer voice sang it. */
+  voice: 'female' | 'male';
+  voiceName: string;
+  /** Which speech engine sang it: the neural voice, the keyless fallback, or both. */
+  engine: string;
+  /** Lines Gemini found and translated. */
+  lines: number;
+  /** Lines the voice actually sang (some may not fit their slot). */
+  voiced: number;
+  chunks: number;
+  chunksFailed: number;
+  spokenSeconds: number;
+  originalSeconds: number;
+}
+
 export interface JobRecord {
   id: string;
   status: JobStatus;
-  /** Which pipeline ran: stem separation, or the Gemini voice cleanup. */
-  mode?: 'separate' | 'clean';
+  /**
+   * Which pipeline ran: stem separation, the Gemini voice cleanup, or the Khmer
+   * version built from a finished separation.
+   */
+  mode?: 'separate' | 'clean' | 'dub';
   progress: number; // 0 to 100
   message: string; // User-facing status message (Khmer or English)
   khmerMessage?: string;
@@ -187,6 +211,16 @@ export interface JobRecord {
   cleanVideoFile?: string;
   /** What the cleanup found and removed. */
   cleanup?: CleanupReport;
+  /** The Khmer version: the separated music with the translated voice over it. */
+  khmerFile?: string;
+  /** The same Khmer song played over the original picture, for a video upload. */
+  khmerVideoFile?: string;
+  /** The Khmer voice the visitor chose for this version. */
+  khmerVoice?: 'female' | 'male';
+  /** What the Khmer version did. */
+  khmer?: KhmerDubReport;
+  /** The finished separation this Khmer version was built from. */
+  sourceJobId?: string;
   segments?: DialogueSegment[];
   speakers?: SpeakerInfo[];
   outputFile?: string;

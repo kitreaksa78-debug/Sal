@@ -184,6 +184,38 @@ export function getStemDownloadUrl(
   return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
 }
 
+/**
+ * Build the Khmer version of a finished separation: Gemini translates the voice
+ * that was pulled out of the music, and a Khmer voice sings it back over that
+ * same music. Nothing is uploaded again.
+ */
+export async function createKhmerVersion(
+  jobId: string,
+  voice: 'female' | 'male' = 'female'
+): Promise<JobRecord> {
+  const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}/khmer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ voice }),
+  });
+  const data = (await res.json().catch(() => ({}))) as { job?: JobRecord; error?: string };
+  if (!res.ok || !data.job) {
+    throw new ApiError(data.error || 'មិនអាចចាប់ផ្តើមបង្កើតបទខ្មែរបានទេ។', res.status);
+  }
+  return data.job;
+}
+
+/** The Khmer version — MP3, or the MP4 twin when the original had a picture. */
+export function getKhmerDownloadUrl(
+  jobId: string,
+  format: 'mp3' | 'mp4' = 'mp3',
+  inline = false
+): string {
+  const params = new URLSearchParams({ stem: 'khmer', format });
+  if (inline) params.set('inline', '1');
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
+}
+
 // ---------------------------------------------------- stem separation service
 
 /**

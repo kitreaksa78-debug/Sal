@@ -14,6 +14,7 @@ import {
   DEMUCS_REQUIRED_MESSAGE,
 } from '../services/audioSeparation.js';
 import { CleanupProcessor } from '../services/voiceCleanup.js';
+import { KhmerDubProcessor, isKhmerVoice } from '../services/khmerDub.js';
 import { getGeminiKeys } from '../services/geminiSettings.js';
 import { JobRecord } from '../types.js';
 import { logger } from '../utils/logger.js';
@@ -185,6 +186,77 @@ router.post('/', upload.single('video'), async (req: Request, res: Response) => 
 });
 
 /**
+ * POST /api/jobs/:id/khmer
+ * Build the Khmer version of a finished separation.
+ *
+ * Nothing is uploaded again: the voice and the music were already separated and
+ * stored, so this only needs the two stems and a voice to sing them. Gemini
+ * hears the words and translates them; the Khmer voice sings them back into the
+ * slots the original lines occupied, over the separated music.
+ */
+router.post('/:id/khmer', async (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const parent = await db.getJob(req.params.id);
+
+    if (!parent) {
+      return res.status(404).json({ error: 'រកមិនឃើញការងារនេះទេ។ (Job not found)' });
+    }
+    if (parent.status !== 'completed' || !parent.vocalsFile) {
+      return res.status(400).json({
+        error:
+          'សំឡេងមិនទាន់ញែករួចទេ។ សូមរង់ចាំការញែកសំឡេងបញ្ចប់សិន។ (That separation is not finished.)',
+      });
+    }
+    if (!getGeminiKeys().keys.length) {
+      return res.status(400).json({ error: GEMINI_REQUIRED_MESSAGE });
+    }
+
+    const voice: 'female' | 'male' = isKhmerVoice(req.body?.voice) ? req.body.voice : 'female';
+    const jobId = `dub_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const newJob: JobRecord = {
+      id: jobId,
+      status: 'queued',
+      progress: 4,
+      message: 'Job queued...',
+      khmerMessage: 'កំពុងរៀបចំបទខ្មែរ...',
+      inputFile: parent.inputFile,
+      originalFilename: parent.originalFilename,
+      inputMimeType: parent.inputMimeType,
+      inputKind: parent.inputKind,
+      metadata: parent.metadata,
+      mode: 'dub',
+      sourceJobId: parent.id,
+      khmerVoice: voice,
+      vocalsFile: parent.vocalsFile,
+      musicFile: parent.musicFile,
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.createJob(newJob);
+
+    setImmediate(() => {
+      KhmerDubProcessor.processJob(jobId).catch((err) => {
+        logger.error(`Error dubbing job ${jobId}:`, err);
+      });
+    });
+
+    return res.status(201).json({
+      jobId,
+      status: 'queued',
+      message: 'Gemini កំពុងស្តាប់ និងបកប្រែបទចម្រៀងជាភាសាខ្មែរ...',
+      job: newJob,
+    });
+  } catch (err: any) {
+    logger.error('Failed to start the Khmer version:', err);
+    return res.status(500).json({
+      error: 'មិនអាចចាប់ផ្តើមបង្កើតបទខ្មែរបានទេ។ សូមសាកល្បងម្តងទៀត។',
+    });
+  }
+});
+
+/**
  * GET /api/jobs/:id
  * Get single job details
  */
@@ -263,20 +335,26 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     }
 
     const requested = String(req.query.stem || '').toLowerCase();
-    const stem: 'vocals' | 'music' | 'clean' | 'original' =
+    const stem: 'vocals' | 'music' | 'clean' | 'original' | 'khmer' =
       requested === 'music'
         ? 'music'
         : requested === 'clean'
         ? 'clean'
         : requested === 'original'
         ? 'original'
+        : requested === 'khmer'
+        ? 'khmer'
         : 'vocals';
     const wantVideo = String(req.query.format || '').toLowerCase() === 'mp4';
 
     // `clean`/`original` belong to the Gemini cleanup: the finished voice and the
     // untouched upload, played side by side. The separations keep their stems.
     const stored =
-      stem === 'clean'
+      stem === 'khmer'
+        ? wantVideo
+          ? job.khmerVideoFile
+          : job.khmerFile
+        : stem === 'clean'
         ? wantVideo
           ? job.cleanVideoFile
           : job.cleanFile
@@ -380,7 +458,11 @@ router.post('/:id/cancel', async (req: Request, res: Response) => {
 
     // Nothing is running this job in any process: mark it cancelled now instead
     // of leaving a forever-spinning entry.
-    if (!SeparationProcessor.isActive(job.id) && !CleanupProcessor.isActive(job.id)) {
+    if (
+      !SeparationProcessor.isActive(job.id) &&
+      !CleanupProcessor.isActive(job.id) &&
+      !KhmerDubProcessor.isActive(job.id)
+    ) {
       const cancelled = await db.updateJob(job.id, {
         status: 'failed',
         progress: 100,
