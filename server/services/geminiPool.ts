@@ -296,7 +296,13 @@ export async function generateGeminiJson<T>(
 
     attempts++;
     const label = keyLabel(pair.keyIndex);
-    const url = `${API_BASE}/models/${encodeURIComponent(pair.model)}:generateContent`;
+    // The key travels both ways the REST API documents: as `x-goog-api-key` and
+    // as the `key` query parameter. Newer AI Studio keys are accepted through
+    // either form, and a proxy that strips unknown headers cannot break the call
+    // when the query parameter is also present.
+    const url = `${API_BASE}/models/${encodeURIComponent(
+      pair.model
+    )}:generateContent?key=${encodeURIComponent(pair.key)}`;
     const body: Record<string, unknown> = {
       contents: [
         {
@@ -355,8 +361,21 @@ export async function generateGeminiJson<T>(
       }
 
       if (response.status === 404) {
-        markModelInvalid(pair.model, keys, `model not available (404)`);
-        failures.push(`${pair.model}: not available (404)`);
+        // A 404 can mean "this model name is not available to this project" — or
+        // "this key cannot use the Generative Language API at all", which Google
+        // also reports as 404 on the model path. Rotating past the second case
+        // hides the real reason behind three identical failures, so the answer's
+        // own wording decides: a model complaint reds out that model, anything
+        // else is surfaced as-is for the owner to act on.
+        const modelComplaint =
+          /model/i.test(text) && /not found|not supported|unsupported|does not support/i.test(text);
+        if (!modelComplaint) {
+          throw new Error(
+            `Gemini បដិសេធការហៅ (404)${detail ? `: ${detail}` : ''}`
+          );
+        }
+        markModelInvalid(pair.model, keys, `model unavailable (404)`);
+        failures.push(`${pair.model}: unavailable (404)`);
         logger.warn(`Gemini model ${pair.model} is not available; that model is now red.`);
         continue;
       }
