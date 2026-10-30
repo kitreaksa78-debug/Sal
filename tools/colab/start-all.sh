@@ -31,6 +31,11 @@ REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/kitreaksa78-debug/Sal/ma
 DEMUCS_PORT="${DEMUCS_PORT:-8920}"
 VOICE_PORT="${VOICE_PORT:-8930}"
 GATEWAY_PORT="${GATEWAY_PORT:-8080}"
+# Where the tunnel is registered, and whether that happens without pasting. One
+# PUT fills both cards: the site sees the combined `/health` and copies the
+# address to the voice card itself. `AUTO_CONNECT=0` prints the block only.
+SITE_URL="${SITE_URL:-https://sal-juma.onrender.com}"
+AUTO_CONNECT="${AUTO_CONNECT:-1}"
 
 if [ -d /content ] && [ -w /content ]; then
   WORK="${WORK:-/content/colab-studio}"
@@ -213,6 +218,26 @@ else
   printf '            PROTOCOL=http2 sh start-all.sh\n'
   tail -2 "$WORK/tunnel.log" 2>/dev/null | sed 's/^/            /' || true
 fi
+# --------------------------------------------------- 6. connect to the website
+# The site's `PUT /api/config/separator` is what the card's save button calls:
+# the same address and key, saved as if they had been pasted. The site then sees
+# the combined `/health` and fills the voice card too, so nothing is typed here.
+if [ "$AUTO_CONNECT" = "1" ]; then
+  printf '\n==> ភ្ជាប់ទៅសាយ %s\n' "$SITE_URL"
+  BODY=$(printf '{"url":"%s","apiKey":"%s"}' "$URL" "$KEY")
+  CODE=$(curl -sS --max-time 30 -o "$WORK/connect.json" -w '%{http_code}' \
+    -X PUT "$SITE_URL/api/config/separator" \
+    -H 'Content-Type: application/json' \
+    --data "$BODY" 2>/dev/null) || CODE="000"
+  if [ "$CODE" = "200" ]; then
+    printf '✅ ភ្ជាប់រួច — កាត «ញែកភ្លេង» និង «ប្តូរសំឡេង» ប្រើ URL នេះហើយ។ សូម reload ទំព័រសាយ។\n'
+  else
+    printf '⚠️  ភ្ជាប់ស្វ័យប្រវត្តិមិនបាន (HTTP %s) — សូម paste ប្លុកខាងលើចូលកាតដោយដៃ។\n' "$CODE"
+    head -c 300 "$WORK/connect.json" 2>/dev/null | sed 's/^/            /' || true
+    printf '\n'
+  fi
+fi
+
 printf '\n'
 say "• ទុក tab នេះបើកចុះ — បិទ tab ឬ idle ~៩០ នាទី = session ដាច់ ហើយ URL ស្លាប់។"
 say "• session ដាច់ → រត់បន្ទាត់នេះម្តងទៀត។ Key ដដែល (ក្នុង $KEY_FILE) ដូច្នេះប្តូរតែ URL។"
