@@ -201,7 +201,11 @@ done
 DEVICE=$(printf '%s' "$HEALTH" | grep -o '"device":"[a-z]*"' | head -1 | cut -d'"' -f4)
 
 printf '\n============================================================\n'
-printf '  ចម្លងប្លុកនេះ paste ម្តងចូលកាត «ញែកភ្លេង · Demucs API»\n'
+if [ "$AUTO_CONNECT" = "1" ]; then
+  printf '  ភ្ជាប់ទៅសាយដោយស្វ័យប្រវត្តិ — បើបរាជ័យ paste ប្លុកនេះដោយដៃ\n'
+else
+  printf '  ចម្លងប្លុកនេះ paste ម្តងចូលកាត «ញែកភ្លេង · Demucs API»\n'
+fi
 printf '  (ញែកភ្លេង + ប្តូរសំឡេង ប្រើ URL ដដែលនេះទាំងពីរ)\n'
 printf '============================================================\n'
 printf 'URL : %s\n' "$URL"
@@ -225,6 +229,8 @@ fi
 if [ "$AUTO_CONNECT" = "1" ]; then
   printf '\n==> ភ្ជាប់ទៅសាយ %s\n' "$SITE_URL"
   BODY=$(printf '{"url":"%s","apiKey":"%s"}' "$URL" "$KEY")
+  # A leftover answer from an earlier run must not be printed as this one's.
+  rm -f "$WORK/connect.json"
   CODE=$(curl -sS --max-time 30 -o "$WORK/connect.json" -w '%{http_code}' \
     -X PUT "$SITE_URL/api/config/separator" \
     -H 'Content-Type: application/json' \
