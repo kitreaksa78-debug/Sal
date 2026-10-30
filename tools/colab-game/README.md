@@ -37,7 +37,8 @@
 Kaggle notebook មាន root និង apt ដូច Colab ដែរ។ នៅទីនេះ **ទាញយកជាឯកសារសិន រួចរត់** (មិនប្រើ `| sh`) ព្រោះ program ណាដែលអាន stdin អាចស៊ីបន្ទាត់ក្នុងស្គ្រីបបាន៖
 
 ```python
-!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/colab-game/colab-game.sh | GAME=stk sh
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/colab-game/colab-game.sh -o /tmp/colab-game.sh
+!GAME=stk sh /tmp/colab-game.sh
 ```
 
 ស្គ្រីបរកឃើញ `/kaggle/working` ដោយស្វ័យប្រវត្តិ ហើយដាក់ឯកសារនៅទីនោះ។ Session របស់
