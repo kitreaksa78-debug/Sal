@@ -348,7 +348,7 @@ cat >"$WORK/web/index.html" <<'HTML'
 </html>
 HTML
 
-nohup websockify --web="$WORK/web" "$PORT" 127.0.0.1:5900 \
+nohup websockify --verbose --web="$WORK/web" "$PORT" 127.0.0.1:5900 \
   </dev/null >"$WORK/websockify.log" 2>&1 &
 sleep 3
 
@@ -397,7 +397,8 @@ if [ "$SOUND_OK" = "1" ]; then
   AUDIO_URL=$(start_tunnel "$AUDIO_PORT" "$WORK/tunnel-audio.log") || AUDIO_URL=""
 fi
 
-VNC_URL="$SCREEN_URL/vnc.html?autoconnect=1&resize=scale&path=websockify&reconnect=1&reconnect_delay=2000"
+VNC_HOST="${SCREEN_URL#https://}"
+VNC_URL="$SCREEN_URL/vnc.html?autoconnect=1&resize=scale&path=websockify&host=$VNC_HOST&port=443&encrypt=1&reconnect=1&reconnect_delay=2000"
 PAGE_URL="$SCREEN_URL/index.html"
 
 if [ -n "$AUDIO_URL" ]; then
