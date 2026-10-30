@@ -6,6 +6,7 @@ import { UploadPanel } from './components/UploadPanel';
 import { ProcessingProgress } from './components/ProcessingProgress';
 import { ResultPanel } from './components/ResultPanel';
 import { DemucsPanel } from './components/DemucsPanel';
+import { VoiceCloneApiPanel } from './components/VoiceCloneApiPanel';
 import { JobRecord } from './types';
 import {
   uploadSeparationJob,
@@ -294,6 +295,11 @@ export function App() {
 
               {/* Which Demucs/stem service does the separation. */}
               <DemucsPanel onConnectionChange={() => setDemucsCheckToken((token) => token + 1)} />
+
+              {/* Where the free voice converter (Colab/Kaggle) is pasted. It sits
+                  next to Demucs because both are set up once, before any job — a
+                  cloned dub is only offered further down the page. */}
+              <VoiceCloneApiPanel />
 
               {/* Upload Panel */}
               <UploadPanel
