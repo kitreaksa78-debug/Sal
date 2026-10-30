@@ -54,3 +54,16 @@
 - ផ្នែកនីមួយៗ (២០ វិនាទី) បម្លែងដោយឡែក ដូច្នេះសំឡេងអាចខុសគ្នាតិចៗរវាងផ្នែក។
 - បើផ្នែកណាមួយបរាជ័យ វាប្រើសំឡេងខ្មែរដើមជំនួស ដើម្បីកុំឲ្យបាត់ពាក្យ។
 - គុណភាពខ្ពស់ជាង៖ `MODE=local` + `--diffusion-steps 50` (កែក្នុងស្គ្រីប)។
+
+## ឥតគិតថ្លៃ ឥតកំណត់ចំនួនដង៖ Google Colab (Amphion DiffWaveNetSVC)
+
+`lucataco/singing_voice_conversion` ជា Cog wrapper របស់ **Amphion DiffWaveNetSVC**។ Repo របស់ HF Space
+`amphion/singing_voice_conversion` មានទាំង code និង weights ដូច្នេះ Notebook នេះទាញយកវាមករត់លើ GPU
+ឥតគិតថ្លៃរបស់ Colab — គ្មាន API key គ្មានការគិតលុយតាមដង។
+
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/kitreaksa78-debug/Sal/blob/main/tools/voice-clone/colab-amphion-svc.ipynb)
+
+លំដាប់៖ Runtime → T4 GPU → cell ១ (ដំឡើង) → cell ២ (ទាញ weights ~៥ GB) → cell ៣ (បម្លែង) → cell ៤ (ទាញយក MP3)។
+
+**សំខាន់៖** model នេះបម្លែងតែ timbre — វាមិនបកប្រែភាសាទេ។ ដូច្នេះយក stem `khmer-speech`
+(សំឡេងខ្មែរឥតភ្លេង) ពីបទដែលបកប្រែលើ site មកបម្លែងនៅទីនេះ រួចលាយជាមួយភ្លេងវិញ។
