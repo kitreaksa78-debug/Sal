@@ -212,9 +212,34 @@ def _separate_demucs(wav: Path, model_name: str, tmp: Path) -> tuple[Path, Path]
     return vocals, instrumental
 
 
-def _to_flac(source: Path, target: Path) -> None:
-    """Ship stems as FLAC: lossless, and about half the bytes of 16-bit WAV."""
-    _run(["ffmpeg", "-y", "-v", "error", "-i", str(source), "-c:a", "flac", str(target)])
+def _to_stem(source: Path, stem: Path) -> Path:
+    """Encode one finished stem for the trip back to the site.
+
+    The stems travel back over the same tunnel the audio came in on, and that
+    tunnel — not the GPU — is what limits how much audio one request can carry:
+    an uncompressed pair costs about half a megabyte for every second of audio,
+    so a one-minute piece spends most of the request window moving bytes. MP3 at
+    320 kbit/s is roughly a tenth of that and indistinguishable in the mix the
+    site builds from it (which is encoded to MP3 at the end anyway).
+
+    `STEM_FORMAT=flac` keeps the lossless path for anyone who wants it.
+    """
+    fmt = (os.environ.get("STEM_FORMAT") or "mp3").strip().lower()
+    target = stem.with_suffix(".flac" if fmt == "flac" else ".mp3")
+    if fmt == "flac":
+        codec = ["-c:a", "flac"]
+    else:
+        bitrate = (os.environ.get("STEM_BITRATE") or "320k").strip() or "320k"
+        codec = ["-c:a", "libmp3lame", "-b:a", bitrate]
+    try:
+        _run(["ffmpeg", "-y", "-v", "error", "-i", str(source), *codec, str(target)])
+        return target
+    except HTTPException:
+        # A build without libmp3lame still has to answer: FLAC always works.
+        lossless = stem.with_suffix(".flac")
+        _log(f"could not write {target.suffix}; sending {lossless.suffix} instead")
+        _run(["ffmpeg", "-y", "-v", "error", "-i", str(source), "-c:a", "flac", str(lossless)])
+        return lossless
 
 
 def _public_url(request: Request, job: str, name: str) -> str:
@@ -283,21 +308,21 @@ async def separate(request: Request):
         model = str(form.get("model") or DEMUCS_MODEL).strip() or DEMUCS_MODEL
         vocals, instrumental = _separate_demucs(wav, model, tmp)
 
-        # FLAC, not WAV: the stems travel back over the same tunnel the audio came
-        # in on, so half the bytes is half the download for every piece.
-        _to_flac(vocals, work / "vocals.flac")
-        _to_flac(instrumental, work / "no_vocals.flac")
+        # Compressed, not WAV: the stems travel back over the same tunnel the
+        # audio came in on, so fewer bytes is a faster download for every piece.
+        vocals_file = _to_stem(vocals, work / "vocals")
+        instrumental_file = _to_stem(instrumental, work / "no_vocals")
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
     return {
         "status": "ok",
         "model": model,
-        "vocals": _public_url(request, job, "vocals.flac"),
-        "instrumental": _public_url(request, job, "no_vocals.flac"),
+        "vocals": _public_url(request, job, vocals_file.name),
+        "instrumental": _public_url(request, job, instrumental_file.name),
         "stems": [
-            {"name": "vocals", "url": _public_url(request, job, "vocals.flac")},
-            {"name": "instrumental", "url": _public_url(request, job, "no_vocals.flac")},
+            {"name": "vocals", "url": _public_url(request, job, vocals_file.name)},
+            {"name": "instrumental", "url": _public_url(request, job, instrumental_file.name)},
         ],
     }
 
@@ -347,5 +372,8 @@ def download(job: str, name: str):
     path = FILES / job / name
     if not path.is_file():
         raise HTTPException(status_code=404, detail="not found")
-    media_type = "audio/flac" if path.suffix.lower() == ".flac" else "audio/wav"
+    media_type = {
+        ".flac": "audio/flac",
+        ".mp3": "audio/mpeg",
+    }.get(path.suffix.lower(), "audio/wav")
     return FileResponse(path, media_type=media_type)
