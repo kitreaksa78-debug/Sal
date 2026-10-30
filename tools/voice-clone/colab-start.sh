@@ -78,7 +78,13 @@ install_libs() {
     say "រំលង (SKIP_INSTALL=1)"
     return 0
   fi
-  if python3 -c 'import torch, librosa, einops, omegaconf, fairseq, encodec, transformers, diffusers; assert transformers.__version__.startswith("4.30")' >/dev/null 2>&1; then
+  # The Space pins transformers 4.30.2, which demands tokenizers<0.14 — and the
+  # last wheel of that predates Python 3.12. Kaggle and Colab now ship 3.12, so
+  # pip falls back to building tokenizers from source, needs Rust, and dies with
+  # "Failed building wheel for tokenizers". "Already installed" therefore checks
+  # the three names Amphion imports, not a version, so a machine that took the
+  # fallback is not made to reinstall on every run.
+  if python3 -c 'import torch, librosa, einops, omegaconf, fairseq, encodec, transformers, diffusers; from transformers import GPT2TokenizerFast; from diffusers import DDIMScheduler' >/dev/null 2>&1; then
     say "មានរួចហើយ — រំលងការតំឡើង"
     return 0
   fi
@@ -86,9 +92,29 @@ install_libs() {
   python3 -m pip install -q "setuptools<70" ruamel.yaml tqdm colorama easydict \
     tabulate loguru json5 Cython unidecode inflect librosa typeguard einops omegaconf \
     hydra-core humanfriendly praat-parselmouth pedalboard ffmpeg-python pyworld diffsptk \
-    nnAudio torchmetrics pymcd encodec "transformers==4.30.2" "diffusers==0.19.3" \
-    accelerate "huggingface_hub[hf_transfer]" ||
+    nnAudio torchmetrics pymcd encodec accelerate ||
     die "pip install បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត (របស់ដែលរួចហើយមិនដំឡើងទេ)។"
+
+  # `pip download --only-binary` answers "does a prebuilt wheel exist here?" in
+  # a few seconds, before anything is installed — instead of minutes into a
+  # source build that cannot succeed. diffusers 0.19.3 also needs a hub that
+  # still ships `cached_download` (removed in 0.26) and, on Python 3.12, the
+  # `setuptools` above for `distutils`.
+  CHECK_DIR="$WORK/tokenizers-wheel-check"
+  rm -rf "$CHECK_DIR"
+  if python3 -m pip download -q --no-deps --only-binary=:all: \
+      -d "$CHECK_DIR" "tokenizers==0.13.3" >/dev/null 2>&1; then
+    say "tokenizers 0.13.3 មាន wheel — ប្រើ transformers 4.30.2 (version ដើមរបស់ Space)"
+    python3 -m pip install -q "huggingface_hub[hf_transfer]==0.25.2" "transformers==4.30.2" \
+      "diffusers==0.19.3" ||
+      die "តំឡើង transformers បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
+  else
+    say "Python 3.12+ — គ្មាន wheel សម្រាប់ tokenizers 0.13 ដូច្នេះប្រើ transformers 4.45 (API Whisper ដដែល)"
+    python3 -m pip install -q "huggingface_hub[hf_transfer]==0.25.2" "transformers>=4.44,<4.46" \
+      "diffusers==0.19.3" ||
+      die "តំឡើង transformers បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
+  fi
+  rm -rf "$CHECK_DIR"
   # ContentVec ត្រូវការ fairseq; build របស់ដើមអាចខូចលើ Python ថ្មី
   python3 -m pip install -q fairseq ||
     python3 -m pip install -q "git+https://github.com/One-sixth/fairseq.git" ||
