@@ -37,7 +37,6 @@ VERSION = "1.0"
 MODEL = "Amphion DiffWaveNetSVC"
 
 SERVICE_KEY = (os.environ.get("SERVICE_KEY") or "").strip()
-ROOT = Path(os.environ.get("SVC_ROOT") or "/content/Amphion").resolve()
 FILES = Path(os.environ.get("SERVICE_FILES") or "/content/voice-convert").resolve()
 WORK = FILES.parent
 HOST = (os.environ.get("SERVICE_HOST") or "127.0.0.1").strip()
@@ -65,12 +64,46 @@ SINGERS = {
 }
 
 REQUIRED = ("ckpts/svc", "pretrained/bigvgan", "pretrained/contentvec", "pretrained/whisper")
+
+
+def _weights_ready(root: Path | None = None) -> bool:
+    base = root or ROOT
+    return all((base / part).is_dir() for part in REQUIRED) and (base / "inference.py").is_file()
+
+
+def _resolve_root() -> Path:
+    """Where the Amphion checkout lives.
+
+    `colab-start.sh` passes SERVICE_ROOT, older notes and the Space use SVC_ROOT,
+    and a session that already converted by hand keeps the weights in
+    /content/Amphion. Reading a single name meant every conversion looked in a
+    directory nobody had filled: the model was re-downloaded inside the request,
+    and the site read those minutes as a failure.
+    """
+    candidates = [
+        os.environ.get("SVC_ROOT"),
+        os.environ.get("SERVICE_ROOT"),
+        "/content/Amphion",
+    ]
+    for raw in candidates:
+        if raw and _weights_ready(Path(raw).expanduser().resolve()):
+            return Path(raw).expanduser().resolve()
+    for raw in candidates:
+        if raw:
+            return Path(raw).expanduser().resolve()
+    return Path("/content/Amphion")
+
+
+ROOT = _resolve_root()
 UPLOAD_FIELDS = ("audio", "file", "speech", "input", "song")
 
 app = FastAPI(title=SERVICE_NAME, version=VERSION)
 # One GPU, one request at a time; the site polls instead of opening many.
 LOCK = threading.Lock()
 BUSY = False
+# One download at a time: the warm-up thread and a request can both want the
+# checkpoints, and fetching 5 GB twice is worse than waiting.
+_WEIGHTS_LOCK = threading.Lock()
 _INFER = None  # the imported Amphion module, loaded once
 
 
@@ -121,8 +154,12 @@ def _resolve_singer(raw: str) -> str:
 
 
 def _ensure_weights() -> None:
-    ready = all((ROOT / part).is_dir() for part in REQUIRED) and (ROOT / "inference.py").is_file()
-    if ready:
+    with _WEIGHTS_LOCK:
+        _ensure_weights_unlocked()
+
+
+def _ensure_weights_unlocked() -> None:
+    if _weights_ready():
         return
 
     _log("downloading the model from Hugging Face (~5 GB, once per session)")
@@ -230,6 +267,25 @@ def _convert_sync(
     return out_mp3
 
 
+def _warm_weights() -> None:
+    """Fetch the model while the owner is still pointing the site at the tunnel.
+
+    The first conversion must not be the thing that waits for 5 GB.
+    """
+    try:
+        if _weights_ready():
+            _log(f"model ready at {ROOT}")
+            return
+        _log(f"preparing the model at {ROOT} (5 GB, once per session)")
+        _ensure_weights()
+        _log("model ready")
+    except Exception as err:  # a dead Hugging Face is reported, not fatal
+        _log(f"model download failed: {err}")
+
+
+threading.Thread(target=_warm_weights, daemon=True).start()
+
+
 # -------------------------------------------------------------------- endpoints
 @app.get("/")
 def index():
@@ -253,6 +309,7 @@ def health(request: Request):
         "model": MODEL,
         "device": _device(),
         "loaded": _INFER is not None,
+        "weights": _weights_ready(),
         "busy": BUSY,
         "singers": len(SINGERS),
     }

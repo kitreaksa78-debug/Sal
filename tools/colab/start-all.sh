@@ -87,7 +87,10 @@ claim_port() {
   _tries=0
   while port_busy "$_port" && [ "$_tries" -lt 5 ]; do
     for _pid in $(port_owners "$_port"); do
-      if grep -qaE "$WORK|gateway:app" "/proc/$_pid/cmdline" 2>/dev/null; then
+      # `python3 -m uvicorn service:app` carries no path of its own, so the
+      # working directory is what says the process came from this run.
+      if grep -qaE "$WORK|gateway:app" "/proc/$_pid/cmdline" 2>/dev/null ||
+        readlink "/proc/$_pid/cwd" 2>/dev/null | grep -qF "$WORK"; then
         kill "$_pid" >/dev/null 2>&1 || true
       fi
     done

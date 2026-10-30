@@ -13,7 +13,7 @@ import {
   saveVoiceCloneConnection,
 } from '../services/cloneSettings.js';
 import { VOICE_CLONE_KEY_MESSAGE, isVoiceCloneConfigured } from '../services/voiceClone.js';
-import { probeCombinedStudio } from '../services/combinedStudio.js';
+import { isCombinedStudio, probeCombinedStudio } from '../services/combinedStudio.js';
 import { saveSeparatorConnection } from '../services/separatorSettings.js';
 
 const router = express.Router();
@@ -171,8 +171,13 @@ router.post('/test', async (_req: Request, res: Response) => {
     }
 
     const data = await answer.json().catch(() => ({}));
-    const label = serviceLabel(data);
-    if (/\bnllb\b|translation|translate|demucs/i.test(label)) {
+    // The one-tunnel studio serves both APIs, so its `/health` also names the
+    // stem model — that is this card's own service, not "a different one".
+    const combined = isCombinedStudio(data);
+    const label = combined
+      ? `colab-studio · ${(data?.services ?? []).join(' + ')}`
+      : serviceLabel(data);
+    if (!combined && /\bnllb\b|translation|translate|demucs/i.test(label)) {
       logger.info(`Voice conversion service test: wrong service (${connection.url})`);
       return res.json({
         ok: false,

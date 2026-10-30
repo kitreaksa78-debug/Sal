@@ -452,6 +452,9 @@ export class VoiceCloneProcessor {
 
       let failed = 0;
       let done = 0;
+      // The reason every part failed is the one thing worth showing: a wrong key,
+      // a dead tunnel and a slow GPU all look the same without it.
+      let lastFailure = '';
       for (const chunk of chunks) {
         await checkpoint();
         const chunkPath = path.join(chunkDir, chunk);
@@ -472,7 +475,8 @@ export class VoiceCloneProcessor {
         } catch (err: any) {
           if (err instanceof JobCancelledError) throw err;
           failed += 1;
-          logger.warn(`Voice clone chunk ${chunk} failed: ${err?.message || err}`);
+          lastFailure = String(err?.message || err).slice(0, 400);
+          logger.warn(`Voice clone chunk ${chunk} failed: ${lastFailure}`);
           // Keep the words: an unconverted part is far better than a gap.
           await FFmpegHelper.execute([
             '-y', '-v', 'error',
@@ -491,7 +495,8 @@ export class VoiceCloneProcessor {
 
       if (failed === chunks.length) {
         throw new Error(
-          'ប្តូរសំឡេងបរាជ័យទាំងអស់។ សូមពិនិត្យការតភ្ជាប់ (URL + API Key) ក្នុងកាត «ប្តូរសំឡេង · Voice Convert API» ឬ key របស់សេវា hosted រួចសាកល្បងម្តងទៀត។ (Every part failed — check the connection in the voice card, or the hosted key.)'
+          'ប្តូរសំឡេងបរាជ័យទាំងអស់។ សូមពិនិត្យការតភ្ជាប់ (URL + API Key) ក្នុងកាត «ប្តូរសំឡេង · Voice Convert API» ឬ key របស់សេវា hosted រួចសាកល្បងម្តងទៀត។ (Every part failed — check the connection in the voice card, or the hosted key.)' +
+            (lastFailure ? ` មូលហេតុ: ${lastFailure}` : '')
         );
       }
 
