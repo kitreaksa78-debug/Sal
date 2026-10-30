@@ -26,7 +26,7 @@ const CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_CHUNK_SECONDS || '15');
 const MIN_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_MIN_CHUNK_SECONDS || '3');
 /** What one tunnel request may take before it counts as "too much audio". */
 const TUNNEL_REQUEST_TIMEOUT_MS = Number(
-  process.env.AUDIO_SEPARATOR_TUNNEL_TIMEOUT_MS || '110000'
+  process.env.AUDIO_SEPARATOR_TUNNEL_TIMEOUT_MS || '90000'
 );
 const LONG_REQUEST_TIMEOUT_MS = 1_800_000;
 /** How many times one piece is sent before its failure is believed. */
@@ -66,10 +66,16 @@ const GROW_STEP_SECONDS = 2;
  * seconds of audio. A service running on a GPU (a Google Colab runtime, a home
  * machine with CUDA) separates a minute and a half of audio in a few seconds, so
  * the same request window buys far more audio per round trip — and fewer piece
- * boundaries in the joined stems. The cap stays under the tunnel's cutoff so the
- * bigger piece is never the reason a request is cut.
+ * boundaries in the joined stems.
+ *
+ * The cap is the round trip, not the GPU: a piece is uploaded as FLAC and comes
+ * back as two FLAC stems, so one second of audio is roughly half a megabyte over
+ * the wire in total. At a minute per piece that is ~30 MB — a few seconds of
+ * transfer on a healthy tunnel, but the whole window on a slow one. Two minutes
+ * per piece doubled it and regularly ran into the tunnel's own cutoff, which
+ * cost a full ~90 second request before the piece was split and sent again.
  */
-const GPU_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_GPU_CHUNK_SECONDS || '120');
+const GPU_CHUNK_SECONDS = Number(process.env.AUDIO_SEPARATOR_GPU_CHUNK_SECONDS || '60');
 /** Devices that mean the model is not being run on a CPU. */
 const ACCELERATOR_DEVICES = /^(cuda|mps|metal|gpu|xpu|rocm|directml)/i;
 
@@ -533,8 +539,11 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       // instead of waiting for the first answer to make it move.
       onProgress?.({ done: 0, total: pieces.length });
 
+      const budgetMs = this.requestTimeoutMs(connection.url);
+
       for (let i = 0; i < pieces.length; i++) {
         const label = `p${String(i + 1).padStart(4, '0')}`;
+        const pieceStartedAt = Date.now();
         const piece = await this.separatePiece(
           connection.url,
           connection.apiKey,
@@ -544,6 +553,7 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
           workDir,
           label
         );
+        this.fitPiecesToBudget(pieces[i].length, Date.now() - pieceStartedAt, budgetMs);
 
         vocalsPieces.push(piece.vocalsPath);
         instrumentalPieces.push(piece.noVocalsPath);
@@ -661,6 +671,36 @@ export class RemoteStemSeparationProvider implements AudioSeparationProvider {
       });
     }
     return pieces;
+  }
+
+  /**
+   * Shrink the pieces when one took too much of the request window.
+   *
+   * The window is mostly spent moving bytes — the upload, then the two stems —
+   * so a slow tunnel is what makes a piece too big for it, and waiting for the
+   * timeout to prove that costs the whole window before the piece is halved and
+   * sent again. Measuring the finished piece instead predicts it: the remaining
+   * pieces are capped so they should come back with a third of the window to
+   * spare, and the existing size check splits any planned piece that is now too
+   * long (see `separatePiece`).
+   */
+  private fitPiecesToBudget(pieceSeconds: number, elapsedMs: number, budgetMs: number): void {
+    if (pieceSeconds <= 0 || elapsedMs <= 0 || !Number.isFinite(budgetMs) || budgetMs <= 0) {
+      return;
+    }
+
+    const share = 0.6;
+    const fitted = Math.floor((pieceSeconds * budgetMs * share) / elapsedMs);
+    const current = this.pieceLimit();
+    const smaller = Math.min(current, Math.max(MIN_CHUNK_SECONDS, fitted));
+    if (smaller >= current) return;
+
+    this.activeChunkSeconds = smaller;
+    logger.info(
+      `A ${pieceSeconds.toFixed(1)}s piece used ${(elapsedMs / 1000).toFixed(1)}s of the ${(
+        budgetMs / 1000
+      ).toFixed(0)}s request window; the remaining pieces are capped at ${smaller.toFixed(1)}s.`
+    );
   }
 
   /**
