@@ -747,6 +747,16 @@ export class KhmerDubProcessor {
       }
 
       // -------------------------------------------------------- package
+      // The words on their own: cloning a voice needs the speech without the
+      // music, because a converter would rebuild the music as speech too.
+      const speechMp3 = path.join(workDir, `khmer_speech_${jobId}.mp3`);
+      await FFmpegHelper.execute([
+        '-y', '-v', 'error',
+        '-i', timelineWav,
+        '-codec:a', 'libmp3lame', '-q:a', '2',
+        speechMp3,
+      ]);
+
       const storage = getStorage();
       const khmerMp3 = path.join(workDir, `khmer_${jobId}.mp3`);
       await FFmpegHelper.execute([
@@ -758,6 +768,11 @@ export class KhmerDubProcessor {
       await checkpoint();
 
       const khmerFile = await storage.saveFile('outputs', `khmer_${jobId}.mp3`, khmerMp3);
+      const khmerSpeechFile = await storage.saveFile(
+        'outputs',
+        `khmer_speech_${jobId}.mp3`,
+        speechMp3
+      );
 
       let khmerVideoFile: string | undefined;
       if (job.inputKind === 'video') {
@@ -793,6 +808,7 @@ export class KhmerDubProcessor {
         message: 'Khmer version finished',
         khmerMessage: KHMER_MESSAGES.done,
         khmerFile,
+        khmerSpeechFile,
         khmerVideoFile,
         khmer: report,
         segments: lines,

@@ -213,6 +213,11 @@ export interface JobRecord {
   cleanup?: CleanupReport;
   /** The Khmer version: the separated music with the translated voice over it. */
   khmerFile?: string;
+  /**
+   * The Khmer words with no music. A voice-cloning step can only work on this
+   * one: the mixed song would have its music rewritten too.
+   */
+  khmerSpeechFile?: string;
   /** The same Khmer song played over the original picture, for a video upload. */
   khmerVideoFile?: string;
   /** The Khmer voice the visitor chose for this version. */

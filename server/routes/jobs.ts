@@ -335,7 +335,7 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     }
 
     const requested = String(req.query.stem || '').toLowerCase();
-    const stem: 'vocals' | 'music' | 'clean' | 'original' | 'khmer' =
+    const stem: 'vocals' | 'music' | 'clean' | 'original' | 'khmer' | 'khmer-speech' =
       requested === 'music'
         ? 'music'
         : requested === 'clean'
@@ -344,13 +344,17 @@ router.get('/:id/download', async (req: Request, res: Response) => {
         ? 'original'
         : requested === 'khmer'
         ? 'khmer'
+        : requested === 'khmer-speech' || requested === 'khmerspeech'
+        ? 'khmer-speech'
         : 'vocals';
     const wantVideo = String(req.query.format || '').toLowerCase() === 'mp4';
 
     // `clean`/`original` belong to the Gemini cleanup: the finished voice and the
     // untouched upload, played side by side. The separations keep their stems.
     const stored =
-      stem === 'khmer'
+      stem === 'khmer-speech'
+        ? job.khmerSpeechFile
+        : stem === 'khmer'
         ? wantVideo
           ? job.khmerVideoFile
           : job.khmerFile

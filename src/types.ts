@@ -95,6 +95,8 @@ export interface JobRecord {
   cleanup?: CleanupReport;
   /** The Khmer version: the separated music with the translated voice over it. */
   khmerFile?: string;
+  /** The Khmer words alone, without the music — the input a voice clone needs. */
+  khmerSpeechFile?: string;
   /** The same Khmer song over the original picture, for a video upload. */
   khmerVideoFile?: string;
   /** The Khmer voice chosen for this version. */

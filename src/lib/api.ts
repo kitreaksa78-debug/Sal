@@ -216,6 +216,13 @@ export function getKhmerDownloadUrl(
   return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
 }
 
+/** The Khmer words alone, without the music — the input a voice clone needs. */
+export function getKhmerSpeechDownloadUrl(jobId: string, inline = false): string {
+  const params = new URLSearchParams({ stem: 'khmer-speech', format: 'mp3' });
+  if (inline) params.set('inline', '1');
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
+}
+
 // ---------------------------------------------------- stem separation service
 
 /**

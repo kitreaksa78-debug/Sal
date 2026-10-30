@@ -17,6 +17,7 @@ import {
   createKhmerVersion,
   getJob,
   getKhmerDownloadUrl,
+  getKhmerSpeechDownloadUrl,
   getStemDownloadUrl,
   subscribeToJobUpdates,
 } from '../lib/api';
@@ -301,6 +302,17 @@ const KhmerDubCard: React.FC<{ job: JobRecord }> = ({ job }) => {
               <Download className="w-4 h-4" />
               <span>ទាញយក បទខ្មែរ (MP3)</span>
             </a>
+
+            {dub.khmerSpeechFile && (
+              <a
+                href={getKhmerSpeechDownloadUrl(dub.id)}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 rounded-xl bg-slate-800/80 hover:bg-slate-700/80 text-slate-200 border border-slate-700 font-semibold text-xs transition-colors min-h-[44px]"
+                title="សម្រាប់ voice clone (មិនមានភ្លេង)"
+              >
+                <Download className="w-4 h-4" />
+                <span>សំឡេងខ្មែរ (ឥតភ្លេង)</span>
+              </a>
+            )}
 
             {dub.khmerVideoFile && (
               <a
