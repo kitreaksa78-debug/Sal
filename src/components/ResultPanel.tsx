@@ -22,6 +22,7 @@ import {
   subscribeToJobUpdates,
 } from '../lib/api';
 import { VoiceCloneCard } from './VoiceCloneCard';
+import { VoiceCloneApiPanel } from './VoiceCloneApiPanel';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -352,6 +353,10 @@ const KhmerDubCard: React.FC<{ job: JobRecord }> = ({ job }) => {
               </ul>
             </details>
           )}
+
+          {/* Where the free converter lives: the Colab API card, above the card
+              that actually runs it. */}
+          <VoiceCloneApiPanel />
 
           <VoiceCloneCard job={dub} />
 

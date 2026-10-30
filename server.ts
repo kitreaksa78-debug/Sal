@@ -7,11 +7,13 @@ import jobsRouter from './server/routes/jobs.js';
 import filesRouter from './server/routes/files.js';
 import configRouter from './server/routes/config.js';
 import separatorRouter from './server/routes/separator.js';
+import voiceCloneRouter from './server/routes/voiceCloneConfig.js';
 import geminiRouter from './server/routes/gemini.js';
 import { logger } from './server/utils/logger.js';
 import { FFmpegHelper } from './server/utils/ffmpeg.js';
 import { getDatabase } from './server/services/db.js';
 import { hydrateSeparatorSettings } from './server/services/separatorSettings.js';
+import { hydrateVoiceCloneSettings } from './server/services/cloneSettings.js';
 import { hydrateGeminiSettings } from './server/services/geminiSettings.js';
 
 const app = express();
@@ -37,6 +39,9 @@ app.use('/api/config', configRouter);
 // Where the stem separation runs (the phone's Demucs API, a home server, the
 // audio-separator sidecar); changeable from the studio's stem panel.
 app.use('/api/config/separator', separatorRouter);
+// Where the voice conversion runs: the owner's own Voice Convert API on a
+// Colab GPU, pasted from the studio's voice card, or the hosted API by default.
+app.use('/api/config/voice-clone', voiceCloneRouter);
 // The Gemini keys and models behind the voice cleanup, changeable from the
 // clean studio's panel so a new key needs no redeploy.
 app.use('/api/config/gemini', geminiRouter);
@@ -58,6 +63,9 @@ async function startServer() {
   // for a job — with no stem service connected the upload endpoint refuses the
   // video — so this hydration is what makes the pipeline ready at boot.
   await hydrateSeparatorSettings();
+  // The voice conversion service is mirrored for the same reason: a tunnel URL
+  // is pasted once and must still be there after a restart.
+  await hydrateVoiceCloneSettings();
   // The Gemini keys for «សម្អាតសំឡេង» are mirrored to object storage for the same
   // reason: a free host forgets its disk, but not the bucket.
   await hydrateGeminiSettings();

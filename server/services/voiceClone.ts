@@ -2,6 +2,7 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { getDatabase } from './db.js';
+import { getVoiceCloneConnection, ResolvedVoiceCloneConnection } from './cloneSettings.js';
 import { getStorage, resolveStoredArtifact } from './storage.js';
 import { JobCancelledError, KHMER_CANCELLED_MESSAGE, jobEvents } from './separationJob.js';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
@@ -42,9 +43,15 @@ const KHMER_MESSAGES = {
   done: 'សំឡេងដូចដើមរួចរាល់! ស្តាប់ និងទាញយកបានហើយ។',
 };
 
-/** Shown when the deployment has no inference key yet. */
+/**
+ * Shown when neither way of running the model is set up.
+ *
+ * Two ways: the owner's own Voice Convert API (free, pasted into the studio's
+ * voice card), or the hosted inference API paid for with a deployment key.
+ */
 export const VOICE_CLONE_KEY_MESSAGE =
-  'ប្តូរសំឡេងត្រូវការ key របស់សេវា AI។ សូមបញ្ចូល REPLICATE_API_TOKEN ក្នុង Render → Environment សិន។ (Add REPLICATE_API_TOKEN to the deployment.)';
+  'ប្តូរសំឡេងត្រូវការម៉ាស៊ីនបម្លែង។ ជ្រើសមួយ៖ (1) បើក Voice Convert API ដោយឥតគិតថ្លៃក្នុង Colab (SERVICE=1 sh colab-start.sh) រួច paste URL + API Key ក្នុងកាត «ប្តូរសំឡេង · Voice Convert API» ឬ (2) បញ្ចូល REPLICATE_API_TOKEN ក្នុង Render → Environment។ ' +
+  '(No conversion machine yet: paste a Colab Voice Convert API into the voice card, or add REPLICATE_API_TOKEN to the deployment.)';
 
 /** The jobs this process is restyling right now. */
 const activeJobs = new Set<string>();
@@ -59,7 +66,21 @@ export function voiceCloneModel(): string {
 }
 
 export function isVoiceCloneConfigured(): boolean {
-  return Boolean(getVoiceCloneToken());
+  return Boolean(getVoiceCloneToken()) || Boolean(getVoiceCloneConnection().url);
+}
+
+/** The owner's own converter, when one is pasted into the studio's voice card. */
+export function getVoiceCloneService(): ResolvedVoiceCloneConnection {
+  return getVoiceCloneConnection();
+}
+
+/** Singer checkpoint the Colab service converts to, and how hard it tries. */
+function serviceSinger(): string {
+  return (process.env.VOICE_CLONE_SINGER || 'Taylor Swift').trim();
+}
+
+function serviceSteps(): number {
+  return Math.max(50, Math.min(1000, Number(process.env.VOICE_CLONE_STEPS || 200)));
 }
 
 /** A JSON call to the inference API, with the token that the deployment holds. */
@@ -242,6 +263,66 @@ async function convertOnce(
   return url as string;
 }
 
+/**
+ * Ask the owner's Voice Convert API (Colab GPU behind a Cloudflare tunnel) to
+ * restyle one chunk of the Khmer words.
+ *
+ * The service takes one request at a time and answers 409 while it is busy, so
+ * a retry is what keeps a job from losing a chunk to a second request that
+ * arrived at the same moment.
+ */
+async function convertViaService(
+  connection: ResolvedVoiceCloneConnection,
+  speechPath: string,
+  checkpoint: () => Promise<void>
+): Promise<string> {
+  const headers: Record<string, string> = {};
+  if (connection.apiKey) headers.Authorization = `Bearer ${connection.apiKey}`;
+
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    await checkpoint();
+
+    const form = new FormData();
+    form.append('audio', new Blob([fs.readFileSync(speechPath)], { type: 'audio/wav' }), 'speech.wav');
+    form.append('singer', serviceSinger());
+    form.append('steps', String(serviceSteps()));
+
+    const res = await fetch(`${connection.url}/convert`, {
+      method: 'POST',
+      headers,
+      body: form,
+      signal: AbortSignal.timeout(PREDICTION_TIMEOUT_MS),
+    }).catch((err: any) => {
+      throw new Error(`Voice Convert API មិនឆ្លើយ — tunnel អាចស្លាប់ហើយ។ (${err?.message || err})`);
+    });
+
+    if (res.status === 409) {
+      lastError = new Error('Voice Convert API កំពុងមមាញឹក (busy)');
+      await new Promise((resolve) => setTimeout(resolve, 15_000));
+      continue;
+    }
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      lastError = new Error(`Voice Convert API ${res.status}: ${text.slice(0, 300)}`);
+      // A 5xx on a GPU box is usually the model loading; 4xx will not change.
+      if (res.status >= 500) {
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+        continue;
+      }
+      throw lastError;
+    }
+
+    const data = (await res.json().catch(() => ({}))) as { file?: string };
+    if (!data.file) throw new Error('Voice Convert API បានឆ្លើយដោយគ្មានឯកសារសំឡេង (no audio in the reply)');
+    return data.file;
+  }
+
+  throw lastError || new Error('Voice Convert API បរាជ័យ (conversion failed)');
+}
+
 export class VoiceCloneProcessor {
   static isActive(jobId: string): boolean {
     return activeJobs.has(jobId);
@@ -276,9 +357,15 @@ export class VoiceCloneProcessor {
       const job = initial;
       const token = getVoiceCloneToken();
       const model = voiceCloneModel();
-      if (!token) throw new Error(VOICE_CLONE_KEY_MESSAGE);
+      // The owner's own Colab converter wins over the hosted one: it is free,
+      // and its URL changes with the session, so it is re-read for every job.
+      const service = getVoiceCloneConnection();
+      const usingService = Boolean(service.url);
+      if (!usingService && !token) throw new Error(VOICE_CLONE_KEY_MESSAGE);
 
-      logger.info(`Restyling ${job.id} with ${model}`);
+      logger.info(
+        `Restyling ${job.id} with ${usingService ? `Voice Convert API ${service.url}` : model}`
+      );
 
       await update({
         status: 'extracting_audio',
@@ -347,11 +434,13 @@ export class VoiceCloneProcessor {
         .slice(0, MAX_CHUNKS);
       if (!chunks.length) throw new Error('the Khmer speech track is empty');
 
-      const schema = await readModelSchema(token, model);
+      const schema = usingService ? null : await readModelSchema(token!, model);
       logger.info(
-        `Voice clone ${job.id}: ${chunks.length} chunk(s), fields ${schema.sourceField} -> ${
-          schema.targetField || '—'
-        }`
+        usingService
+          ? `Voice clone ${job.id}: ${chunks.length} chunk(s) via ${service.url}`
+          : `Voice clone ${job.id}: ${chunks.length} chunk(s), fields ${schema!.sourceField} -> ${
+              schema!.targetField || '—'
+            }`
       );
 
       await update({
@@ -368,7 +457,9 @@ export class VoiceCloneProcessor {
         const chunkPath = path.join(chunkDir, chunk);
         const target = path.join(outDir, chunk);
         try {
-          const url = await convertOnce(token, model, schema, chunkPath, refWav, checkpoint);
+          const url = usingService
+            ? await convertViaService(service, chunkPath, checkpoint)
+            : await convertOnce(token!, model, schema!, chunkPath, refWav, checkpoint);
           const raw = path.join(workDir, `${chunk}.raw`);
           await downloadToFile(url, raw);
           // Converters answer in whatever they like; the join needs one format.
@@ -400,7 +491,7 @@ export class VoiceCloneProcessor {
 
       if (failed === chunks.length) {
         throw new Error(
-          'ប្តូរសំឡេងបរាជ័យទាំងអស់។ សូមពិនិត្យ key និងសាកល្បងម្តងទៀត។ (Every part failed — check the inference key.)'
+          'ប្តូរសំឡេងបរាជ័យទាំងអស់។ សូមពិនិត្យការតភ្ជាប់ (URL + API Key) ក្នុងកាត «ប្តូរសំឡេង · Voice Convert API» ឬ key របស់សេវា hosted រួចសាកល្បងម្តងទៀត។ (Every part failed — check the connection in the voice card, or the hosted key.)'
         );
       }
 
@@ -457,7 +548,7 @@ export class VoiceCloneProcessor {
       const cloneFile = await getStorage().saveFile('outputs', `clone_${jobId}.mp3`, outMp3);
 
       const report: VoiceCloneReport = {
-        model,
+        model: usingService ? 'Voice Convert API (Amphion · Colab GPU)' : model,
         chunks: chunks.length,
         chunksFailed: failed,
         seconds: Number(duration.toFixed(2)),

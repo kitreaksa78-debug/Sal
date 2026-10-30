@@ -55,6 +55,33 @@
 - បើផ្នែកណាមួយបរាជ័យ វាប្រើសំឡេងខ្មែរដើមជំនួស ដើម្បីកុំឲ្យបាត់ពាក្យ។
 - គុណភាពខ្ពស់ជាង៖ `MODE=local` + `--diffusion-steps 50` (កែក្នុងស្គ្រីប)។
 
+## របៀប API — ដាក់ក្នុងគេហទំព័រ (ឥតគិតថ្លៃ)
+
+ជំនួសឲ្យបម្លែងដោយផ្ទាល់ ស្គ្រីបអាចបើក **Voice Convert API** លើ GPU របស់ Colab ហើយគេហទំព័រ
+ផ្ញើសំឡេងទៅបម្លែងឲ្យ — របៀបដូចកាត «ញែកភ្លេង · Demucs API»។ គ្មាន Replicate គ្មាន key គ្មានលុយ។
+
+ក្នុង Colab (Runtime → T4 GPU):
+
+```bash
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/colab-start.sh | SERVICE=1 sh
+```
+
+វាបង្ហាញប្លុក:
+
+```
+URL : https://xxxx.trycloudflare.com
+API Key : 3f9c…
+```
+
+1. ក្នុងសាយ → លទ្ធផល → កាត **«ប្តូរសំឡេង · Voice Convert API»**
+2. paste ប្លុកនោះក្នុងប្រអប់ URL (key ត្រូវបំពេញឲ្យផងដោយស្វ័យប្រវត្តិ)
+3. ចុច **«រក្សាទុក និងសាកល្បង»** → ជោគជ័យ = `Voice Convert API v1.0 · … · cuda`
+4. ចុច «បំបែកសំឡេងពីភ្លេង» → «សំឡេងដូចដើម» → ការបម្លែងរត់លើ Colab ជំនួស Replicate
+
+ពេល session ដាច់ (idle ~៩០ នាទី ឬបិទ tab) URL ស្លាប់ — រត់ cell ដដែល (key ដដែល)
+រួច paste URL ថ្មី។ ពិនិត្យពី terminal ណាមួយ៖ `curl -s <URL>/health` គួរឆ្លើយ
+`{"status":"ok","service":"Voice Convert API", …}`។
+
 ## បន្ទាត់តែមួយ (ណែនាំ)
 
 ក្នុង cell របស់ Google Colab (Runtime → Change runtime type → T4 GPU) បន្ទាប់ពី upload សំឡេង៖

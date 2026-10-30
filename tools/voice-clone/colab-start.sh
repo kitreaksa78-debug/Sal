@@ -29,8 +29,25 @@
 #
 # ស្គ្រីបពិនិត្យអ្វីៗជាមុន (ឯកសារ, ឈ្មោះអ្នកច្រៀង) ដើម្បីកុំឲ្យចំណាយ ៦ នាទី
 # តំឡើង library រួចទើបដឹងថាវាយឈ្មោះខុស។
+#
+# ---- របៀប API (ដូចកាត «ញែកភ្លេង · Demucs API») ---------------------------------
+# ជំនួសឲ្យបម្លែងដោយផ្ទាល់ ស្គ្រីបអាចបើក API លើ GPU របស់ Colab ហើយគេហទំព័រ
+# ផ្ញើសំឡេងទៅបម្លែងឲ្យ គ្មាន Replicate គ្មាន key គ្មានការគិតលុយ។
+#
+#   !curl -fsSL …/tools/voice-clone/colab-start.sh | SERVICE=1 sh
+#
+# វាបង្ហាញ URL និង API Key ដូច demucs-colab — ចម្លងប្លុកនោះទៅកាត
+# «ប្តូរសំឡេង · Voice Convert API» ក្នុងសាយ រួចចុច «រក្សាទុក និងសាកល្បង»។
+# អថេរបន្ថែម៖
+#   SERVICE=1               បើក API + tunnel ជំនួសការបម្លែងដោយផ្ទាល់
+#   SERVICE_KEY=...         key ដែលអ្នកកំណត់ (ទុកទទេ = បង្កើតឲ្យ រួចចងចាំ)
+#   PORT=8930               port របស់ API
 
 set -u
+
+REPO_RAW="${REPO_RAW:-https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main}"
+SERVICE="${SERVICE:-0}"
+PORT="${PORT:-8930}"
 
 WORK_DEFAULT="/content"
 if [ ! -d "$WORK_DEFAULT" ] || [ ! -w "$WORK_DEFAULT" ]; then
@@ -53,6 +70,32 @@ die() {
   exit 1
 }
 
+# The Amphion stack. Called by both modes: the direct conversion needs it to
+# import `inference`, the API mode needs it to import the same module inside
+# the service process.
+install_libs() {
+  if [ "${SKIP_INSTALL:-0}" = "1" ]; then
+    say "រំលង (SKIP_INSTALL=1)"
+    return 0
+  fi
+  if python3 -c 'import torch, librosa, einops, omegaconf, fairseq, encodec, transformers, diffusers; assert transformers.__version__.startswith("4.30")' >/dev/null 2>&1; then
+    say "មានរួចហើយ — រំលងការតំឡើង"
+    return 0
+  fi
+  python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
+  python3 -m pip install -q "setuptools<70" ruamel.yaml tqdm colorama easydict \
+    tabulate loguru json5 Cython unidecode inflect librosa typeguard einops omegaconf \
+    hydra-core humanfriendly praat-parselmouth pedalboard ffmpeg-python pyworld diffsptk \
+    nnAudio torchmetrics pymcd encodec "transformers==4.30.2" "diffusers==0.19.3" \
+    accelerate "huggingface_hub[hf_transfer]" ||
+    die "pip install បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត (របស់ដែលរួចហើយមិនដំឡើងទេ)។"
+  # ContentVec ត្រូវការ fairseq; build របស់ដើមអាចខូចលើ Python ថ្មី
+  python3 -m pip install -q fairseq ||
+    python3 -m pip install -q "git+https://github.com/One-sixth/fairseq.git" ||
+    die "fairseq តំឡើងមិនបាន — សាកប្តូរ runtime ទៅ Python 3.10"
+  say "តំឡើងរួចរាល់"
+}
+
 # ---------------------------------------------------------------- 1. the machine
 step "1/5 ពិនិត្យម៉ាស៊ីន"
 command -v python3 >/dev/null 2>&1 || die "python3 រកមិនឃើញ — សូមប្រើ Google Colab។"
@@ -65,6 +108,147 @@ fi
 if ! command -v ffmpeg >/dev/null 2>&1; then
   say "តំឡើង ffmpeg ..."
   (apt-get -qq update && apt-get -qq install -y ffmpeg) >/dev/null 2>&1 || true
+fi
+
+# ------------------------------------------------------------- API mode (SERVICE=1)
+if [ "$SERVICE" = "1" ]; then
+  step "2/4 តំឡើង library + FastAPI"
+  install_libs
+  python3 -m pip install -q fastapi "uvicorn[standard]" python-multipart ||
+    die "តំឡើង FastAPI បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
+
+  KEY_FILE="$WORK/.voice-clone-key"
+  if [ -n "${SERVICE_KEY:-}" ]; then
+    KEY="$SERVICE_KEY"
+  elif [ -f "$KEY_FILE" ]; then
+    KEY=$(cat "$KEY_FILE")
+  else
+    KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(18))') || die "បង្កើត key មិនបាន"
+    printf '%s' "$KEY" >"$KEY_FILE"
+    chmod 600 "$KEY_FILE" 2>/dev/null || true
+  fi
+  [ -n "$KEY" ] || die "SERVICE_KEY ទទេ — សូមទុកវាទទេ ដើម្បីឲ្យស្គ្រីបបង្កើតឲ្យ"
+
+  step "3/4 ទាញ service.py"
+  curl -fsSL "$REPO_RAW/tools/voice-clone/service.py" -o "$WORK/service.py" ||
+    die "ទាញ service.py បរាជ័យ — ពិនិត្យអ៊ីនធឺណិត ឬ REPO_RAW"
+  say "សរសេររួច: $WORK/service.py"
+
+  step "4/4 បើក Voice Convert API នៅ port $PORT"
+  # Stop what an earlier run of this script started — by PID file, so nothing
+  # else on the machine can be caught by a name pattern.
+  for pidfile in "$WORK/service.pid" "$WORK/tunnel.pid"; do
+    if [ -f "$pidfile" ]; then
+      kill "$(cat "$pidfile")" >/dev/null 2>&1 || true
+      rm -f "$pidfile"
+    fi
+  done
+  sleep 1
+
+  cd "$WORK" || die "ចូល $WORK មិនបាន"
+  SERVICE_KEY="$KEY" \
+    SERVICE_FILES="$WORK/converted" \
+    SERVICE_ROOT="$WORK/Amphion" \
+    nohup python3 -m uvicorn service:app --host 127.0.0.1 --port "$PORT" \
+    </dev/null >"$WORK/service.log" 2>&1 &
+  echo $! >"$WORK/service.pid"
+
+  HEALTH=""
+  i=0
+  while [ "$i" -lt 60 ]; do
+    if HEALTH=$(curl -fsS -H "Authorization: Bearer $KEY" "http://127.0.0.1:$PORT/health" 2>/dev/null); then
+      break
+    fi
+    HEALTH=""
+    i=$((i + 1))
+    sleep 2
+  done
+  if [ -z "$HEALTH" ]; then
+    say "service មិនឆ្លើយ — ២០ បន្ទាត់ចុងក្រោយនៃ log៖"
+    tail -20 "$WORK/service.log" 2>/dev/null || true
+    die "service បើកមិនបាន (មើល $WORK/service.log)"
+  fi
+  say "service ឆ្លើយ: $HEALTH"
+
+  step "5/4 បើក tunnel (Cloudflare)"
+  BIN="$WORK/bin"
+  mkdir -p "$BIN"
+  if command -v cloudflared >/dev/null 2>&1; then
+    CF=$(command -v cloudflared)
+  elif [ -x "$BIN/cloudflared" ]; then
+    CF="$BIN/cloudflared"
+  else
+    case "$(uname -m)" in
+      aarch64 | arm64) ARCH=arm64 ;;
+      *) ARCH=amd64 ;;
+    esac
+    say "ទាញ cloudflared ($ARCH) ..."
+    curl -fsSL "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-$ARCH" \
+      -o "$BIN/cloudflared" || die "ទាញ cloudflared បរាជ័យ — ពិនិត្យអ៊ីនធឺណិត"
+    chmod +x "$BIN/cloudflared"
+    CF="$BIN/cloudflared"
+  fi
+
+  : >"$WORK/tunnel.log"
+  if [ -n "${PROTOCOL:-}" ]; then
+    say "ប្រើ protocol $PROTOCOL"
+    nohup "$CF" tunnel --no-autoupdate --protocol "$PROTOCOL" --url "http://localhost:$PORT" \
+      </dev/null >"$WORK/tunnel.log" 2>&1 &
+  else
+    nohup "$CF" tunnel --no-autoupdate --url "http://localhost:$PORT" \
+      </dev/null >"$WORK/tunnel.log" 2>&1 &
+  fi
+  echo $! >"$WORK/tunnel.pid"
+
+  URL=""
+  i=0
+  while [ "$i" -lt 40 ]; do
+    URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$WORK/tunnel.log" 2>/dev/null | head -1)
+    [ -n "$URL" ] && break
+    i=$((i + 1))
+    sleep 2
+  done
+  if [ -z "$URL" ]; then
+    tail -20 "$WORK/tunnel.log" 2>/dev/null || true
+    die "tunnel មិនបាន URL — សូមរត់បន្ទាត់នេះម្តងទៀត"
+  fi
+
+  # Cloudflare needs a few seconds to route the new hostname; the site's "save
+  # and test" button must not be the first request to reach it.
+  READY=0
+  i=0
+  while [ "$i" -lt 45 ]; do
+    if curl -fsS -H "Authorization: Bearer $KEY" "$URL/health" >/dev/null 2>&1; then
+      READY=1
+      break
+    fi
+    i=$((i + 1))
+    sleep 2
+  done
+
+  DEVICE=$(printf '%s' "$HEALTH" | grep -o '"device":"[a-z]*"' | head -1 | cut -d'"' -f4)
+
+  printf '\n============================================================\n'
+  printf '  ចម្លងប្លុកនេះទៅកាត «ប្តូរសំឡេង · Voice Convert API» ក្នុងសាយ\n'
+  printf '============================================================\n'
+  printf 'URL : %s\n' "$URL"
+  printf 'API Key : %s\n' "$KEY"
+  printf '============================================================\n'
+  [ -n "$DEVICE" ] && printf 'ឧបករណ៍ : %s\n' "$DEVICE"
+  if [ "$READY" = "1" ]; then
+    printf 'ស្ថានភាព : រួចរាល់ — tunnel ឆ្លើយតបរួចហើយ\n'
+  elif grep -q 'Registered tunnel connection' "$WORK/tunnel.log" 2>/dev/null; then
+    printf 'ស្ថានភាព : tunnel ភ្ជាប់ហើយ តែមិនទាន់ឆ្លើយ — រង់ចាំ ~១៥ វិនាទី រួចសាកល្បងម្តងទៀត\n'
+  else
+    printf 'ស្ថានភាព : cloudflared មិនអាចភ្ជាប់ទៅ Cloudflare — សាករត់ម្តងទៀតដោយ:\n'
+    printf '            PROTOCOL=http2 SERVICE=1 sh colab-start.sh\n'
+    tail -2 "$WORK/tunnel.log" 2>/dev/null | sed 's/^/            /' || true
+  fi
+  printf '\n'
+  say "• ទុក tab នេះបើកចុះ — បិស tab ឬ idle ~៩០ នាទី = session ដាច់ ហើយ URL ស្លាប់។"
+  say "• session ដាច់ → រត់បន្ទាត់នេះម្តងទៀត។ Key ដដែល (ក្នុង $KEY_FILE) ដូច្នេះតែ paste URL ថ្មី។"
+  say "• log: $WORK/service.log · $WORK/tunnel.log"
+  exit 0
 fi
 
 # ------------------------------------------------------------------ 2. the audio
@@ -290,24 +474,7 @@ fi
 
 # ------------------------------------------------------------------ 4. packages
 step "4/5 តំឡើង library (លើកដំបូង ~៦ នាទី)"
-if [ "${SKIP_INSTALL:-0}" = "1" ]; then
-  say "រំលង (SKIP_INSTALL=1)"
-elif python3 -c 'import torch, librosa, einops, omegaconf, fairseq, encodec, transformers, diffusers; assert transformers.__version__.startswith("4.30")' >/dev/null 2>&1; then
-  say "មានរួចហើយ — រំលងការតំឡើង"
-else
-  python3 -m pip install -q --upgrade pip >/dev/null 2>&1 || true
-  python3 -m pip install -q "setuptools<70" ruamel.yaml tqdm colorama easydict \
-    tabulate loguru json5 Cython unidecode inflect librosa typeguard einops omegaconf \
-    hydra-core humanfriendly praat-parselmouth pedalboard ffmpeg-python pyworld diffsptk \
-    nnAudio torchmetrics pymcd encodec "transformers==4.30.2" "diffusers==0.19.3" \
-    accelerate "huggingface_hub[hf_transfer]" ||
-    die "pip install បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត (របស់ដែលរួចហើយមិនដំឡើងទេ)។"
-  # ContentVec ត្រូវការ fairseq; build របស់ដើមអាចខូចលើ Python ថ្មី
-  python3 -m pip install -q fairseq ||
-    python3 -m pip install -q "git+https://github.com/One-sixth/fairseq.git" ||
-    die "fairseq តំឡើងមិនបាន — សាកប្តូរ runtime ទៅ Python 3.10"
-  say "តំឡើងរួចរាល់"
-fi
+install_libs
 
 # ------------------------------------------------------------------ 5. the work
 step "5/5 ប្តូរសំឡេង"

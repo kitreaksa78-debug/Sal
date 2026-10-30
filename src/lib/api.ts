@@ -327,6 +327,75 @@ export async function testSeparatorConnection(full = false): Promise<SeparatorTe
   return (await res.json()) as SeparatorTestResult;
 }
 
+// --------------------------------------------- voice conversion service (Colab)
+
+/**
+ * Where the voice conversion runs when the owner opened their own converter:
+ * the `SERVICE=1` cell in Colab, behind a Cloudflare tunnel. The API key is
+ * never sent back to the browser — only whether one is stored.
+ */
+export interface VoiceCloneConnectionView {
+  url: string;
+  hasApiKey: boolean;
+  /**
+   * `app` = saved from this panel, `env` = the deployment's
+   * `VOICE_CLONE_SERVICE_URL`, `none` = neither (the hosted API is used).
+   */
+  source: 'app' | 'env' | 'none';
+  updatedAt: string | null;
+  /** True when either the Colab service or a hosted key can run a conversion. */
+  configured: boolean;
+  provider: string | null;
+}
+
+export interface VoiceCloneTestResult {
+  ok: boolean;
+  /** What the service says it is, e.g. "Voice Convert API v1.0 · cuda". */
+  service: string | null;
+  latencyMs: number;
+  detail: string;
+  url?: string;
+}
+
+async function voiceCloneError(res: Response, fallback: string): Promise<ApiError> {
+  const data = (await res.json().catch(() => ({}))) as { error?: string };
+  return new ApiError(data.error || fallback, res.status);
+}
+
+export async function getVoiceCloneConnection(): Promise<VoiceCloneConnectionView> {
+  const res = await fetch(`${API_BASE}/config/voice-clone`);
+  if (!res.ok) throw await voiceCloneError(res, 'Failed to read the voice conversion settings');
+  return (await res.json()) as VoiceCloneConnectionView;
+}
+
+/** An empty `apiKey` keeps the stored one, so re-pointing a tunnel is one field. */
+export async function saveVoiceCloneConnection(input: {
+  url: string;
+  apiKey?: string;
+}): Promise<VoiceCloneConnectionView> {
+  const res = await fetch(`${API_BASE}/config/voice-clone`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(input),
+  });
+  if (!res.ok) throw await voiceCloneError(res, 'Failed to save the voice conversion settings');
+  return (await res.json()) as VoiceCloneConnectionView;
+}
+
+/** Forget the saved connection and fall back to the deployment's env vars. */
+export async function clearVoiceCloneConnection(): Promise<VoiceCloneConnectionView> {
+  const res = await fetch(`${API_BASE}/config/voice-clone`, { method: 'DELETE' });
+  if (!res.ok) throw await voiceCloneError(res, 'Failed to clear the voice conversion settings');
+  return (await res.json()) as VoiceCloneConnectionView;
+}
+
+/** One short probe of the saved URL: answers in a second when the tunnel is up. */
+export async function testVoiceCloneConnection(): Promise<VoiceCloneTestResult> {
+  const res = await fetch(`${API_BASE}/config/voice-clone/test`, { method: 'POST' });
+  if (!res.ok) throw await voiceCloneError(res, 'ការសាកល្បងបរាជ័យ (The test could not run)');
+  return (await res.json()) as VoiceCloneTestResult;
+}
+
 // ------------------------------------------------ Gemini voice cleanup
 
 /** One key slot: green when it can serve a request, red when it cannot. */
