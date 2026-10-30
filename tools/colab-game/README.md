@@ -7,7 +7,8 @@
 
 ```python
 # Colab cell 1 — ជ្រើសហ្គេម (stk | 0ad | openra | xonotic)
-!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/colab-game/colab-game.sh | GAME=stk sh
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/colab-game/colab-game.sh -o /tmp/colab-game.sh
+!GAME=stk sh /tmp/colab-game.sh
 ```
 
 ពេលរួចរាល់ វាបោះពុម្ពប្លុកមួយ៖
@@ -33,7 +34,7 @@
 
 ## ប្រើលើ Kaggle ដែរបាន
 
-Kaggle notebook មាន root និង apt ដូច Colab ដែរ — cell ដូចគ្នាបានតែម្តង៖
+Kaggle notebook មាន root និង apt ដូច Colab ដែរ។ នៅទីនេះ **ទាញយកជាឯកសារសិន រួចរត់** (មិនប្រើ `| sh`) ព្រោះ program ណាដែលអាន stdin អាចស៊ីបន្ទាត់ក្នុងស្គ្រីបបាន៖
 
 ```python
 !curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/colab-game/colab-game.sh | GAME=stk sh

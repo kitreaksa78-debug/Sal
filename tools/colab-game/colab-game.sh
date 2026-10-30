@@ -102,12 +102,12 @@ if [ "${SKIP_INSTALL:-0}" = "1" ]; then
   say "រំលងការតំឡើង (SKIP_INSTALL=1)"
 else
   export DEBIAN_FRONTEND=noninteractive
-  as_root apt-get -qq update >/dev/null 2>&1 || true
+  as_root apt-get -qq update </dev/null >/dev/null 2>&1 || true
   # x11vnc + noVNC + websockify = the screen in the browser; pulseaudio + ffmpeg
   # = the sound in the browser.
   as_root apt-get -qq install -y --no-install-recommends \
     xvfb x11vnc novnc websockify openbox pulseaudio ffmpeg curl unzip \
-    ca-certificates x11-utils xfonts-base >/dev/null 2>&1 ||
+    ca-certificates x11-utils xfonts-base </dev/null >/dev/null 2>&1 ||
     die "apt install បរាជ័យ។ សូមរត់បន្ទាត់នេះម្តងទៀត។"
   say "បណ្ណាល័យរួចរាល់"
 fi
@@ -289,7 +289,7 @@ start_vnc() {
     -rfbport 5900 -noxdamage -repeat </dev/null >"$WORK/x11vnc.log" 2>&1 &
   i=0
   while [ "$i" -lt 15 ]; do
-    if curl -s --max-time 2 telnet://127.0.0.1:5900 2>/dev/null | grep -q '^RFB'; then
+    if curl -s --max-time 2 telnet://127.0.0.1:5900 </dev/null 2>/dev/null | grep -q '^RFB'; then
       return 0
     fi
     i=$((i + 1))
