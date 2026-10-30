@@ -22,13 +22,29 @@
 
 ## រត់ (Colab ឬ Kaggle)
 
+**វិធីងាយបំផុត — ដាក់តែ id របស់ job៖**
+
 ```python
-!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/voice-clone.sh | \
-  REF='<លីងសំឡេងដើម>' SPEECH='<លីងសំឡេងខ្មែរឥតភ្លេង>' MUSIC='<លីងភ្លេង>' sh
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/voice-clone.sh | JOB='dub_mvtsfaxy_rqpq' sh
 ```
 
-- លីងទាញយកមានទម្រង់ `https://sal-juma.onrender.com/api/jobs/<jobId>/download?stem=vocals`
-  (ប្តូរ `stem` ទៅ `khmer-speech` ឬ `music`)។
+ស្គ្រីបបង្កើតលីងទាំង ៣ ដោយខ្លួនឯង (`REF`=`stem=vocals`, `SPEECH`=`stem=khmer-speech`,
+`MUSIC`=`stem=music`) ហើយបង្ហាញវាមុនពេលទាញយក។
+
+**វិធីដាក់លីងដោយខ្លួនឯង៖**
+
+```python
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/voice-clone.sh | \
+  REF='https://sal-juma.onrender.com/api/jobs/dub_mvtsfaxy_rqpq/download?stem=vocals' \
+  SPEECH='https://sal-juma.onrender.com/api/jobs/dub_mvtsfaxy_rqpq/download?stem=khmer-speech' \
+  MUSIC='https://sal-juma.onrender.com/api/jobs/dub_mvtsfaxy_rqpq/download?stem=music' sh
+```
+
+- **រក id យ៉ាងណា៖** ក្នុងកាត «បកប្រែជាខ្មែរ» ចុចឲ្យយូរ (ឬ hover) លើប៊ូតុងទាញយក →
+  `Copy link` → ឃើញ `/api/jobs/<id>/download`។ **មិនត្រូវទុក `<id>` ដូចអក្សរទេ** —
+  បើទុក ស្គ្រីបនឹងប្រាប់ថាលីងនៅមាន `<...>`។
+- 404 = id ខុស ឬ job ចាស់មុនពេលបន្ថែមឯកសារនេះ → បង្កើតបទខ្មែរឡើងវិញ។
+- `BASE` ប្តូរ origin (លំនាំដើម `https://sal-juma.onrender.com`)។
 - `MODE=space` (លំនាំដើម) ប្រើ GPU ឥតគិតថ្លៃរបស់ Hugging Face — មិនត្រូវការ GPU ក្នុង notebook។
 - `MODE=local` តំឡើង Seed-VC ក្នុង notebook (ត្រូវ GPU, លឿន និងគ្មានជួរ)។
 - `OUT=...` កំណត់ទីតាំងឯកសារលទ្ធផល។

@@ -12,8 +12,11 @@
 #   MUSIC   optional instrumental to mix back  (studio: ភ្លេង)
 #   MODE    space (default, hosted GPU) | local (install Seed-VC here)
 #   OUT     where to write the result (default $WORK/cloned.mp3)
+#   JOB     a studio job id — REF, SPEECH and MUSIC are built from it
+#   BASE    the site origin (default https://sal-juma.onrender.com)
 #
 # One line in Colab or Kaggle:
+#   !curl -fsSL <raw-url> | JOB=dub_mvtsfaxy_rqpq sh
 #   !curl -fsSL <raw-url> | REF=<url> SPEECH=<url> MUSIC=<url> sh
 #
 # It is not the same person at 100%: the timbre is copied, while the accent and
@@ -24,14 +27,39 @@ set -eu
 say() { printf '\033[36m==>\033[0m %s\n' "$*"; }
 die() { printf '\033[31mx\033[0m %s\n' "$*" >&2; exit 1; }
 
-REF="${REF:-}"
-SPEECH="${SPEECH:-}"
-MUSIC="${MUSIC:-}"
+BASE="${BASE:-https://sal-juma.onrender.com}"
+JOB="${JOB:-}"
 MODE="${MODE:-space}"
 CHUNK="${CHUNK:-20}"
 
-[ -n "$REF" ] && [ -n "$SPEECH" ] ||
-  die "ត្រូវការ REF=<សំឡេងដើម> និង SPEECH=<សំឡេងខ្មែរឥតភ្លេង>"
+if [ -n "$JOB" ]; then
+  case "$JOB" in
+    *[!A-Za-z0-9_-]*)
+      die "JOB មិនត្រឹមត្រូវ: $JOB — ដាក់តែ id ដូច dub_mvtsfaxy_rqpq (គ្មានលីង)" ;;
+  esac
+  REF="${REF:-$BASE/api/jobs/$JOB/download?stem=vocals}"
+  SPEECH="${SPEECH:-$BASE/api/jobs/$JOB/download?stem=khmer-speech}"
+  MUSIC="${MUSIC:-$BASE/api/jobs/$JOB/download?stem=music}"
+fi
+
+REF="${REF:-}"
+SPEECH="${SPEECH:-}"
+MUSIC="${MUSIC:-}"
+
+[ -n "$REF" ] && [ -n "$SPEECH" ] || die "ត្រូវការ JOB=<id> ឬ REF=<លីង> SPEECH=<លីង>"
+
+# Someone pasting the docs verbatim leaves <id> in place; curl would only say 404.
+for u in "$REF" "$SPEECH" "$MUSIC"; do
+  case "$u" in
+    *'<'* | *'>'*)
+      die "លីងនៅមាន <...> មិនទាន់ជំនួស: $u
+   ដាក់ id ពិតរបស់ job ឬប្រើ JOB=<id> ហើយទុក REF/SPEECH/MUSIC ទទេ។" ;;
+  esac
+done
+
+say "ref:    $REF"
+say "speech: $SPEECH"
+say "music:  ${MUSIC:-<គ្មាន>}"
 
 if [ -d /content ] && [ -w /content ]; then
   WORK="${WORK:-/content/voice-clone}"
@@ -48,7 +76,14 @@ command -v ffprobe >/dev/null 2>&1 || die "រកមិនឃើញ ffprobe"
 
 fetch() { # $1 = url or path, $2 = destination
   case "$1" in
-    http://* | https://*) curl -fsSL "$1" -o "$2" || die "ទាញយកបរាជ័យ: $1" ;;
+    http://* | https://*)
+      if ! curl -fsSL "$1" -o "$2"; then
+        die "ទាញយកបរាជ័យ: $1
+   404 មានន័យថា id ខុស ឬ job នោះគ្មានឯកសារនេះ (job ចាស់មុនពេលបន្ថែម
+   សំឡេងខ្មែរឥតភ្លេង ត្រូវបង្កើតបទខ្មែរឡើងវិញ)។ ប្រើ JOB=<id> ដើម្បីឲ្យស្គ្រីប
+   បង្កើតលីងទាំង ៣ ដោយខ្លួនឯង។ រក id បានពីលីងទាញយកក្នុងកាត (ចុចឲ្យយូរ →
+   Copy link) ឬពីផ្ទាំង Network។"
+      fi ;;
     *) cp "$1" "$2" || die "រកឯកសារមិនឃើញ: $1" ;;
   esac
 }
@@ -134,7 +169,7 @@ for part in "$WORK"/chunks/part_*.wav; do
     DONE=$((DONE + 1))
     say "រួច $DONE/$PARTS — $name"
   else
-    say "ផ្នែក $name បម្លែងបរាជ័យ — ប្រើសំឡេខ្មែរដើមជំនួស"
+    say "ផ្នែក $name បម្លែងបរាជ័យ — ប្រើសំឡេងខ្មែរដើមជំនួស"
     ffmpeg -y -v error -i "$part" "$target" || die "ចម្លងផ្នែកបរាជ័យ"
     DONE=$((DONE + 1))
   fi
