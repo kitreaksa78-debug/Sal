@@ -82,6 +82,9 @@ curl -fsSL "$REPO_RAW/tools/colab/gateway.py" -o "$WORK/gateway.py" ||
 say "រួចរាល់: $WORK"
 
 # ------------------------------------------------------------------- 2. demucs
+say ""
+say "⚠️  បន្ទាត់ URL ដែលមាន 127.0.0.1 ខាងក្រោមជាអាសយដ្ឋានក្នុង Colab — កុំយកទៅ paste"
+say "    ក្នុងសាយ។ ប្លុកសម្រាប់សាយគឺបង្ហាញនៅចុងបញ្ចប់ (5/5) ជា https://xxxx.trycloudflare.com ។"
 step "2/5 ញែកភ្លេង (Demucs) នៅ port $DEMUCS_PORT"
 WORK="$WORK/demucs" \
   SKIP_TUNNEL=1 \

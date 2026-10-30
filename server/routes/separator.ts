@@ -5,7 +5,9 @@ import path from 'path';
 import { FFmpegHelper } from '../utils/ffmpeg.js';
 import { logger } from '../utils/logger.js';
 import {
+  SERVICE_URL_LOCAL_MESSAGE,
   SERVICE_URL_REJECTED_MESSAGE,
+  isLocalServiceUrl,
   normaliseServiceKey,
   normaliseServiceUrl,
 } from '../utils/serviceConnection.js';
@@ -140,6 +142,21 @@ router.post('/test', async (req: Request, res: Response) => {
   if (!connection.url) {
     return res.status(400).json({
       error: 'មិនទាន់បានដាក់ URL ទេ។ (Save a service URL first.)',
+    });
+  }
+
+  // `http://127.0.0.1:8920` is what the cell prints while it starts the services,
+  // and it is the line people copy. It can only ever answer inside Colab, so name
+  // the mistake here instead of reporting a 4-second timeout that reads like a
+  // slow tunnel.
+  if (isLocalServiceUrl(connection.url)) {
+    logger.info(`Stem service test: local address (${connection.url})`);
+    return res.json({
+      ok: false,
+      service: null,
+      latencyMs: 0,
+      detail: SERVICE_URL_LOCAL_MESSAGE,
+      url: connection.url,
     });
   }
 

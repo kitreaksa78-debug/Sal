@@ -274,7 +274,9 @@ if [ "$SERVICE" = "1" ]; then
   if [ "${SKIP_TUNNEL:-0}" = "1" ]; then
     # start-all.sh runs this service behind one tunnel it opens itself (both
     # services behind a single URL), so the local address is the whole answer.
-    printf '\nURL : http://127.0.0.1:%s\nAPI Key : %s\n' "$PORT" "$KEY"
+    # It is useless in the website though: Render cannot reach 127.0.0.1 here.
+    printf '\n⚠️  អាសយដ្ឋានក្នុងម៉ាស៊ីន — កុំយកទៅ paste ក្នុងសាយ។\n'
+    printf 'URL : http://127.0.0.1:%s\nAPI Key : %s\n' "$PORT" "$KEY"
     exit 0
   fi
 

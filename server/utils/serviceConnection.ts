@@ -134,6 +134,36 @@ export function parseServicePaste(input: unknown): { url: string; apiKey: string
 }
 
 /**
+ * Hosts that only exist inside the machine that printed them: loopback, the
+ * private ranges, and `.local` names. A website running on a host (Render, Fly,
+ * any VPS) can never reach these — the address would point at the website's own
+ * container — so a paste of `http://127.0.0.1:8920`, which is what the Colab cell
+ * prints while it starts the services, is a mistake worth naming instead of
+ * letting it look like a slow tunnel.
+ */
+const LOCAL_HOST =
+  /^(?:localhost|127(?:\.\d{1,3}){3}|0\.0\.0\.0|\[?::1\]?|10(?:\.\d{1,3}){3}|192\.168(?:\.\d{1,3}){2}|172\.(?:1[6-9]|2\d|3[01])(?:\.\d{1,3}){2}|169\.254(?:\.\d{1,3}){2}|[a-z0-9-]+\.local)$/i;
+
+export function isLocalServiceUrl(url: string): boolean {
+  try {
+    return LOCAL_HOST.test(new URL(url).hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * What the owner is told when the saved address is one of the ones above.
+ * Names the address they actually copied and the one they meant, because the two
+ * are printed a few lines apart in the same cell output.
+ */
+export const SERVICE_URL_LOCAL_MESSAGE =
+  'URL នេះជាអាសយដ្ឋានក្នុងម៉ាស៊ីន (127.0.0.1 / localhost)។ 127.0.0.1 មានន័យថា «ម៉ាស៊ីនដែលកំពុងហៅ» — សាយនេះរត់នៅលើ Render ដូច្នេះវាមិនអាចទៅដល់ 127.0.0.1 របស់ Colab បានទេ។ ' +
+  'សូមរង់ចាំ cell ដល់ជំហាន 5/5 រួច copy បន្ទាត់ «URL : https://xxxx.trycloudflare.com» ដែលជា URL សាធារណៈ មក paste វិញ។ ' +
+  '(127.0.0.1/localhost lives inside the machine that printed it; this website runs on Render and cannot reach it. ' +
+  'Wait for the cell to finish and paste the public https://…trycloudflare.com address it prints at the end.)';
+
+/**
  * What the owner is told when what they pasted cannot be read as an address.
  * Names the two shapes that actually arrive from Colab, so the fix is obvious.
  */

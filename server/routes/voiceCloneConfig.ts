@@ -1,7 +1,9 @@
 import express, { Request, Response } from 'express';
 import { logger } from '../utils/logger.js';
 import {
+  SERVICE_URL_LOCAL_MESSAGE,
   SERVICE_URL_REJECTED_MESSAGE,
+  isLocalServiceUrl,
   normaliseServiceKey,
   normaliseServiceUrl,
 } from '../utils/serviceConnection.js';
@@ -119,6 +121,19 @@ router.post('/test', async (_req: Request, res: Response) => {
       detail: hosted
         ? 'មិនទាន់មាន Voice Convert API ទេ — គេហទំព័រកំពុងប្រើសេវា hosted ជំនួស។ (No Colab API pasted: the hosted inference API is used instead.)'
         : VOICE_CLONE_KEY_MESSAGE,
+    });
+  }
+
+  // `http://127.0.0.1:8930` only answers inside Colab; the website runs on a host
+  // that can never reach it, so say that instead of reporting a timeout.
+  if (isLocalServiceUrl(connection.url)) {
+    logger.info(`Voice conversion service test: local address (${connection.url})`);
+    return res.json({
+      ok: false,
+      service: null,
+      latencyMs: 0,
+      detail: SERVICE_URL_LOCAL_MESSAGE,
+      url: connection.url,
     });
   }
 

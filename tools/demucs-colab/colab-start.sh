@@ -132,7 +132,11 @@ fi
 say "service ឆ្លើយ: $HEALTH"
 
 if [ "${SKIP_TUNNEL:-0}" = "1" ]; then
-  printf '\nURL : http://127.0.0.1:%s\nAPI Key : %s\n' "$PORT" "$KEY"
+  # Only reachable inside this machine. The website runs on Render, where
+  # 127.0.0.1 is its own container, so pasting this is a dead end — say so next
+  # to the values instead of leaving the copy to look like the real block.
+  printf '\n⚠️  អាសយដ្ឋានក្នុងម៉ាស៊ីន — កុំយកទៅ paste ក្នុងសាយ។\n'
+  printf 'URL : http://127.0.0.1:%s\nAPI Key : %s\n' "$PORT" "$KEY"
   exit 0
 fi
 
