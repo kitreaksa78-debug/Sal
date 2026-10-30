@@ -17,6 +17,12 @@ export interface DatabaseProvider {
    * so a finished job survives hosts with an ephemeral disk (e.g. Render free).
    */
   hydrateFromRemote(): Promise<void>;
+  /**
+   * Fail the jobs that were still running when the process died. Called once at
+   * boot, after the snapshot is loaded: their pipeline lived in the old process,
+   * so nothing will ever advance them again.
+   */
+  reconcileInterruptedJobs(): Promise<number>;
   /** Upload any queued state now (called on shutdown). */
   flushRemote(): Promise<void>;
 }
@@ -143,6 +149,31 @@ export class JsonFileDatabaseProvider implements DatabaseProvider {
     } catch (err) {
       logger.warn('Failed to parse the remote database store:', err);
     }
+  }
+
+  /**
+   * A job left mid-run by a restart can never finish — the pipeline that was
+   * moving it lives in the process that died. Left as it is, the studio polls a
+   * job that answers "still separating" forever and the bar never moves again,
+   * which reads as a frozen site. Failing it says what happened and offers the
+   * retry button the failed screen already has.
+   */
+  async reconcileInterruptedJobs(): Promise<number> {
+    const message =
+      'ការងារនេះដាច់ពាក់កណ្តាល ព្រោះម៉ាស៊ីនមេ (server) ត្រូវបានចាប់ផ្តើមឡើងវិញ។ សូមរត់វីដេអូនេះម្តងទៀត។';
+    let count = 0;
+
+    for (const [id, job] of this.jobs) {
+      if (isTerminal(job.status)) continue;
+      this.jobs.set(id, { ...job, status: 'failed', message, error: message });
+      count++;
+    }
+
+    if (count > 0) {
+      logger.warn(`Marked ${count} job(s) as failed: they were still running when the server restarted.`);
+      this.persist();
+    }
+    return count;
   }
 
   async createJob(job: JobRecord): Promise<JobRecord> {

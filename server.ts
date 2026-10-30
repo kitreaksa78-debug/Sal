@@ -58,6 +58,10 @@ async function startServer() {
   // Recover finished jobs from object storage: hosts like Render free wipe the
   // local disk on every restart, but uploads and results live on in Cloudflare R2.
   await getDatabase().hydrateFromRemote();
+  // A job that was mid-separation when the old process stopped is still stored as
+  // running, but its pipeline is gone: without this it answers "still working"
+  // forever and the studio's bar never moves again.
+  await getDatabase().reconcileInterruptedJobs();
   // The stem service the owner pointed the app at from the website, so a job
   // started right after a restart still uses the phone. Demucs is a prerequisite
   // for a job — with no stem service connected the upload endpoint refuses the
