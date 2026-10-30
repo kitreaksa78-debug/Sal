@@ -115,10 +115,85 @@ install_libs() {
       die "តំឡើង transformers បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
   fi
   rm -rf "$CHECK_DIR"
-  # ContentVec ត្រូវការ fairseq; build របស់ដើមអាចខូចលើ Python ថ្មី
-  python3 -m pip install -q fairseq ||
-    python3 -m pip install -q "git+https://github.com/One-sixth/fairseq.git" ||
-    die "fairseq តំឡើងមិនបាន — សាកប្តូរ runtime ទៅ Python 3.10"
+  # ContentVec ត្រូវការ fairseq។ hydra/omegaconf ដែលវាទាមទារមាន metadata ចាស់
+  # (`PyYAML>=5.1.*`) ដែល pip 24.1+ បដិសេធចោលភ្លាម («has invalid metadata») ⇒
+  # ត្រូវប្រើ pip 24.0 ដើម្បីតំឡើងវា។ បន្ទាប់មកដំឡើង hydra/omegaconf ថ្មី ព្រោះ
+  # កំណែចាស់ (hydra 1.0.7 / omegaconf 2.0.6) import មិនបានលើ Python 3.12។
+  if python3 -c 'from fairseq import checkpoint_utils' >/dev/null 2>&1; then
+    say "fairseq មានរួចហើយ"
+  else
+    say "តំឡើង fairseq (ContentVec) — យូរ ~៣ នាទី ..."
+    python3 -m pip install -q "pip<24.1" wheel ||
+      die "តំឡើង pip<24.1 បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
+    (python3 -m pip install -q "fairseq==0.12.2" ||
+      python3 -m pip install -q --no-build-isolation "fairseq==0.12.2" ||
+      python3 -m pip install -q "git+https://github.com/One-sixth/fairseq.git") ||
+      die "fairseq តំឡើងមិនបាន — ក្នុង Kaggle: Restart session រួចរត់បន្ទាត់នេះម្តងទៀត"
+    python3 -m pip install -q "hydra-core>=1.3,<1.4" "omegaconf>=2.3,<2.4" \
+      "antlr4-python3-runtime==4.9.3" ||
+      die "តំឡើង hydra/omegaconf បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
+  fi
+  # Python 3.11+ បដិសេធពេលដាក់ instance ជា default របស់ dataclass («mutable
+  # default … use default_factory») — ហើយ fairseq ធ្វើបែបនេះច្រើនកន្លែង។
+  # default_factory មិនជួយទេ ព្រោះ fairseq អាន `.default` ដើម្បីបង្កើត schema;
+  # ដាក់ unsafe_hash=True ឲ្យ class ទាំងនោះវិញ ដើម្បីឲ្យ instance ក្លាយជា hashable។
+  python3 - <<'PY' || die "កែ fairseq បរាជ័យ — សូមរត់បន្ទាត់នេះម្តងទៀត។"
+import ast, importlib.util, pathlib, re, sys
+
+def package_dir(name):
+    spec = importlib.util.find_spec(name)
+    if spec is None or not spec.submodule_search_locations:
+        return None
+    return pathlib.Path(list(spec.submodule_search_locations)[0])
+
+def patch(p):
+    try:
+        src = p.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return 0
+    if "@dataclass" not in src:
+        return 0
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return 0
+    used = set(re.findall(r"=\s*([A-Za-z_]\w*)\(\)", src))
+    hits = []
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.ClassDef) or node.name not in used:
+            continue
+        for dec in node.decorator_list:
+            if isinstance(dec, ast.Name) and dec.id == "dataclass":
+                hits.append(dec.lineno)
+            elif isinstance(dec, ast.Call) and getattr(dec.func, "id", "") == "dataclass":
+                if not {"unsafe_hash", "eq"} & {k.arg for k in dec.keywords}:
+                    hits.append(dec.lineno)
+    if not hits:
+        return 0
+    lines = src.split("\n")
+    n = 0
+    for lineno in hits:
+        i = lineno - 1
+        if 0 <= i < len(lines) and "unsafe_hash" not in lines[i]:
+            lines[i] = re.sub(r"@dataclass\b", "@dataclass(unsafe_hash=True)", lines[i], 1)
+            n += 1
+    if n:
+        p.write_text("\n".join(lines), encoding="utf-8")
+    return n
+
+total = 0
+for name in ("fairseq", "hydra"):
+    root = package_dir(name)
+    if root is None:
+        print("!! %s រកមិនឃើញ" % name, file=sys.stderr)
+        sys.exit(1)
+    for p in root.rglob("*.py"):
+        if "__pycache__" not in p.parts:
+            total += patch(p)
+print("កែ dataclass %d កន្លែង" % total)
+PY
+  python3 -c 'from fairseq import checkpoint_utils' ||
+    die "fairseq import មិនបាន — សូមរត់បន្ទាត់នេះម្តងទៀត (បើនៅតែខុស សាកប្តូរ runtime ទៅ Python 3.10)"
   say "តំឡើងរួចរាល់"
 }
 
