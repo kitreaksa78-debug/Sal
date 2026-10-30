@@ -40,7 +40,11 @@ DISPLAY_NUM=":1"
 
 # /content is Colab's session disk; elsewhere keep the files beside the caller.
 if [ -d /content ] && [ -w /content ]; then
+  # Google Colab: /content is the session disk.
   WORK="${WORK:-/content/colab-game}"
+elif [ -d /kaggle/working ] && [ -w /kaggle/working ]; then
+  # Kaggle: /kaggle/working is the only folder kept for the session.
+  WORK="${WORK:-/kaggle/working/colab-game}"
 else
   WORK="${WORK:-$PWD/colab-game}"
 fi

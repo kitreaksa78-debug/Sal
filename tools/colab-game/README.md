@@ -31,6 +31,17 @@
 | `openra` | OpenRA (Red Alert) | GitHub AppImage | ~១៥០ MB |
 | `xonotic` | Xonotic — FPS | xonotic.org | ~១ GB |
 
+## ប្រើលើ Kaggle ដែរបាន
+
+Kaggle notebook មាន root និង apt ដូច Colab ដែរ — cell ដូចគ្នាបានតែម្តង៖
+
+```python
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/colab-game/colab-game.sh | GAME=stk sh
+```
+
+ស្គ្រីបរកឃើញ `/kaggle/working` ដោយស្វ័យប្រវត្តិ ហើយដាក់ឯកសារនៅទីនោះ។ Session របស់
+Kaggle (អតិបរមា ~១២ ម៉ោង) រត់រហូតដល់អ្នកបិទ notebook។
+
 ## ជម្រើសបន្ថែម
 
 ```sh
