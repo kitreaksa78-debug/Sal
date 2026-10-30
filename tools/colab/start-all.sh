@@ -53,6 +53,71 @@ die() {
 
 command -v python3 >/dev/null 2>&1 || die "python3 រកមិនឃើញ — សូមប្រើ Colab (Runtime → T4 GPU)។"
 
+# >>> port helpers
+# Re-running the cell (or a session that quietly kept the old processes) leaves
+# a port taken, and uvicorn then dies with "address already in use" — no
+# gateway, no tunnel, no URL. Stop only what this work dir started, and if a
+# stranger holds the port, move on to the next free one instead of failing.
+port_busy() {
+  python3 -c 'import socket, sys
+try:
+    socket.create_connection(("127.0.0.1", int(sys.argv[1])), 0.4).close()
+except OSError:
+    sys.exit(1)
+' "$1"
+}
+
+port_owners() {
+  if command -v fuser >/dev/null 2>&1; then
+    fuser -n tcp "$1" 2>/dev/null | tr -s ' ' '\n' | grep -E '^[0-9]+$' || true
+  elif command -v lsof >/dev/null 2>&1; then
+    lsof -ti "tcp:$1" 2>/dev/null || true
+  elif command -v ss >/dev/null 2>&1; then
+    ss -lptn "sport = :$1" 2>/dev/null | grep -o 'pid=[0-9]*' | cut -d= -f2 || true
+  fi
+}
+
+claim_port() {
+  _port=$1
+  _name=$2
+  if [ -f "$WORK/$_name.pid" ]; then
+    kill "$(cat "$WORK/$_name.pid")" >/dev/null 2>&1 || true
+    rm -f "$WORK/$_name.pid"
+  fi
+  _tries=0
+  while port_busy "$_port" && [ "$_tries" -lt 5 ]; do
+    for _pid in $(port_owners "$_port"); do
+      if grep -qaE "$WORK|gateway:app" "/proc/$_pid/cmdline" 2>/dev/null; then
+        kill "$_pid" >/dev/null 2>&1 || true
+      fi
+    done
+    sleep 1
+    _tries=$((_tries + 1))
+  done
+  _tries=0
+  while port_busy "$_port" && [ "$_tries" -lt 12 ]; do
+    _port=$((_port + 1))
+    _tries=$((_tries + 1))
+  done
+  printf '%s' "$_port"
+}
+# <<< port helpers
+
+for _spec in demucs voice gateway; do
+  case "$_spec" in
+    demucs) _want=$DEMUCS_PORT ;;
+    voice) _want=$VOICE_PORT ;;
+    gateway) _want=$GATEWAY_PORT ;;
+  esac
+  _got=$(claim_port "$_want" "$_spec")
+  [ "$_got" = "$_want" ] || say "port $_want ជាប់រវល់ — ប្រើ $_got ជំនួស"
+  case "$_spec" in
+    demucs) DEMUCS_PORT=$_got ;;
+    voice) VOICE_PORT=$_got ;;
+    gateway) GATEWAY_PORT=$_got ;;
+  esac
+done
+
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi -L 2>/dev/null | head -2 || true
 else
@@ -161,6 +226,12 @@ else
     -o "$BIN/cloudflared" || die "ទាញ cloudflared បរាជ័យ — ពិនិត្យអ៊ីនធឺណិត"
   chmod +x "$BIN/cloudflared"
   CF="$BIN/cloudflared"
+fi
+
+# A tunnel from an earlier run still forwards the old port; drop it first.
+if [ -f "$WORK/tunnel.pid" ]; then
+  kill "$(cat "$WORK/tunnel.pid")" >/dev/null 2>&1 || true
+  rm -f "$WORK/tunnel.pid"
 fi
 
 : >"$WORK/tunnel.log"
