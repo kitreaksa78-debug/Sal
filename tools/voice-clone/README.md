@@ -55,6 +55,25 @@
 - បើផ្នែកណាមួយបរាជ័យ វាប្រើសំឡេងខ្មែរដើមជំនួស ដើម្បីកុំឲ្យបាត់ពាក្យ។
 - គុណភាពខ្ពស់ជាង៖ `MODE=local` + `--diffusion-steps 50` (កែក្នុងស្គ្រីប)។
 
+## បន្ទាត់តែមួយ (ណែនាំ)
+
+ក្នុង cell របស់ Google Colab (Runtime → Change runtime type → T4 GPU) បន្ទាប់ពី upload សំឡេង៖
+
+```bash
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/colab-start.sh | sh
+```
+
+ជ្រើសឯកសារ/អ្នកច្រៀងដោយខ្លួនឯង៖
+
+```bash
+!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/colab-start.sh \
+  | AUDIO=/content/khmer.wav SINGER="Taylor Swift" STEPS=200 sh
+```
+
+វាពិនិត្យឯកសារ និងឈ្មោះអ្នកច្រៀងជាមុន (បើវាយខុស វាឈប់ភ្លាម មិនចំណាយ ៦ នាទីតំឡើង) រួចតំឡើង library,
+ទាញ weights ~៥ GB ម្តងគត់, បម្លែង, និងបង្កើត MP3 នៅ `/content/<ឈ្មោះ>_<អ្នកច្រៀង>.mp3`។
+អថេរ៖ `AUDIO` · `SINGER` · `PITCH` · `KEY_SHIFT` · `STEPS` · `OUT` · `SKIP_INSTALL=1` · `CHECK_ONLY=1`។
+
 ## ឥតគិតថ្លៃ ឥតកំណត់ចំនួនដង៖ Google Colab (Amphion DiffWaveNetSVC)
 
 `lucataco/singing_voice_conversion` ជា Cog wrapper របស់ **Amphion DiffWaveNetSVC**។ Repo របស់ HF Space
