@@ -277,9 +277,39 @@ sleep 2
 DISPLAY="$DISPLAY_NUM" nohup openbox </dev/null >"$WORK/openbox.log" 2>&1 &
 sleep 1
 
-nohup x11vnc -display "$DISPLAY_NUM" -nopw -forever -shared -xkb -rfbport 5900 \
-  -noxdamage -repeat </dev/null >"$WORK/x11vnc.log" 2>&1 &
-sleep 2
+# A page that loads but cannot connect is what a missing VNC server looks like
+# from the phone, so both halves are proved here instead of assumed: the display
+# must answer, and port 5900 must greet with the RFB banner.
+start_vnc() {
+  nohup x11vnc -display "$DISPLAY_NUM" -nopw -forever -shared -xkb \
+    -rfbport 5900 -noxdamage -repeat </dev/null >"$WORK/x11vnc.log" 2>&1 &
+  i=0
+  while [ "$i" -lt 15 ]; do
+    if curl -s --max-time 2 telnet://127.0.0.1:5900 2>/dev/null | grep -q '^RFB'; then
+      return 0
+    fi
+    i=$((i + 1))
+    sleep 1
+  done
+  return 1
+}
+
+VNC_OK=0
+for attempt in 1 2 3; do
+  if DISPLAY="$DISPLAY_NUM" xdpyinfo >/dev/null 2>&1 && start_vnc; then
+    VNC_OK=1
+    break
+  fi
+  pkill -f "x11vnc -display $DISPLAY_NUM" >/dev/null 2>&1 || true
+  sleep 1
+done
+
+if [ "$VNC_OK" != "1" ]; then
+  printf -- '--- x11vnc.log ចុងក្រោយ ---\n'
+  tail -6 "$WORK/x11vnc.log" 2>/dev/null | sed 's/^/    /'
+  die "x11vnc មិនឆ្លើយនៅ port 5900 — noVNC ឡើងទំព័របាន តែចុច Connect មិនចេញ។"
+fi
+say "VNC ឆ្លើយតបហើយ (RFB 5900)"
 
 # One page holds the screen and the sound, so the visitor clicks a single link.
 cp -r "$NOVNC_WEB"/. "$WORK/web"/ 2>/dev/null || true
@@ -430,5 +460,6 @@ fi
 printf '\n'
 say "• ទុក tab នេះបើកចុះ — បិទ tab ឬ idle ~៩០ នាទី = session ដាច់ ហើយ link ស្លាប់។"
 say "• លេងរួច → រត់បន្ទាត់ដដែលម្តងទៀត (តំឡើងរួចនឹងរំលង)។"
+say "• បើទំព័រនិយាយ Failed to connect: រត់ STOP=1 ដើម្បីសម្អាត រួចរត់ធម្មតាម្តងទៀត។"
 say "• បញ្ឈប់ទាំងអស់: !curl -fsSL <ខ្លួនឯង> | STOP=1 sh"
 say "• log: $WORK/game.log · $WORK/websockify.log · $WORK/audio.log · $WORK/tunnel-*.log"
