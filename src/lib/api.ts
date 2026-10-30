@@ -216,6 +216,30 @@ export function getKhmerDownloadUrl(
   return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
 }
 
+/**
+ * Restyle a finished Khmer version into the original singer's voice. The id is
+ * the Khmer job: it holds both the Khmer words and the voice they replaced.
+ */
+export async function createVoiceClone(jobId: string): Promise<JobRecord> {
+  const res = await fetch(`${API_BASE}/jobs/${encodeURIComponent(jobId)}/clone`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{}',
+  });
+  const data = (await res.json().catch(() => ({}))) as { job?: JobRecord; error?: string };
+  if (!res.ok || !data.job) {
+    throw new ApiError(data.error || 'មិនអាចចាប់ផ្តើមប្តូរសំឡេងបានទេ។', res.status);
+  }
+  return data.job;
+}
+
+/** The restyled version: the Khmer words in the original singer's voice. */
+export function getCloneDownloadUrl(jobId: string, inline = false): string {
+  const params = new URLSearchParams({ stem: 'clone', format: 'mp3' });
+  if (inline) params.set('inline', '1');
+  return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
+}
+
 /** The Khmer words alone, without the music — the input a voice clone needs. */
 export function getKhmerSpeechDownloadUrl(jobId: string, inline = false): string {
   const params = new URLSearchParams({ stem: 'khmer-speech', format: 'mp3' });

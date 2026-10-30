@@ -64,6 +64,13 @@ export interface KhmerDubReport {
   originalSeconds: number;
 }
 
+export interface VoiceCloneReport {
+  model: string;
+  chunks: number;
+  chunksFailed: number;
+  seconds: number;
+}
+
 export interface JobRecord {
   id: string;
   status: JobStatus;
@@ -71,7 +78,7 @@ export interface JobRecord {
    * Which pipeline ran: stem separation, the Gemini voice cleanup, or the Khmer
    * version built from a finished separation.
    */
-  mode?: 'separate' | 'clean' | 'dub';
+  mode?: 'separate' | 'clean' | 'dub' | 'clone';
   progress: number;
   message: string;
   khmerMessage?: string;
@@ -99,6 +106,10 @@ export interface JobRecord {
   khmerSpeechFile?: string;
   /** The same Khmer song over the original picture, for a video upload. */
   khmerVideoFile?: string;
+  /** The Khmer words restyled into the original singer's voice. */
+  cloneFile?: string;
+  /** What the restyling did. */
+  clone?: VoiceCloneReport;
   /** The Khmer voice chosen for this version. */
   khmerVoice?: 'female' | 'male';
   /** What the Khmer version did. */

@@ -15,6 +15,11 @@ import {
 } from '../services/audioSeparation.js';
 import { CleanupProcessor } from '../services/voiceCleanup.js';
 import { KhmerDubProcessor, isKhmerVoice } from '../services/khmerDub.js';
+import {
+  VoiceCloneProcessor,
+  isVoiceCloneConfigured,
+  VOICE_CLONE_KEY_MESSAGE,
+} from '../services/voiceClone.js';
 import { getGeminiKeys } from '../services/geminiSettings.js';
 import { JobRecord } from '../types.js';
 import { logger } from '../utils/logger.js';
@@ -257,6 +262,74 @@ router.post('/:id/khmer', async (req: Request, res: Response) => {
 });
 
 /**
+ * POST /api/jobs/:id/clone
+ * Restyle a finished Khmer version into the original singer's voice.
+ *
+ * The id is the Khmer job: it already carries the Khmer words with no music and
+ * the original voice they replaced, which is everything a converter needs.
+ */
+router.post('/:id/clone', async (req: Request, res: Response) => {
+  try {
+    const db = getDatabase();
+    const parent = await db.getJob(req.params.id);
+
+    if (!parent) {
+      return res.status(404).json({ error: 'រកមិនឃើញការងារនេះទេ។ (Job not found)' });
+    }
+    if (parent.status !== 'completed' || !parent.khmerSpeechFile) {
+      return res.status(400).json({
+        error:
+          'សំឡេងខ្មែរ (ឥតភ្លេង) មិនមានទេ។ សូមបង្កើតបទខ្មែរឡើងវិញសិន។ (Create the Khmer version again first.)',
+      });
+    }
+    if (!isVoiceCloneConfigured()) {
+      return res.status(400).json({ error: VOICE_CLONE_KEY_MESSAGE });
+    }
+
+    const jobId = `clone_${Date.now().toString(36)}_${Math.random().toString(36).substring(2, 6)}`;
+
+    const newJob: JobRecord = {
+      id: jobId,
+      status: 'queued',
+      progress: 3,
+      message: 'Job queued...',
+      khmerMessage: 'កំពុងរៀបចំប្តូរសំឡេង...',
+      inputFile: parent.inputFile,
+      originalFilename: parent.originalFilename,
+      inputMimeType: parent.inputMimeType,
+      inputKind: parent.inputKind,
+      metadata: parent.metadata,
+      mode: 'clone',
+      sourceJobId: parent.id,
+      vocalsFile: parent.vocalsFile,
+      musicFile: parent.musicFile,
+      khmerSpeechFile: parent.khmerSpeechFile,
+      createdAt: new Date().toISOString(),
+    };
+
+    await db.createJob(newJob);
+
+    setImmediate(() => {
+      VoiceCloneProcessor.processJob(jobId).catch((err) => {
+        logger.error(`Error restyling job ${jobId}:`, err);
+      });
+    });
+
+    return res.status(201).json({
+      jobId,
+      status: 'queued',
+      message: 'កំពុងប្តូរសំឡេងខ្មែរ ទៅជាសំឡេងដើម...',
+      job: newJob,
+    });
+  } catch (err: any) {
+    logger.error('Failed to start the voice clone:', err);
+    return res.status(500).json({
+      error: 'មិនអាចចាប់ផ្តើមប្តូរសំឡេងបានទេ។ សូមសាកល្បងម្តងទៀត។',
+    });
+  }
+});
+
+/**
  * GET /api/jobs/:id
  * Get single job details
  */
@@ -335,7 +408,14 @@ router.get('/:id/download', async (req: Request, res: Response) => {
     }
 
     const requested = String(req.query.stem || '').toLowerCase();
-    const stem: 'vocals' | 'music' | 'clean' | 'original' | 'khmer' | 'khmer-speech' =
+    const stem:
+      | 'vocals'
+      | 'music'
+      | 'clean'
+      | 'original'
+      | 'khmer'
+      | 'khmer-speech'
+      | 'clone' =
       requested === 'music'
         ? 'music'
         : requested === 'clean'
@@ -346,13 +426,17 @@ router.get('/:id/download', async (req: Request, res: Response) => {
         ? 'khmer'
         : requested === 'khmer-speech' || requested === 'khmerspeech'
         ? 'khmer-speech'
+        : requested === 'clone'
+        ? 'clone'
         : 'vocals';
     const wantVideo = String(req.query.format || '').toLowerCase() === 'mp4';
 
     // `clean`/`original` belong to the Gemini cleanup: the finished voice and the
     // untouched upload, played side by side. The separations keep their stems.
     const stored =
-      stem === 'khmer-speech'
+      stem === 'clone'
+        ? job.cloneFile
+        : stem === 'khmer-speech'
         ? job.khmerSpeechFile
         : stem === 'khmer'
         ? wantVideo

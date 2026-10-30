@@ -21,6 +21,7 @@ import {
   getStemDownloadUrl,
   subscribeToJobUpdates,
 } from '../lib/api';
+import { VoiceCloneCard } from './VoiceCloneCard';
 
 interface ResultPanelProps {
   job: JobRecord;
@@ -351,6 +352,8 @@ const KhmerDubCard: React.FC<{ job: JobRecord }> = ({ job }) => {
               </ul>
             </details>
           )}
+
+          <VoiceCloneCard job={dub} />
 
           <button
             type="button"
