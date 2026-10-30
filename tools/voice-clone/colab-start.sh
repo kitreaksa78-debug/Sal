@@ -271,6 +271,13 @@ if [ "$SERVICE" = "1" ]; then
   fi
   say "service ឆ្លើយ: $HEALTH"
 
+  if [ "${SKIP_TUNNEL:-0}" = "1" ]; then
+    # start-all.sh runs this service behind one tunnel it opens itself (both
+    # services behind a single URL), so the local address is the whole answer.
+    printf '\nURL : http://127.0.0.1:%s\nAPI Key : %s\n' "$PORT" "$KEY"
+    exit 0
+  fi
+
   step "5/4 បើក tunnel (Cloudflare)"
   BIN="$WORK/bin"
   mkdir -p "$BIN"

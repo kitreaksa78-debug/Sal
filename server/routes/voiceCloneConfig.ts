@@ -11,6 +11,8 @@ import {
   saveVoiceCloneConnection,
 } from '../services/cloneSettings.js';
 import { VOICE_CLONE_KEY_MESSAGE, isVoiceCloneConfigured } from '../services/voiceClone.js';
+import { probeCombinedStudio } from '../services/combinedStudio.js';
+import { saveSeparatorConnection } from '../services/separatorSettings.js';
 
 const router = express.Router();
 
@@ -62,6 +64,12 @@ router.put('/', async (req: Request, res: Response) => {
         req.body?.apiKey === undefined ? undefined : normaliseServiceKey(req.body.apiKey),
     });
     logger.info(`Voice conversion service set to ${saved.url}`);
+    // One-tunnel Colab: pasting the block in this card must set the stem service
+    // too, so either card is enough to point the whole studio at one machine.
+    if (await probeCombinedStudio(saved.url, saved.apiKey)) {
+      await saveSeparatorConnection({ url: saved.url, apiKey: saved.apiKey });
+      logger.info(`Combined studio at ${saved.url}: stem separation uses it too`);
+    }
     return res.json(describeConnection());
   } catch (err: any) {
     logger.error('Failed to save the voice conversion service connection:', err);

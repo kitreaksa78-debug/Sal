@@ -14,6 +14,8 @@ import {
   getSeparatorConnection,
   saveSeparatorConnection,
 } from '../services/separatorSettings.js';
+import { probeCombinedStudio } from '../services/combinedStudio.js';
+import { saveVoiceCloneConnection } from '../services/cloneSettings.js';
 import {
   SeparatorTestReport,
   describeRemoteService,
@@ -76,6 +78,13 @@ router.put('/', async (req: Request, res: Response) => {
       path: req.body?.path === undefined ? undefined : String(req.body.path).trim(),
     });
     logger.info(`Stem service set to ${saved.url}`);
+    // One-tunnel Colab (tools/colab/start-all.sh): the same address and key serve
+    // both APIs, so the voice card is filled from this paste instead of asking
+    // the owner to paste the same block a second time.
+    if (await probeCombinedStudio(saved.url, saved.apiKey)) {
+      await saveVoiceCloneConnection({ url: saved.url, apiKey: saved.apiKey });
+      logger.info(`Combined studio at ${saved.url}: voice conversion uses it too`);
+    }
     return res.json(describeConnection());
   } catch (err: any) {
     logger.error('Failed to save the stem service connection:', err);
