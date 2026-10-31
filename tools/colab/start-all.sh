@@ -243,6 +243,12 @@ else
   CF="$BIN/cloudflared"
 fi
 
+# One line of what the provider said, so a failed attempt explains itself in
+# the cell's output instead of only in tunnel.log.
+last_err() {
+  grep -v '^[[:space:]]*$' "$WORK/tunnel.log" 2>/dev/null | tail -1 | cut -c1-110
+}
+
 # A tunnel from an earlier run still forwards the old port; drop it first.
 stop_tunnel() {
   if [ -f "$WORK/tunnel.pid" ]; then
@@ -308,7 +314,8 @@ try_cloudflared() {  # $1 = label, rest = extra cloudflared args
   nohup "$CF" tunnel --no-autoupdate "$@" --url "http://localhost:$GATEWAY_PORT" \
     </dev/null >"$WORK/tunnel.log" 2>&1 &
   echo $! >"$WORK/tunnel.pid"
-  _u=$(find_url 30 'https://[a-z0-9-]+\.trycloudflare\.com') || {
+  _u=$(find_url 25 'https://[a-z0-9-]+\.trycloudflare\.com') || {
+    say "    ↳ $(last_err)"
     stop_tunnel
     return 1
   }
@@ -321,8 +328,17 @@ try_cloudflared() {  # $1 = label, rest = extra cloudflared args
   return 1
 }
 
-try_ssh() {  # $1 = label, $2 = user@host, $3 = regex
+# $1 = label, $2 = user@host, $3 = -R spec, $4 = URL regex, rest = ssh options.
+# The hostname and the forwarding spec differ per provider: pinggy hands out a
+# random remote port (`-R 0:…`), the others want 80, and the free anonymous
+# accounts have their own user names. Getting one of those wrong looks exactly
+# like a blocked provider, so each is spelled out at the call site.
+try_ssh() {  # label user@host forward regex [ssh opts…]
   _label=$1
+  _target=$2
+  _fwd=$3
+  _re=$4
+  shift 4
   if ! command -v ssh >/dev/null 2>&1; then
     say "… $_label — គ្មាន ssh ក្នុងម៉ាស៊ីននេះ"
     return 1
@@ -331,10 +347,11 @@ try_ssh() {  # $1 = label, $2 = user@host, $3 = regex
   : >"$WORK/tunnel.log"
   nohup ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null \
     -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
-    -o BatchMode=yes -N -R 80:localhost:"$GATEWAY_PORT" "$2" \
+    -o BatchMode=yes "$@" -N -R "$_fwd" "$_target" \
     </dev/null >"$WORK/tunnel.log" 2>&1 &
   echo $! >"$WORK/tunnel.pid"
-  _u=$(find_url 30 "$3") || {
+  _u=$(find_url 25 "$_re") || {
+    say "    ↳ $(last_err)"
     stop_tunnel
     return 1
   }
@@ -343,26 +360,41 @@ try_ssh() {  # $1 = label, $2 = user@host, $3 = regex
     KIND="$_label"
     return 0
   fi
+  say "    ↳ បាន URL តែមិនឆ្លើយ"
   stop_tunnel
   return 1
 }
 
 URL=""
 KIND=""
-if [ -n "${PROTOCOL:-}" ]; then
+# Escape hatch: a tunnel the user started themselves (ngrok, a named tunnel)
+# can be handed over directly and nothing is launched here.
+if [ -n "${EXTERNAL_URL:-}" ]; then
+  URL="${EXTERNAL_URL%/}"
+  KIND="ខ្លួនឯង"
+fi
+if [ -z "$URL" ] && [ -n "${PROTOCOL:-}" ]; then
   try_cloudflared "Cloudflare · $PROTOCOL" --protocol "$PROTOCOL" || true
 fi
 if [ -z "$URL" ]; then
   try_cloudflared "Cloudflare · quic" \
     || try_cloudflared "Cloudflare · http2" --protocol http2 \
-    || try_ssh "localhost.run" "nokey@localhost.run" 'https://[a-z0-9-]+\.(lhr\.life|localhost\.run)' \
-    || try_ssh "serveo.net" "serveo.net" 'https://[a-z0-9-]+\.serveo\.net' \
+    || try_cloudflared "Cloudflare · http2 · IPv4" --protocol http2 --edge-ip-version 4 \
+    || try_ssh "pinggy.io · 443" "a.pinggy.io" "0:localhost:$GATEWAY_PORT" \
+      'https://[a-z0-9.-]+\.pinggy\.(link|io)' -p 443 \
+    || try_ssh "localhost.run · 443" "nokey@localhost.run" "80:localhost:$GATEWAY_PORT" \
+      'https://[a-z0-9-]+\.(lhr\.life|localhost\.run)' -p 443 \
+    || try_ssh "localhost.run · 22" "nokey@localhost.run" "80:localhost:$GATEWAY_PORT" \
+      'https://[a-z0-9-]+\.(lhr\.life|localhost\.run)' \
     || true
 fi
 
 if [ -z "$URL" ]; then
   say "tunnel មិនបាន URL — ២០ បន្ទាត់ចុងក្រោយ៖"
   tail -20 "$WORK/tunnel.log" 2>/dev/null || true
+  say ""
+  say "ជម្រើសបម្រុង: បើអ្នកមាន ngrok ឬ cloudflared ផ្ទាល់ សូមបើកវាជាមួយ port $GATEWAY_PORT រួចរត់ cell នេះម្តងទៀតជាមួយ"
+  say "    EXTERNAL_URL=https://<អាសយដ្ឋានរបស់អ្នក>"
   if [ "$ON_KAGGLE" = "1" ]; then
     die "tunnel បើកមិនបាន — Kaggle ត្រូវបើក Settings → Internet → On រួចរត់បន្ទាត់នេះម្តងទៀត"
   fi
@@ -391,7 +423,7 @@ printf '============================================================\n'
 [ -n "$DEVICE" ] && printf 'ឧបករណ៍ : %s\n' "$DEVICE"
 if [ "$READY" = "1" ]; then
   printf 'ស្ថានភាព : រួចរាល់ — tunnel ឆ្លើយតបរួចហើយ\n'
-elif grep -q 'Registered tunnel connection' "$WORK/tunnel.log" 2>/dev/null; then
+elif grep -qE 'Registered tunnel connection|Forwarding HTTP' "$WORK/tunnel.log" 2>/dev/null; then
   printf 'ស្ថានភាព : tunnel ភ្ជាប់ហើយ តែមិនទាន់ឆ្លើយ — រង់ចាំ ~១៥ វិនាទីទៀត\n'
 else
   printf 'ស្ថានភាព : tunnel បាន URL តែមិនទាន់ឆ្លើយ — សូមរង់ចាំបន្តិច រួច reload សាយ (សញ្ញាក្បាលទំព័រនឹងប្រាប់)\n'
