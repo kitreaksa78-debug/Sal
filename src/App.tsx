@@ -14,6 +14,7 @@ import {
   subscribeToJobUpdates,
   getSystemConfigStatus,
 } from './lib/api';
+import { useLiveStatus } from './lib/liveStatus';
 
 /**
  * Shown when the status endpoint reports no stem service and sent no reason of
@@ -92,6 +93,16 @@ export function App() {
   const [demucsNotice, setDemucsNotice] = useState<string | null>(null);
   /** Bumped when the stem-separation panel changes the connection. */
   const [demucsCheckToken, setDemucsCheckToken] = useState(0);
+
+  /**
+   * The live answer to "is the Colab studio answering right now?" — the same
+   * probe the header badge shows. A saved URL outlives the session behind it, so
+   * the upload waits for this instead of spending a file on a dead tunnel and
+   * reporting it six minutes later.
+   */
+  const live = useLiveStatus();
+  const liveNotice = live.data && !live.data.stems ? live.data.message : null;
+  const blocker = demucsNotice || liveNotice;
 
   const [currentJob, setCurrentJob] = useState<JobRecord | null>(null);
   const [isUploading, setIsUploading] = useState(false);
@@ -223,11 +234,18 @@ export function App() {
     };
   }, [demucsCheckToken]);
 
+  // A URL saved (or cleared) in either card changes the answer, so ask again.
+  useEffect(() => {
+    if (demucsCheckToken > 0) live.refresh();
+    // `refresh` is re-created per render; the token is what should trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [demucsCheckToken]);
+
   const handleStartSeparating = async () => {
     if (!selectedFile) return;
 
-    if (demucsNotice) {
-      alert(demucsNotice);
+    if (blocker) {
+      alert(blocker);
       return;
     }
 
@@ -281,14 +299,16 @@ export function App() {
             <div className="space-y-8 animate-in fade-in duration-300">
               {/* Demucs is required: without it the server refuses the upload, so
                   the reason is shown before anyone picks a file. */}
-              {demucsNotice && (
+              {blocker && (
                 <div className="p-4 rounded-2xl bg-amber-500/10 border border-amber-500/40 text-amber-200 text-xs leading-relaxed flex items-start gap-3">
                   <AlertCircle className="w-5 h-5 text-amber-400 shrink-0 mt-0.5" />
                   <div>
                     <div className="font-bold text-sm text-amber-300">
-                      Demucs ចាំបាច់ — បើគ្មានវា គេហទំព័រមិនដំណើរការទេ
+                      {liveNotice
+                        ? 'API មិនទាន់ភ្ជាប់ — សូមរត់ cell ក្នុង Colab ម្តងទៀត'
+                        : 'Demucs ចាំបាច់ — បើគ្មានវា គេហទំព័រមិនដំណើរការទេ'}
                     </div>
-                    <p className="mt-1 text-slate-300">{demucsNotice}</p>
+                    <p className="mt-1 text-slate-300">{blocker}</p>
                   </div>
                 </div>
               )}
@@ -311,7 +331,7 @@ export function App() {
                 onStart={handleStartSeparating}
                 isUploading={isUploading}
                 uploadProgress={uploadProgress}
-                startBlocked={Boolean(demucsNotice)}
+                startBlocked={Boolean(blocker)}
               />
             </div>
           )}

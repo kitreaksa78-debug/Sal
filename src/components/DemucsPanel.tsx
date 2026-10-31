@@ -26,6 +26,7 @@ import {
   normaliseServiceUrl,
   parseServicePaste,
 } from '@/server/utils/serviceConnection';
+import { BADGE_TONE, studioCardStatus, useLiveStatus } from '../lib/liveStatus';
 
 interface DemucsPanelProps {
   /**
@@ -73,6 +74,8 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ onConnectionChange }) 
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<'load' | 'save' | 'test' | 'full' | 'clear' | null>('load');
   const [status, setStatus] = useState<{ tone: 'ok' | 'warn' | 'error'; text: string } | null>(null);
+  /** The badge reads the live probe, never the saved URL alone. */
+  const live = useLiveStatus();
 
   const apply = (next: SeparatorConnectionView) => {
     setConnection(next);
@@ -214,6 +217,11 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ onConnectionChange }) 
 
   const connected = Boolean(connection?.url);
   const tone = connected ? 'text-emerald-300' : 'text-slate-400';
+  const card = studioCardStatus(live, {
+    hasUrl: Boolean(connection?.url),
+    configuredInProcess: Boolean(connection?.configured && !connection?.url),
+    kind: 'stems',
+  });
 
   return (
     <div className="bg-[#111827]/80 rounded-2xl border border-slate-800/90 backdrop-blur-sm shadow-xl overflow-hidden">
@@ -231,8 +239,11 @@ export const DemucsPanel: React.FC<DemucsPanelProps> = ({ onConnectionChange }) 
             <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-cyan-500/20 text-cyan-300 border border-cyan-500/30">
               ADMIN
             </span>
-            <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${connected ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30' : 'bg-slate-800/60 text-slate-400 border-slate-700'}`}>
-              {connected ? 'ភ្ជាប់រួច' : 'មិនទាន់ភ្ជាប់'}
+            <span
+              title={card.hint}
+              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${BADGE_TONE[card.tone]}`}
+            >
+              {card.label}
             </span>
           </div>
           <p className={`text-xs mt-1 truncate ${tone}`}>

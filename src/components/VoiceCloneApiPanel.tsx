@@ -25,6 +25,7 @@ import {
   normaliseServiceUrl,
   parseServicePaste,
 } from '@/server/utils/serviceConnection';
+import { BADGE_TONE, studioCardStatus, useLiveStatus } from '../lib/liveStatus';
 
 const ONE_LINER =
   '!curl -fsSL https://raw.githubusercontent.com/kitreaksa78-debug/Sal/main/tools/voice-clone/colab-start.sh | SERVICE=1 sh';
@@ -51,6 +52,8 @@ export const VoiceCloneApiPanel: React.FC<{ onConnectionChange?: () => void }> =
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<'load' | 'save' | 'test' | 'clear' | null>('load');
   const [status, setStatus] = useState<{ tone: 'ok' | 'warn' | 'error'; text: string } | null>(null);
+  /** The badge reads the live probe, never the saved URL alone. */
+  const live = useLiveStatus();
 
   const apply = (next: VoiceCloneConnectionView) => {
     setConnection(next);
@@ -178,6 +181,11 @@ export const VoiceCloneApiPanel: React.FC<{ onConnectionChange?: () => void }> =
 
   const connected = Boolean(connection?.url);
   const tone = connected ? 'text-emerald-300' : 'text-slate-400';
+  const card = studioCardStatus(live, {
+    hasUrl: Boolean(connection?.url),
+    configuredInProcess: Boolean(connection?.configured && !connection?.url),
+    kind: 'voice',
+  });
 
   return (
     <div className="bg-[#111827]/80 rounded-2xl border border-slate-800/90 backdrop-blur-sm shadow-xl overflow-hidden">
@@ -198,13 +206,10 @@ export const VoiceCloneApiPanel: React.FC<{ onConnectionChange?: () => void }> =
               ADMIN
             </span>
             <span
-              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
-                connected
-                  ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-                  : 'bg-slate-800/60 text-slate-400 border-slate-700'
-              }`}
+              title={card.hint}
+              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${BADGE_TONE[card.tone]}`}
             >
-              {connected ? 'ភ្ជាប់រួច' : 'មិនទាន់ភ្ជាប់'}
+              {card.label}
             </span>
           </div>
           <p className={`text-xs mt-1 truncate ${tone}`}>

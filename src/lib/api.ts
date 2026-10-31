@@ -463,3 +463,39 @@ export function getOriginalDownloadUrl(jobId: string, inline = false): string {
   if (inline) params.set('inline', '1');
   return `${API_BASE}/jobs/${encodeURIComponent(jobId)}/download?${params.toString()}`;
 }
+
+// ------------------------------------------------------- live studio connection
+
+/**
+ * Whether the saved Colab studio answers right now.
+ *
+ * A saved URL says only what the site was pointed at; a quick tunnel is handed
+ * a new hostname on every run, so `configured` is not `connected`. This is the
+ * probe the header badge, both cards and the upload gate read.
+ */
+export interface LiveStatusView {
+  /** The service answered and calls itself a stem separator or a converter. */
+  online: boolean;
+  /** Separation can run there. */
+  stems: boolean;
+  /** Voice conversion can run there. */
+  voice: boolean;
+  reason: 'ok' | 'none' | 'local' | 'unreachable' | 'unauthorized' | 'http' | 'wrong-service';
+  message: string;
+  url: string | null;
+  latencyMs: number;
+  service: string | null;
+  device: string | null;
+  model: string | null;
+  voiceModel: string | null;
+  /** `false` while the converter is still downloading its weights. */
+  weights: boolean | null;
+  checkedAt: string;
+}
+
+/** One short probe — the server caches it for a few seconds. */
+export async function getLiveStatus(): Promise<LiveStatusView> {
+  const res = await fetch(`${API_BASE}/config/live`, { cache: 'no-store' });
+  if (!res.ok) throw new ApiError('មិនអាចពិនិត្យការតភ្ជាប់បានទេ។', res.status);
+  return (await res.json()) as LiveStatusView;
+}

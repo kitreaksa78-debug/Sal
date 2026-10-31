@@ -305,12 +305,36 @@ if [ "$AUTO_CONNECT" = "1" ]; then
   BODY=$(printf '{"url":"%s","apiKey":"%s"}' "$URL" "$KEY")
   # A leftover answer from an earlier run must not be printed as this one's.
   rm -f "$WORK/connect.json"
-  CODE=$(curl -sS --max-time 30 -o "$WORK/connect.json" -w '%{http_code}' \
-    -X PUT "$SITE_URL/api/config/separator" \
-    -H 'Content-Type: application/json' \
-    --data "$BODY" 2>/dev/null) || CODE="000"
+  # Render restarts after a push and a sleeping instance takes a minute to wake:
+  # until then it answers 000/502/503. Retrying here is what keeps the cell from
+  # telling the owner to paste by hand a URL the site would have taken anyway.
+  CODE="000"
+  _try=1
+  while [ "$_try" -le 6 ]; do
+    CODE=$(curl -sS --max-time 25 -o "$WORK/connect.json" -w '%{http_code}' \
+      -X PUT "$SITE_URL/api/config/separator" \
+      -H 'Content-Type: application/json' \
+      --data "$BODY" 2>/dev/null) || CODE="000"
+    [ "$CODE" = "200" ] && break
+    if [ "$_try" -lt 6 ]; then
+      printf '   សាយមិនទាន់ឆ្លើយ (HTTP %s) — សាកម្តងទៀតក្នុង ១៥ វិនាទី (%s/6)\n' "$CODE" "$_try"
+      sleep 15
+    fi
+    _try=$((_try + 1))
+  done
   if [ "$CODE" = "200" ]; then
     printf '✅ ភ្ជាប់រួច — កាត «ញែកភ្លេង» និង «ប្តូរសំឡេង» ប្រើ URL នេះហើយ។ សូម reload ទំព័រសាយ។\n'
+    # Ask the site what it sees: this is the same probe the header badge shows,
+    # so the terminal and the page never disagree about being connected.
+    _live=$(curl -sS --max-time 20 "$SITE_URL/api/config/live" 2>/dev/null) || _live=""
+    case "$_live" in
+      *'"stems":true'*)
+        printf '🟢 សាយឃើញ API រួច — សញ្ញានៅក្បាលទំព័រពណ៌បៃតង។\n'
+        ;;
+      *'"stems":false'*)
+        printf '🟡 សាយមាន URL ហើយ តែសេវាមិនទាន់ឆ្លើយ — រង់ចាំបន្តិច រួច reload។\n'
+        ;;
+    esac
   else
     printf '⚠️  ភ្ជាប់ស្វ័យប្រវត្តិមិនបាន (HTTP %s) — សូម paste ប្លុកខាងលើចូលកាតដោយដៃ។\n' "$CODE"
     head -c 300 "$WORK/connect.json" 2>/dev/null | sed 's/^/            /' || true

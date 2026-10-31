@@ -1,5 +1,6 @@
 import React from 'react';
 import { Logo } from './Logo';
+import { ApiStatusBadge } from './ApiStatusBadge';
 
 /**
  * The app has one screen, so the header carries the brand only — no tabs, no
@@ -29,6 +30,9 @@ export const Header: React.FC = () => {
               </span>
             </span>
           </div>
+
+          {/* Green only while the Colab API actually answers. */}
+          <ApiStatusBadge />
         </div>
       </div>
     </header>
