@@ -25,6 +25,7 @@ import shutil
 import subprocess
 import sys
 import threading
+import traceback
 import uuid
 from pathlib import Path
 
@@ -361,6 +362,19 @@ async def convert(request: Request):
     try:
         out_path = await run_in_threadpool(
             _convert_sync, source, job, singer_id, steps, pitch, key_shift
+        )
+    except HTTPException:
+        raise
+    except (Exception, SystemExit) as err:
+        # A crash inside Amphion (missing checkpoint, CUDA out of memory, a
+        # torch/fairseq mismatch) used to leave the site with nothing but
+        # "500 Internal Server Error". The owner reads this from a phone, so the
+        # class and the message travel back in the reply and the traceback goes
+        # to the log the cell points at.
+        _log(f"conversion failed: {type(err).__name__}: {err}\n{traceback.format_exc()}")
+        raise HTTPException(
+            status_code=502,
+            detail=f"conversion crashed: {type(err).__name__}: {err}"[:400],
         )
     finally:
         BUSY = False
