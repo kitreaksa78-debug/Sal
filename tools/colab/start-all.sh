@@ -37,10 +37,17 @@ GATEWAY_PORT="${GATEWAY_PORT:-8080}"
 SITE_URL="${SITE_URL:-https://sal-juma.onrender.com}"
 AUTO_CONNECT="${AUTO_CONNECT:-1}"
 
-if [ -d /content ] && [ -w /content ]; then
+# Kaggle has no /content: its writable disk is /kaggle/working, which is also
+# what a saved version keeps. Everything below only needs a writable directory.
+if [ -d /kaggle/working ] && [ -w /kaggle/working ]; then
+  WORK="${WORK:-/kaggle/working/colab-studio}"
+  ON_KAGGLE=1
+elif [ -d /content ] && [ -w /content ]; then
   WORK="${WORK:-/content/colab-studio}"
+  ON_KAGGLE=0
 else
   WORK="${WORK:-$PWD/colab-studio}"
+  ON_KAGGLE=0
 fi
 mkdir -p "$WORK" || exit 1
 
@@ -124,7 +131,12 @@ done
 if command -v nvidia-smi >/dev/null 2>&1; then
   nvidia-smi -L 2>/dev/null | head -2 || true
 else
-  say "គ្មាន GPU — វានឹងដើរលើ CPU (ញែកភ្លេងយឺតជាង ~៣–៨ ដង)។ ក្នុង Colab: Runtime → Change runtime type → T4 GPU ។"
+  say "គ្មាន GPU — វានឹងដើរលើ CPU (ញែកភ្លេងយឺតជាង ~៣–៨ ដង)។"
+  if [ "$ON_KAGGLE" = "1" ]; then
+    say "    ក្នុង Kaggle: Settings → Accelerator → GPU T4 x2 រួច restart session។"
+  else
+    say "    ក្នុង Colab: Runtime → Change runtime type → T4 GPU ។"
+  fi
 fi
 
 if ! command -v ffmpeg >/dev/null 2>&1; then
@@ -351,7 +363,10 @@ fi
 if [ -z "$URL" ]; then
   say "tunnel មិនបាន URL — ២០ បន្ទាត់ចុងក្រោយ៖"
   tail -20 "$WORK/tunnel.log" 2>/dev/null || true
-  die "tunnel បើកមិនបាន — សូមរត់បន្ទាត់នេះម្តងទៀត។ (Kaggle: Settings → Internet → On)"
+  if [ "$ON_KAGGLE" = "1" ]; then
+    die "tunnel បើកមិនបាន — Kaggle ត្រូវបើក Settings → Internet → On រួចរត់បន្ទាត់នេះម្តងទៀត"
+  fi
+  die "tunnel បើកមិនបាន — សូមរត់បន្ទាត់នេះម្តងទៀត"
 fi
 say "tunnel រួចរាល់: $KIND"
 
