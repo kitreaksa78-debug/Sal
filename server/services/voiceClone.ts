@@ -264,6 +264,37 @@ async function convertOnce(
 }
 
 /**
+ * Turn a failed Voice Convert reply into one line the owner can act on.
+ *
+ * A dead tunnel answers with Cloudflare's HTML error page, not with the
+ * service's JSON, and pasting that page into the red card buries the reason.
+ * The service itself sends `{"detail": "…"}` — the class name and message of
+ * whatever crashed inside the model — so prefer that when it is there.
+ */
+function describeServiceFailure(status: number, body: string): string {
+  const text = body.trim();
+  if (text.startsWith('{')) {
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown; message?: unknown };
+      const detail = parsed.detail ?? parsed.message;
+      if (typeof detail === 'string' && detail.trim()) {
+        return `Voice Convert API ${status}: ${detail.trim().slice(0, 300)}`;
+      }
+    } catch {
+      // not JSON after all — fall through to the text below
+    }
+  }
+  if (/^</.test(text)) {
+    const title = /<title[^>]*>([\s\S]*?)<\/title>/i.exec(text)?.[1]?.trim();
+    return (
+      `Voice Convert API ${status}: tunnel មិនឆ្លើយតប (${title || 'HTML error page'})។ ` +
+      'សេវានៅ Colab/Kaggle បានបិទ ឬ tunnel ដាច់ — សូមរត់ cell ម្តងទៀត។'
+    );
+  }
+  return `Voice Convert API ${status}: ${text.slice(0, 300)}`;
+}
+
+/**
  * Ask the owner's Voice Convert API (Colab GPU behind a Cloudflare tunnel) to
  * restyle one chunk of the Khmer words.
  *
@@ -306,7 +337,7 @@ async function convertViaService(
 
     if (!res.ok) {
       const text = await res.text().catch(() => '');
-      lastError = new Error(`Voice Convert API ${res.status}: ${text.slice(0, 300)}`);
+      lastError = new Error(describeServiceFailure(res.status, text));
       // A 5xx on a GPU box is usually the model loading; 4xx will not change.
       if (res.status >= 500) {
         await new Promise((resolve) => setTimeout(resolve, 4_000));

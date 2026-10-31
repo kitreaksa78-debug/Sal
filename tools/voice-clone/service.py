@@ -191,11 +191,33 @@ def _ensure_weights_unlocked() -> None:
         raise HTTPException(status_code=502, detail=f"the model is incomplete: {', '.join(missing)}")
 
 
+def _patch_jax() -> None:
+    """Give the old diffusers a stand-in for the jax typing aliases it imports.
+
+    diffusers 0.19.3 (the version Amphion pins) annotates its flax helpers with
+    `jax.random.KeyArray`, and jax 0.4.24 removed that alias — the annotation is
+    evaluated when the class body runs, so `import inference` dies with
+    `AttributeError: module 'jax.random' has no attribute 'KeyArray'` before a
+    single note is converted. The alias never does any work for us (the SVC
+    model is pure torch), so an alias pointing at `jax.Array` is enough.
+    """
+    try:
+        import jax
+        import jax.random as jrandom
+    except Exception:
+        return  # no flax anywhere: nothing to patch
+    for name in ("KeyArray", "PRNGKeyArray"):
+        if not hasattr(jrandom, name):
+            setattr(jrandom, name, jax.Array)
+            _log(f"patched jax.random.{name} -> jax.Array (diffusers 0.19.3)")
+
+
 def _infer_module():
     """Amphion's `inference` reads relative checkpoint paths, so import it from
     inside the repo directory — exactly what the Space's own app does."""
     global _INFER
     if _INFER is None:
+        _patch_jax()
         os.chdir(ROOT)
         if str(ROOT) not in sys.path:
             sys.path.insert(0, str(ROOT))
@@ -276,12 +298,17 @@ def _warm_weights() -> None:
     try:
         if _weights_ready():
             _log(f"model ready at {ROOT}")
-            return
-        _log(f"preparing the model at {ROOT} (5 GB, once per session)")
-        _ensure_weights()
-        _log("model ready")
+        else:
+            _log(f"preparing the model at {ROOT} (5 GB, once per session)")
+            _ensure_weights()
+            _log("model ready")
+        # Import Amphion now, while nobody is waiting: a broken dependency
+        # (torch/fairseq/diffusers against the session's jax) then shows up in
+        # this log at start-up instead of as a failed conversion later.
+        _infer_module()
+        _log("inference module ready")
     except Exception as err:  # a dead Hugging Face is reported, not fatal
-        _log(f"model download failed: {err}")
+        _log(f"warm-up failed: {type(err).__name__}: {err}")
 
 
 threading.Thread(target=_warm_weights, daemon=True).start()
