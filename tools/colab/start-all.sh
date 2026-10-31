@@ -232,45 +232,122 @@ else
 fi
 
 # A tunnel from an earlier run still forwards the old port; drop it first.
-if [ -f "$WORK/tunnel.pid" ]; then
-  kill "$(cat "$WORK/tunnel.pid")" >/dev/null 2>&1 || true
-  rm -f "$WORK/tunnel.pid"
-fi
+stop_tunnel() {
+  if [ -f "$WORK/tunnel.pid" ]; then
+    kill "$(cat "$WORK/tunnel.pid")" >/dev/null 2>&1 || true
+    rm -f "$WORK/tunnel.pid"
+  fi
+}
+stop_tunnel
 
-: >"$WORK/tunnel.log"
-if [ -n "${PROTOCOL:-}" ]; then
-  say "ប្រើ protocol $PROTOCOL"
-  nohup "$CF" tunnel --no-autoupdate --protocol "$PROTOCOL" --url "http://localhost:$GATEWAY_PORT" \
+# One provider is not enough. A shared host refuses the quick tunnel right
+# after it opens (the log ends with "no more connections active and exiting"),
+# and an edge that drops UDP kills QUIC even though the pre-check passed. So
+# each address is tried in turn and kept only if it really reaches the gateway
+# — the same request the site's badge makes, so green here means green there.
+find_url() {  # $1 = tries, $2 = regex -> prints the address
+  _i=0
+  _pid=$(cat "$WORK/tunnel.pid" 2>/dev/null || true)
+  while [ "$_i" -lt "$1" ]; do
+    _u=$(grep -Eo "$2" "$WORK/tunnel.log" 2>/dev/null | head -1)
+    if [ -n "$_u" ]; then
+      printf '%s' "$_u"
+      return 0
+    fi
+    # A provider that has already exited will never print an address: move to
+    # the next one now instead of waiting out the whole window.
+    if [ -n "$_pid" ] && ! kill -0 "$_pid" 2>/dev/null; then
+      return 1
+    fi
+    _i=$((_i + 1))
+    sleep 2
+  done
+  return 1
+}
+
+tunnel_answers() {  # $1 = url, $2 = tries
+  _i=0
+  while [ "$_i" -lt "$2" ]; do
+    if curl -fsS --max-time 10 -H "Authorization: Bearer $KEY" "$1/health" >/dev/null 2>&1; then
+      return 0
+    fi
+    _i=$((_i + 1))
+    sleep 2
+  done
+  return 1
+}
+
+try_cloudflared() {  # $1 = label, rest = extra cloudflared args
+  _label=$1
+  shift
+  say "… $_label"
+  : >"$WORK/tunnel.log"
+  nohup "$CF" tunnel --no-autoupdate "$@" --url "http://localhost:$GATEWAY_PORT" \
     </dev/null >"$WORK/tunnel.log" 2>&1 &
-else
-  nohup "$CF" tunnel --no-autoupdate --url "http://localhost:$GATEWAY_PORT" \
+  echo $! >"$WORK/tunnel.pid"
+  _u=$(find_url 30 'https://[a-z0-9-]+\.trycloudflare\.com') || {
+    stop_tunnel
+    return 1
+  }
+  if tunnel_answers "$_u" 20; then
+    URL="$_u"
+    KIND="$_label"
+    return 0
+  fi
+  stop_tunnel
+  return 1
+}
+
+try_ssh() {  # $1 = label, $2 = user@host, $3 = regex
+  _label=$1
+  if ! command -v ssh >/dev/null 2>&1; then
+    say "… $_label — គ្មាន ssh ក្នុងម៉ាស៊ីននេះ"
+    return 1
+  fi
+  say "… $_label"
+  : >"$WORK/tunnel.log"
+  nohup ssh -o StrictHostKeyChecking=accept-new -o UserKnownHostsFile=/dev/null \
+    -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -o ExitOnForwardFailure=yes \
+    -o BatchMode=yes -N -R 80:localhost:"$GATEWAY_PORT" "$2" \
     </dev/null >"$WORK/tunnel.log" 2>&1 &
-fi
-echo $! >"$WORK/tunnel.pid"
+  echo $! >"$WORK/tunnel.pid"
+  _u=$(find_url 30 "$3") || {
+    stop_tunnel
+    return 1
+  }
+  if tunnel_answers "$_u" 20; then
+    URL="$_u"
+    KIND="$_label"
+    return 0
+  fi
+  stop_tunnel
+  return 1
+}
 
 URL=""
-i=0
-while [ "$i" -lt 40 ]; do
-  URL=$(grep -Eo 'https://[a-z0-9-]+\.trycloudflare\.com' "$WORK/tunnel.log" 2>/dev/null | head -1)
-  [ -n "$URL" ] && break
-  i=$((i + 1))
-  sleep 2
-done
+KIND=""
+if [ -n "${PROTOCOL:-}" ]; then
+  try_cloudflared "Cloudflare · $PROTOCOL" --protocol "$PROTOCOL" || true
+fi
 if [ -z "$URL" ]; then
-  tail -20 "$WORK/tunnel.log" 2>/dev/null || true
-  die "tunnel មិនបាន URL — សូមរត់បន្ទាត់នេះម្តងទៀត"
+  try_cloudflared "Cloudflare · quic" \
+    || try_cloudflared "Cloudflare · http2" --protocol http2 \
+    || try_ssh "localhost.run" "nokey@localhost.run" 'https://[a-z0-9-]+\.(lhr\.life|localhost\.run)' \
+    || try_ssh "serveo.net" "serveo.net" 'https://[a-z0-9-]+\.serveo\.net' \
+    || true
 fi
 
-READY=0
-i=0
-while [ "$i" -lt 45 ]; do
-  if curl -fsS -H "Authorization: Bearer $KEY" "$URL/health" >/dev/null 2>&1; then
-    READY=1
-    break
-  fi
-  i=$((i + 1))
-  sleep 2
-done
+if [ -z "$URL" ]; then
+  say "tunnel មិនបាន URL — ២០ បន្ទាត់ចុងក្រោយ៖"
+  tail -20 "$WORK/tunnel.log" 2>/dev/null || true
+  die "tunnel បើកមិនបាន — សូមរត់បន្ទាត់នេះម្តងទៀត។ (Kaggle: Settings → Internet → On)"
+fi
+say "tunnel រួចរាល់: $KIND"
+
+READY=1
+if ! tunnel_answers "$URL" 10; then
+  READY=0
+fi
 
 DEVICE=$(printf '%s' "$HEALTH" | grep -o '"device":"[a-z]*"' | head -1 | cut -d'"' -f4)
 
@@ -291,9 +368,7 @@ if [ "$READY" = "1" ]; then
 elif grep -q 'Registered tunnel connection' "$WORK/tunnel.log" 2>/dev/null; then
   printf 'ស្ថានភាព : tunnel ភ្ជាប់ហើយ តែមិនទាន់ឆ្លើយ — រង់ចាំ ~១៥ វិនាទីទៀត\n'
 else
-  printf 'ស្ថានភាព : cloudflared មិនអាចភ្ជាប់ទៅ Cloudflare បានទេ — URL នេះនឹងបង្ហាញ Error 1033\n'
-  printf '            មូលហេតុធម្មតា: network បិទ UDP 7844។ សាករត់ម្តងទៀតដោយ:\n'
-  printf '            PROTOCOL=http2 sh start-all.sh\n'
+  printf 'ស្ថានភាព : tunnel បាន URL តែមិនទាន់ឆ្លើយ — សូមរង់ចាំបន្តិច រួច reload សាយ (សញ្ញាក្បាលទំព័រនឹងប្រាប់)\n'
   tail -2 "$WORK/tunnel.log" 2>/dev/null | sed 's/^/            /' || true
 fi
 # --------------------------------------------------- 6. connect to the website
