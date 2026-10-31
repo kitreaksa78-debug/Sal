@@ -245,6 +245,19 @@ stop_tunnel
 # and an edge that drops UDP kills QUIC even though the pre-check passed. So
 # each address is tried in turn and kept only if it really reaches the gateway
 # — the same request the site's badge makes, so green here means green there.
+# A finished child stays in the process table until its parent waits on it,
+# and `kill -0` keeps saying it is there. `/proc` tells the difference, so a
+# provider that died is noticed in seconds instead of after a minute.
+pid_alive() {  # $1 = pid
+  [ -n "$1" ] || return 1
+  if [ -r "/proc/$1/stat" ]; then
+    _s=$(sed -n 's/^.*) \(.\).*/\1/p' "/proc/$1/stat" 2>/dev/null)
+    [ -n "$_s" ] && [ "$_s" != "Z" ]
+  else
+    kill -0 "$1" 2>/dev/null
+  fi
+}
+
 find_url() {  # $1 = tries, $2 = regex -> prints the address
   _i=0
   _pid=$(cat "$WORK/tunnel.pid" 2>/dev/null || true)
@@ -256,9 +269,7 @@ find_url() {  # $1 = tries, $2 = regex -> prints the address
     fi
     # A provider that has already exited will never print an address: move to
     # the next one now instead of waiting out the whole window.
-    if [ -n "$_pid" ] && ! kill -0 "$_pid" 2>/dev/null; then
-      return 1
-    fi
+    pid_alive "$_pid" || return 1
     _i=$((_i + 1))
     sleep 2
   done
